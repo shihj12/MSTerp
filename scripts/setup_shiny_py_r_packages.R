@@ -39,7 +39,9 @@ core_cran <- c(
   "rlang",
   "svglite",
   "progress",
-  "shiny"
+  "scales",
+  "shiny",
+  "shinyFiles"
 )
 
 optional_cran <- c(
