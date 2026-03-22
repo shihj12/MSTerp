@@ -1,0 +1,50 @@
+{
+  "manifest_url": "https://raw.githubusercontent.com/shihj12/MSTerp/main/database-manifest.json",
+  "databases": [
+    {
+      "id": "human_uniprot_terpbase",
+      "name": "Human UniProt (TerpBase)",
+      "file": "human_UniProt_jan_2026.terpbase",
+      "folder": "terpbase",
+      "version": "2026-01",
+      "size_mb": 8.5,
+      "url": "https://github.com/shihj12/MSTerp/releases/download/db-2026-01/human_UniProt_jan_2026.terpbase"
+    },
+    {
+      "id": "mouse_uniprot_terpbase",
+      "name": "Mouse UniProt (TerpBase)",
+      "file": "mouse_UniProt_feb_2026.terpbase",
+      "folder": "terpbase",
+      "version": "2026-02",
+      "size_mb": 8.4,
+      "url": "https://github.com/shihj12/MSTerp/releases/download/db-2026-02/mouse_UniProt_feb_2026.terpbase"
+    },
+    {
+      "id": "hmdb_metabobase",
+      "name": "HMDB (MetaboBase)",
+      "file": "hmdb.metabobase",
+      "folder": "metabobase",
+      "version": "2026-01",
+      "size_mb": 19,
+      "url": "https://github.com/shihj12/MSTerp/releases/download/db-2026-01/hmdb.metabobase"
+    },
+    {
+      "id": "human_complexbase",
+      "name": "Human ComplexBase",
+      "file": "human.complexbase",
+      "folder": "complexbase",
+      "version": "2026-01",
+      "size_mb": 0.4,
+      "url": "https://github.com/shihj12/MSTerp/releases/download/db-2026-01/human.complexbase"
+    },
+    {
+      "id": "mouse_complexbase",
+      "name": "Mouse ComplexBase",
+      "file": "mouse.complexbase",
+      "folder": "complexbase",
+      "version": "2026-01",
+      "size_mb": 0.1,
+      "url": "https://github.com/shihj12/MSTerp/releases/download/db-2026-01/mouse.complexbase"
+    }
+  ]
+}

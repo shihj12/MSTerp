@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MSTerp - Proteomics & Metabolomics Analysis</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      margin-top: 60px;
+      margin-bottom: 16px;
+    }
+
+    .header img {
+      height: 80px;
+      width: auto;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #ffffff;
+    }
+
+    .subtitle {
+      font-size: 1.1rem;
+      color: #a0a0b0;
+      text-align: center;
+      margin-bottom: 48px;
+      max-width: 600px;
+    }
+
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 12px;
+      padding: 32px 40px;
+      max-width: 540px;
+      width: 90%;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .card h2 {
+      font-size: 1.3rem;
+      margin-bottom: 8px;
+      color: #ffffff;
+    }
+
+    .card p {
+      font-size: 0.95rem;
+      color: #a0a0b0;
+      margin-bottom: 20px;
+    }
+
+    .download-btn {
+      display: inline-block;
+      background: #e21833;
+      color: #fff;
+      text-decoration: none;
+      padding: 14px 36px;
+      border-radius: 8px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+
+    .download-btn:hover {
+      background: #c41530;
+    }
+
+    .version-info {
+      font-size: 0.85rem;
+      color: #707080;
+      margin-top: 12px;
+    }
+
+    .alt-link {
+      font-size: 0.9rem;
+      color: #6c63ff;
+      text-decoration: none;
+      margin-top: 8px;
+      display: inline-block;
+    }
+
+    .alt-link:hover {
+      text-decoration: underline;
+    }
+
+    .features {
+      max-width: 540px;
+      width: 90%;
+      margin-bottom: 48px;
+    }
+
+    .features h3 {
+      font-size: 1rem;
+      color: #a0a0b0;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .feature {
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .feature strong {
+      display: block;
+      color: #ffffff;
+      margin-bottom: 4px;
+      font-size: 0.95rem;
+    }
+
+    .feature span {
+      font-size: 0.85rem;
+      color: #808090;
+    }
+
+    .footer {
+      margin-top: auto;
+      padding: 32px;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #505060;
+    }
+
+    .footer a {
+      color: #6c63ff;
+      text-decoration: none;
+    }
+
+    .footer .logos {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 12px;
+    }
+
+    .footer .logos img {
+      height: 50px;
+      width: auto;
+      opacity: 0.8;
+    }
+
+    .requirements {
+      font-size: 0.85rem;
+      color: #707080;
+      text-align: center;
+      margin-bottom: 32px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>MSTerp</h1>
+  </div>
+
+  <p class="subtitle">
+    Desktop application for proteomics and metabolomics data analysis.
+    Built by the <strong>Hao Research Group</strong> at the University of Maryland.
+  </p>
+
+  <div class="card">
+    <h2>Download for Windows</h2>
+    <p>Standalone installer. No R or coding knowledge required.</p>
+    <a class="download-btn" href="https://github.com/shihj12/MSTerp/releases/latest/download/MSTerp-Setup.exe" id="download-link">
+      Download MSTerp
+    </a>
+    <div class="version-info" id="version-info">Loading latest version...</div>
+    <br>
+    <a class="alt-link" href="https://github.com/shihj12/MSTerp/releases/latest">
+      View all downloads (portable zip, release notes)
+    </a>
+  </div>
+
+  <p class="requirements">
+    Requires Windows 10 or later. ~300 MB download. Updates automatically.
+  </p>
+
+  <div class="features">
+    <h3>Features</h3>
+    <div class="feature-grid">
+      <div class="feature">
+        <strong>Statistical Analysis</strong>
+        <span>PCA, volcano plots, heatmaps, correlation analysis, and more</span>
+      </div>
+      <div class="feature">
+        <strong>Protein Annotation</strong>
+        <span>UniProt-based TerpBase with GO, subcellular localization, half-life data</span>
+      </div>
+      <div class="feature">
+        <strong>Metabolite ID</strong>
+        <span>Auto-resolve IDs via HMDB, KEGG, and PubChem databases</span>
+      </div>
+      <div class="feature">
+        <strong>Enrichment</strong>
+        <span>Gene ontology, metabolite set enrichment, pathway analysis</span>
+      </div>
+      <div class="feature">
+        <strong>Pipeline Builder</strong>
+        <span>Drag-and-drop analysis steps with reproducible workflows</span>
+      </div>
+      <div class="feature">
+        <strong>Export Ready</strong>
+        <span>Download results as Excel, CSV, or publication-quality figures</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="logos">
+      <img src="img/logo_right.png" alt="Hao Research Group">
+      <img src="img/logo_left.png" alt="University of Maryland" style="border-radius: 50%;">
+    </div>
+    <p>
+      Hao Research Group &middot; University of Maryland<br>
+      <a href="https://github.com/shihj12/MSTerp">GitHub</a>
+    </p>
+  </div>
+
+  <script>
+    // Fetch latest release version from GitHub API
+    fetch("https://api.github.com/repos/shihj12/MSTerp/releases/latest")
+      .then(r => r.json())
+      .then(data => {
+        if (data.tag_name) {
+          document.getElementById("version-info").textContent =
+            `Latest: ${data.tag_name} (${new Date(data.published_at).toLocaleDateString()})`;
+
+          // Find the .exe asset and update download link
+          const exe = (data.assets || []).find(a => a.name.endsWith(".exe") && !a.name.includes("blockmap"));
+          if (exe) {
+            document.getElementById("download-link").href = exe.browser_download_url;
+          }
+        }
+      })
+      .catch(() => {
+        document.getElementById("version-info").textContent = "";
+      });
+  </script>
+
+</body>
+</html>

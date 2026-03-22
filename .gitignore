@@ -1,0 +1,20 @@
+# Build artifacts
+R-portable/
+R-*.exe
+desktop/node_modules/
+desktop/dist/
+desktop/package-lock.json
+
+# IDE and tool config
+.vscode/
+.claude/
+.Rhistory
+nul
+
+# Python artifacts (legacy)
+__pycache__/
+*.pyc
+
+# OS files
+Thumbs.db
+.DS_Store
