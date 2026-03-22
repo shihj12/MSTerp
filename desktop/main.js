@@ -111,12 +111,12 @@ function findFreePort() {
 }
 
 // ─── Poll until Shiny responds ────────────────────────────────
-function waitForShiny(port, timeoutMs = 30000) {
+function waitForShiny(port, timeoutMs = 120000) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     function poll() {
       if (Date.now() - start > timeoutMs) {
-        return reject(new Error("Shiny did not respond within 30 seconds"));
+        return reject(new Error("Shiny did not respond within 2 minutes. Please try restarting MSTerp."));
       }
       const req = http.get(`http://127.0.0.1:${port}`, (res) => {
         if (res.statusCode === 200) {
