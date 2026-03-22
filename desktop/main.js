@@ -154,6 +154,14 @@ function spawnR(port) {
     // No portable library; system R will use its own
   }
 
+  // Log to file for debugging
+  const logFile = path.join(app.getPath("userData"), "msterp.log");
+  const logStream = fs.createWriteStream(logFile, { flags: "w" });
+  logStream.write(`[MSTerp] Starting at ${new Date().toISOString()}\n`);
+  logStream.write(`[MSTerp] Rscript: ${rscript}\n`);
+  logStream.write(`[MSTerp] App dir: ${appDir}\n`);
+  logStream.write(`[MSTerp] Port: ${port}\n\n`);
+
   const child = spawn(rscript, ["-e", rExpr], {
     cwd: appDir,
     env,
@@ -161,11 +169,20 @@ function spawnR(port) {
   });
 
   child.stdout.on("data", (data) => {
-    console.log(`[R stdout] ${data.toString().trim()}`);
+    const msg = data.toString().trim();
+    console.log(`[R stdout] ${msg}`);
+    logStream.write(`[stdout] ${msg}\n`);
   });
 
   child.stderr.on("data", (data) => {
-    console.log(`[R stderr] ${data.toString().trim()}`);
+    const msg = data.toString().trim();
+    console.log(`[R stderr] ${msg}`);
+    logStream.write(`[stderr] ${msg}\n`);
+  });
+
+  child.on("exit", (code) => {
+    logStream.write(`\n[MSTerp] R exited with code ${code}\n`);
+    logStream.end();
   });
 
   return child;

@@ -40,7 +40,14 @@
     .status {
       font-size: 13px;
       color: #a0a0b0;
-      margin-bottom: 24px;
+      margin-bottom: 6px;
+      text-align: center;
+    }
+
+    .timer {
+      font-size: 11px;
+      color: #707080;
+      margin-bottom: 20px;
     }
 
     .spinner {
@@ -52,6 +59,15 @@
       animation: spin 0.8s linear infinite;
     }
 
+    .first-run {
+      font-size: 11px;
+      color: #8080a0;
+      text-align: center;
+      margin-top: 16px;
+      max-width: 320px;
+      line-height: 1.4;
+    }
+
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
@@ -61,7 +77,42 @@
   <img class="logo" src="../www/img/logo_left.png" alt="MSTerp"
        onerror="this.style.display='none'">
   <div class="title">MSTerp</div>
-  <div class="status">Loading...</div>
+  <div class="status" id="status">Starting R...</div>
+  <div class="timer" id="timer"></div>
   <div class="spinner"></div>
+  <div class="first-run" id="first-run"></div>
+
+  <script>
+    const startTime = Date.now();
+    const statusEl = document.getElementById("status");
+    const timerEl = document.getElementById("timer");
+    const firstRunEl = document.getElementById("first-run");
+
+    const messages = [
+      { after: 0,  text: "Starting R..." },
+      { after: 3,  text: "Loading packages..." },
+      { after: 10, text: "Loading packages... (this may take a moment)" },
+      { after: 30, text: "Still loading packages..." },
+      { after: 60, text: "Almost there..." },
+    ];
+
+    setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      timerEl.textContent = elapsed + "s";
+
+      // Update status message based on elapsed time
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (elapsed >= messages[i].after) {
+          statusEl.textContent = messages[i].text;
+          break;
+        }
+      }
+
+      // Show first-run notice after 15 seconds
+      if (elapsed >= 15 && !firstRunEl.textContent) {
+        firstRunEl.textContent = "First launch takes longer while R initializes. Subsequent launches will be much faster.";
+      }
+    }, 1000);
+  </script>
 </body>
 </html>
