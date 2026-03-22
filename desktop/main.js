@@ -10,6 +10,9 @@ const { autoUpdater } = require("electron-updater");
 let splashWindow = null;
 let mainWindow = null;
 let rProcess = null;
+let rExited = false;
+let logStream = null;
+let isQuitting = false;
 let appPort = null;
 let pendingFileOpen = null;
 
@@ -42,13 +45,19 @@ if (!gotTheLock) {
   app.on("second-instance", (event, argv) => {
     const filePath = extractFileArg(argv);
     if (filePath && mainWindow) {
-      // Pass file to running Shiny app via URL parameter
-      mainWindow.loadURL(`http://127.0.0.1:${appPort}?open_file=${encodeURIComponent(filePath)}`);
+      // Pass file to Shiny without reloading the session
+      const escaped = filePath.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      mainWindow.webContents.executeJavaScript(
+        `if(window.Shiny && Shiny.setInputValue) Shiny.setInputValue('open_file', '${escaped}', {priority: 'event'});`
+      );
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
   });
 }
+
+// ─── Windows app identity ────────────────────────────────────
+app.setAppUserModelId("com.msterp.app");
 
 // ─── Resolve paths ────────────────────────────────────────────
 // In dev mode: paths are relative to the project root (one level up)
@@ -94,7 +103,8 @@ function getRscriptExe() {
     } catch {
       // No R in Program Files
     }
-    return "Rscript";
+    // No R found anywhere
+    return null;
   }
 }
 
@@ -110,11 +120,15 @@ function findFreePort() {
   });
 }
 
-// ─── Poll until Shiny responds (no timeout — waits indefinitely) ──
-// If R crashes, the 'exit' handler on rProcess will quit the app.
+// ─── Poll until Shiny responds ───────────────────────────────
+// No timeout — waits as long as R is alive. If R crashes, rejects immediately.
 function waitForShiny(port) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     function poll() {
+      if (rExited) {
+        return reject(new Error("R process exited before Shiny could start. Check the log at:\n" +
+          path.join(app.getPath("userData"), "msterp.log")));
+      }
       const req = http.get(`http://127.0.0.1:${port}`, (res) => {
         if (res.statusCode === 200) {
           resolve();
@@ -135,6 +149,10 @@ function waitForShiny(port) {
 // ─── Spawn R process ──────────────────────────────────────────
 function spawnR(port) {
   const rscript = getRscriptExe();
+  if (!rscript) {
+    throw new Error("R runtime not found.\n\nPlease reinstall MSTerp or ensure R is installed on your system.");
+  }
+
   const appDir = getAppPath();
   const libPath = path.join(getRPortablePath(), "library");
 
@@ -156,11 +174,13 @@ function spawnR(port) {
 
   // Log to file for debugging
   const logFile = path.join(app.getPath("userData"), "msterp.log");
-  const logStream = fs.createWriteStream(logFile, { flags: "w" });
+  logStream = fs.createWriteStream(logFile, { flags: "w" });
   logStream.write(`[MSTerp] Starting at ${new Date().toISOString()}\n`);
   logStream.write(`[MSTerp] Rscript: ${rscript}\n`);
   logStream.write(`[MSTerp] App dir: ${appDir}\n`);
   logStream.write(`[MSTerp] Port: ${port}\n\n`);
+
+  rExited = false;
 
   const child = spawn(rscript, ["-e", rExpr], {
     cwd: appDir,
@@ -171,18 +191,22 @@ function spawnR(port) {
   child.stdout.on("data", (data) => {
     const msg = data.toString().trim();
     console.log(`[R stdout] ${msg}`);
-    logStream.write(`[stdout] ${msg}\n`);
+    if (logStream) logStream.write(`[stdout] ${msg}\n`);
   });
 
   child.stderr.on("data", (data) => {
     const msg = data.toString().trim();
     console.log(`[R stderr] ${msg}`);
-    logStream.write(`[stderr] ${msg}\n`);
+    if (logStream) logStream.write(`[stderr] ${msg}\n`);
   });
 
   child.on("exit", (code) => {
-    logStream.write(`\n[MSTerp] R exited with code ${code}\n`);
-    logStream.end();
+    rExited = true;
+    if (logStream) {
+      logStream.write(`\n[MSTerp] R exited with code ${code}\n`);
+      logStream.end();
+      logStream = null;
+    }
   });
 
   return child;
@@ -206,6 +230,14 @@ function createSplashWindow() {
 
   splashWindow.loadFile(path.join(__dirname, "splash.html"));
   splashWindow.once("ready-to-show", () => splashWindow.show());
+
+  // If user closes splash (e.g. impatient), clean up R and quit
+  splashWindow.on("closed", () => {
+    splashWindow = null;
+    if (!mainWindow) {
+      shutdownR().then(() => app.quit());
+    }
+  });
 }
 
 // ─── Create main window ──────────────────────────────────────
@@ -243,6 +275,23 @@ function createMainWindow(port) {
     mainWindow.show();
   });
 
+  // Handle file downloads so they don't block Shiny's R thread
+  mainWindow.webContents.session.on("will-download", (event, item) => {
+    const { dialog } = require("electron");
+    const suggestedName = item.getFilename();
+
+    // Ask user where to save
+    const savePath = dialog.showSaveDialogSync(mainWindow, {
+      defaultPath: suggestedName,
+    });
+
+    if (savePath) {
+      item.setSavePath(savePath);
+    } else {
+      item.cancel();
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -251,6 +300,13 @@ function createMainWindow(port) {
 // ─── Shutdown: kill R process tree ────────────────────────────
 function shutdownR() {
   return new Promise((resolve) => {
+    // Close log stream if still open
+    if (logStream) {
+      logStream.write(`\n[MSTerp] Shutting down at ${new Date().toISOString()}\n`);
+      logStream.end();
+      logStream = null;
+    }
+
     if (rProcess && rProcess.pid && !rProcess.killed) {
       treeKill(rProcess.pid, "SIGTERM", (err) => {
         if (err) {
@@ -367,8 +423,10 @@ app.on("window-all-closed", async () => {
 });
 
 app.on("before-quit", async (e) => {
+  if (isQuitting) return;
   if (rProcess && !rProcess.killed) {
     e.preventDefault();
+    isQuitting = true;
     await shutdownR();
     app.quit();
   }

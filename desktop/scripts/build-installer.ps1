@@ -20,6 +20,7 @@ $BuildStart = Get-Date
 if (-Not $SkipR) {
     Write-Host "[1/4] Preparing portable R..." -ForegroundColor White
     & "$PSScriptRoot\prepare-r-portable.ps1"
+    if ($LASTEXITCODE -ne 0) { throw "Step 1 failed: prepare-r-portable.ps1" }
     Write-Host ""
 } else {
     Write-Host "[1/4] Skipped portable R (--SkipR)" -ForegroundColor DarkGray
@@ -29,6 +30,7 @@ if (-Not $SkipR) {
 if (-Not $SkipPackages) {
     Write-Host "[2/4] Installing R packages..." -ForegroundColor White
     & "$PSScriptRoot\install-r-packages.ps1"
+    if ($LASTEXITCODE -ne 0) { throw "Step 2 failed: install-r-packages.ps1" }
     Write-Host ""
 } else {
     Write-Host "[2/4] Skipped package install (--SkipPackages)" -ForegroundColor DarkGray
