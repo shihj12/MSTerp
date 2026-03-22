@@ -11,6 +11,44 @@ let splashWindow = null;
 let mainWindow = null;
 let rProcess = null;
 let appPort = null;
+let pendingFileOpen = null;
+
+// ─── File association handling ────────────────────────────────
+// When user double-clicks a .terpbase/.terpbook/.terpflow file,
+// Windows launches MSTerp with the file path as an argument.
+const ASSOCIATED_EXTENSIONS = [".terpbase", ".complexbase", ".metabobase", ".terpbook", ".terpflow"];
+
+function extractFileArg(argv) {
+  for (const arg of argv) {
+    const ext = path.extname(arg).toLowerCase();
+    if (ASSOCIATED_EXTENSIONS.includes(ext) && fs.existsSync(arg)) {
+      return arg;
+    }
+  }
+  return null;
+}
+
+// Capture file from initial launch args
+const launchFile = extractFileArg(process.argv);
+if (launchFile) {
+  pendingFileOpen = launchFile;
+}
+
+// Handle second-instance (app already running, user double-clicks another file)
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (event, argv) => {
+    const filePath = extractFileArg(argv);
+    if (filePath && mainWindow) {
+      // Pass file to running Shiny app via URL parameter
+      mainWindow.loadURL(`http://127.0.0.1:${appPort}?open_file=${encodeURIComponent(filePath)}`);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
 
 // ─── Resolve paths ────────────────────────────────────────────
 // In dev mode: paths are relative to the project root (one level up)
@@ -108,6 +146,10 @@ function spawnR(port) {
   const env = { ...process.env };
   // Pass user data path so R can find updated databases
   env.MSTERP_USER_DATA = app.getPath("userData");
+  // Pass file-open path if launched via file association
+  if (pendingFileOpen) {
+    env.MSTERP_OPEN_FILE = pendingFileOpen;
+  }
   try {
     fs.accessSync(libPath);
     env.R_LIBS_USER = libPath;
@@ -172,7 +214,12 @@ function createMainWindow(port) {
     },
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${port}`);
+  // If a file was opened via double-click, pass it as a URL parameter
+  const url = pendingFileOpen
+    ? `http://127.0.0.1:${port}?open_file=${encodeURIComponent(pendingFileOpen)}`
+    : `http://127.0.0.1:${port}`;
+  pendingFileOpen = null;
+  mainWindow.loadURL(url);
 
   mainWindow.once("ready-to-show", () => {
     if (splashWindow) {

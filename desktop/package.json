@@ -15,7 +15,34 @@
     },
     "win": {
       "target": ["nsis", "zip"],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "fileAssociations": [
+        {
+          "ext": "terpbase",
+          "name": "TerpBase Database",
+          "icon": "assets/file-base.ico"
+        },
+        {
+          "ext": "complexbase",
+          "name": "ComplexBase Database",
+          "icon": "assets/file-base.ico"
+        },
+        {
+          "ext": "metabobase",
+          "name": "MetaboBase Database",
+          "icon": "assets/file-base.ico"
+        },
+        {
+          "ext": "terpbook",
+          "name": "TerpBook Report",
+          "icon": "assets/file-book.ico"
+        },
+        {
+          "ext": "terpflow",
+          "name": "TerpFlow Network",
+          "icon": "assets/file-flow.ico"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
