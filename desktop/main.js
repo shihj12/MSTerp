@@ -5,7 +5,8 @@ const http = require("http");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const treeKill = require("tree-kill");
-const { autoUpdater } = require("electron-updater");
+// electron-updater is loaded lazily in setupAutoUpdater() to avoid
+// crashes during dev mode (npm start) where packaged app metadata is missing.
 
 let splashWindow = null;
 let mainWindow = null;
@@ -441,6 +442,8 @@ function shutdownR() {
 
 // ─── Auto-updater ─────────────────────────────────────────────
 function setupAutoUpdater() {
+  let autoUpdater;
+  try { autoUpdater = require("electron-updater").autoUpdater; } catch { return; }
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
 
