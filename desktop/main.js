@@ -291,23 +291,33 @@ function createMainWindow(port) {
     mainWindow.show();
   });
 
-  // Handle file downloads without blocking the main process
+  // Handle file downloads: let the download complete to a temp file first,
+  // then prompt the user where to save. This avoids pausing the HTTP stream,
+  // which would deadlock Shiny's single-threaded R process.
   mainWindow.webContents.session.on("will-download", (event, item) => {
     const suggestedName = item.getFilename();
+    const tempPath = path.join(app.getPath("temp"), `msterp-dl-${Date.now()}-${suggestedName}`);
+    item.setSavePath(tempPath);
 
-    // Pause download while user picks a location
-    item.pause();
+    item.once("done", (e, state) => {
+      if (state !== "completed") {
+        // Download failed or was cancelled — clean up temp file
+        try { fs.unlinkSync(tempPath); } catch {}
+        return;
+      }
 
-    dialog
-      .showSaveDialog(mainWindow, { defaultPath: suggestedName })
-      .then(({ canceled, filePath }) => {
-        if (!canceled && filePath) {
-          item.setSavePath(filePath);
-          item.resume();
-        } else {
-          item.cancel();
-        }
-      });
+      dialog
+        .showSaveDialog(mainWindow, { defaultPath: suggestedName })
+        .then(({ canceled, filePath }) => {
+          if (!canceled && filePath) {
+            fs.copyFile(tempPath, filePath, () => {
+              try { fs.unlinkSync(tempPath); } catch {}
+            });
+          } else {
+            try { fs.unlinkSync(tempPath); } catch {}
+          }
+        });
+    });
   });
 
   mainWindow.on("closed", () => {
