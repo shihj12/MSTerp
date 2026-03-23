@@ -487,9 +487,9 @@ msterp_theme_head <- function() {
         transition: opacity 0.1s;
       }
       .msterp-window-controls:hover button::after { opacity: 1; }
-      .msterp-wc-close::after    { content: '\00d7'; }
-      .msterp-wc-minimize::after { content: '\2013'; }
-      .msterp-wc-maximize::after { content: '\25c7'; }
+      .msterp-wc-close::after    { content: '\\00d7'; }
+      .msterp-wc-minimize::after { content: '\\2013'; }
+      .msterp-wc-maximize::after { content: '\\25c7'; }
 
       body.electron-app.window-blurred .msterp-window-controls button {
         background: #ddd;
