@@ -327,19 +327,39 @@ function createMainWindow(port) {
     }
   });
 
+  // Inject electron-app class as soon as the DOM is ready.
+  // This must happen from the main process because Shiny's renderUI timing
+  // makes renderer-side class injection unreliable.
+  mainWindow.webContents.on("dom-ready", () => {
+    mainWindow.webContents.executeJavaScript(`
+      document.body.classList.add('electron-app');
+      document.documentElement.style.setProperty('--titlebar-h', '28px');
+    `);
+  });
+
   // Don't show on ready-to-show — wait for Shiny to signal full readiness
   mainWindow.once("ready-to-show", () => {});
 
   // Listen for the renderer signalling that Shiny is connected and UI is ready.
-  // Delay slightly so renderUI has time to populate the DOM before we show.
+  // Then poll until the actual UI content is rendered before showing.
   ipcMain.once("shiny-app-ready", () => {
-    setTimeout(() => {
-      if (splashWindow) {
-        splashWindow.destroy();
-        splashWindow = null;
-      }
-      if (mainWindow) mainWindow.show();
-    }, 600);
+    function showWhenReady() {
+      mainWindow.webContents
+        .executeJavaScript(`!!document.querySelector('.msterp-topbar')`)
+        .then((found) => {
+          if (found) {
+            if (splashWindow) {
+              splashWindow.destroy();
+              splashWindow = null;
+            }
+            if (mainWindow) mainWindow.show();
+          } else {
+            setTimeout(showWhenReady, 100);
+          }
+        })
+        .catch(() => setTimeout(showWhenReady, 100));
+    }
+    showWhenReady();
   });
 
   // Safety timeout: show after 20s regardless (covers edge cases)
