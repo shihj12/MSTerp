@@ -240,6 +240,27 @@ function createSplashWindow() {
   });
 }
 
+// ─── Save-dialog file-type filters ──────────────────────────
+function extensionToFilter(ext) {
+  const map = {
+    ".xlsx": { name: "Excel Workbook", extensions: ["xlsx"] },
+    ".xls":  { name: "Excel Workbook (Legacy)", extensions: ["xls"] },
+    ".csv":  { name: "CSV File", extensions: ["csv"] },
+    ".png":  { name: "PNG Image", extensions: ["png"] },
+    ".pdf":  { name: "PDF Document", extensions: ["pdf"] },
+    ".svg":  { name: "SVG Image", extensions: ["svg"] },
+    ".zip":  { name: "ZIP Archive", extensions: ["zip"] },
+    ".txt":  { name: "Text File", extensions: ["txt"] },
+    ".terpbase":    { name: "TerpBase Database", extensions: ["terpbase"] },
+    ".complexbase": { name: "ComplexBase Database", extensions: ["complexbase"] },
+    ".metabobase":  { name: "MetaboBase Database", extensions: ["metabobase"] },
+    ".terpbook":    { name: "TerpBook Report", extensions: ["terpbook"] },
+    ".terpflow":    { name: "TerpFlow Network", extensions: ["terpflow"] },
+  };
+  const key = ext.toLowerCase();
+  return map[key] || { name: `${ext.replace(".", "").toUpperCase()} File`, extensions: [ext.replace(".", "")] };
+}
+
 // ─── Create main window ──────────────────────────────────────
 function createMainWindow(port) {
   const iconPath = path.join(__dirname, "assets", "icon.png");
@@ -252,6 +273,7 @@ function createMainWindow(port) {
     title: "MSTerp",
     icon: iconPath,
     show: false,
+    frame: false,
     autoHideMenuBar: true,
     titleBarStyle: "hidden",
     titleBarOverlay: {
@@ -264,6 +286,27 @@ function createMainWindow(port) {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
     },
+  });
+
+  // ─── IPC: custom window controls (frameless mode) ──────────
+  ipcMain.on("window-minimize", () => {
+    if (mainWindow) mainWindow.minimize();
+  });
+  ipcMain.on("window-maximize", () => {
+    if (mainWindow) {
+      if (mainWindow.isMaximized()) mainWindow.unmaximize();
+      else mainWindow.maximize();
+    }
+  });
+  ipcMain.on("window-close", () => {
+    if (mainWindow) mainWindow.close();
+  });
+
+  mainWindow.on("maximize", () => {
+    mainWindow.webContents.send("window-maximized", true);
+  });
+  mainWindow.on("unmaximize", () => {
+    mainWindow.webContents.send("window-maximized", false);
   });
 
   // If a file was opened via double-click, pass it as a URL parameter
@@ -325,10 +368,20 @@ function createMainWindow(port) {
         return;
       }
 
+      const ext = path.extname(suggestedName); // e.g. ".xlsx"
+      const filters = [];
+      if (ext) filters.push(extensionToFilter(ext));
+      filters.push({ name: "All Files", extensions: ["*"] });
+
       dialog
-        .showSaveDialog(mainWindow, { defaultPath: suggestedName })
-        .then(({ canceled, filePath }) => {
-          if (!canceled && filePath) {
+        .showSaveDialog(mainWindow, { defaultPath: suggestedName, filters })
+        .then(({ canceled, filePath: savePath }) => {
+          if (!canceled && savePath) {
+            let filePath = savePath;
+            // Ensure the extension is preserved even if user removed it
+            if (ext && path.extname(filePath).toLowerCase() !== ext.toLowerCase()) {
+              filePath += ext;
+            }
             fs.copyFile(tempPath, filePath, () => {
               try { fs.unlinkSync(tempPath); } catch {}
             });

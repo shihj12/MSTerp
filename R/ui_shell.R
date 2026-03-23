@@ -344,7 +344,8 @@ msterp_theme_head <- function() {
 
       /* === Shell wrapper (.shell alias) === */
       .msterp-wrap, .shell {
-        --topbar-h: 56px;
+        --titlebar-h: 0px;
+        --topbar-h: 48px;
         --bg: var(--md-bg);
         --banner: #1b1b1b;
         --panel: #ffffff;
@@ -389,10 +390,10 @@ msterp_theme_head <- function() {
         gap: 10px;
         flex-shrink: 0;
       }
-      .msterp-topbar-left img { height: 45px; width: auto; display: block; }
+      .msterp-topbar-left img { height: 28px; width: auto; display: block; }
       .msterp-topbar-title {
-        font-weight: 800;
-        font-size: 25px;
+        font-weight: 700;
+        font-size: 15px;
         letter-spacing: 0.3px;
         white-space: nowrap;
         font-family: var(--mono, 'JetBrains Mono', monospace);
@@ -442,12 +443,75 @@ msterp_theme_head <- function() {
         line-height: 1.2;
       }
 
+      /* === Custom title bar (Electron frameless mode) === */
+      .msterp-titlebar {
+        display: none;
+        height: 28px;
+        background: var(--banner);
+        -webkit-app-region: drag;
+        align-items: center;
+        padding: 0 10px;
+        gap: 8px;
+      }
+      body.electron-app .msterp-titlebar {
+        display: flex;
+      }
+      .msterp-titlebar-text {
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 12px;
+        font-weight: 500;
+        pointer-events: none;
+      }
+
+      /* Traffic-light window controls */
+      .msterp-window-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        -webkit-app-region: no-drag;
+      }
+      .msterp-window-controls button {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        position: relative;
+        outline: none;
+      }
+      .msterp-wc-close    { background: #ff5f57; }
+      .msterp-wc-minimize { background: #febc2e; }
+      .msterp-wc-maximize { background: #28c840; }
+
+      .msterp-window-controls button::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+        font-weight: 700;
+        color: rgba(0, 0, 0, 0.5);
+        opacity: 0;
+        transition: opacity 0.1s;
+      }
+      .msterp-window-controls:hover button::after { opacity: 1; }
+      .msterp-wc-close::after    { content: '\00d7'; }
+      .msterp-wc-minimize::after { content: '\2013'; }
+      .msterp-wc-maximize::after { content: '\25c7'; }
+
+      body.electron-app.window-blurred .msterp-window-controls button {
+        background: #ddd;
+      }
+
       /* === Shell layout: sidebar + content (.shell > .nav + .main) === */
       .msterp-shell {
         display: flex;
         flex-direction: row;
         gap: 0;
-        height: calc(100vh - var(--topbar-h));
+        height: calc(100vh - var(--topbar-h) - var(--titlebar-h));
         min-height: 0;
       }
 
@@ -1853,7 +1917,52 @@ msterp_theme_head <- function() {
         $(this).closest('.tools-collapse-section').toggleClass('open');
       });
 
+      // Electron frameless window: detect platform and wire up controls
+      (function() {
+        if (window.msterp && window.msterp.platform) {
+          document.body.classList.add('electron-app');
+          document.documentElement.style.setProperty('--titlebar-h', '28px');
+
+          $(document).on('click', '.msterp-wc-close', function() {
+            window.msterp.windowClose();
+          });
+          $(document).on('click', '.msterp-wc-minimize', function() {
+            window.msterp.windowMinimize();
+          });
+          $(document).on('click', '.msterp-wc-maximize', function() {
+            window.msterp.windowMaximize();
+          });
+
+          if (window.msterp.onMaximizedChange) {
+            window.msterp.onMaximizedChange(function(isMax) {
+              var btn = document.querySelector('.msterp-wc-maximize');
+              if (btn) btn.title = isMax ? 'Restore' : 'Maximize';
+            });
+          }
+
+          window.addEventListener('focus', function() {
+            document.body.classList.remove('window-blurred');
+          });
+          window.addEventListener('blur', function() {
+            document.body.classList.add('window-blurred');
+          });
+        }
+      })();
+
     "))
+  )
+}
+
+titlebar_ui <- function() {
+  div(
+    class = "msterp-titlebar",
+    div(
+      class = "msterp-window-controls",
+      tags$button(class = "msterp-wc-close", title = "Close"),
+      tags$button(class = "msterp-wc-minimize", title = "Minimize"),
+      tags$button(class = "msterp-wc-maximize", title = "Maximize")
+    ),
+    span(class = "msterp-titlebar-text", "MSTerp")
   )
 }
 

@@ -136,6 +136,7 @@ server <- function(input, output, session) {
     } else {
       div(
         class = "msterp-wrap",
+        titlebar_ui(),
         topbar_ui(),
         div(
           class = "msterp-shell",
