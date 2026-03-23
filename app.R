@@ -92,6 +92,7 @@ init_common_assets()
 # Dynamic UI that switches between landing page and shell
 ui <- fluidPage(
   msterp_theme_head(),
+  titlebar_ui(),
   uiOutput("app_container")
 )
 
@@ -136,7 +137,6 @@ server <- function(input, output, session) {
     } else {
       div(
         class = "msterp-wrap",
-        titlebar_ui(),
         topbar_ui(),
         div(
           class = "msterp-shell",

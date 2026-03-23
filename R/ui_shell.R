@@ -334,9 +334,17 @@ msterp_theme_head <- function() {
 
       html, body {
         height: 100%;
+        margin: 0;
+        padding: 0;
         font-family: var(--mono, 'JetBrains Mono', monospace);
         background: var(--md-bg);
         color: var(--md-text);
+      }
+      /* Strip Shiny fluidPage container padding so content is edge-to-edge */
+      body > .container-fluid {
+        padding: 0;
+        margin: 0;
+        max-width: 100%;
       }
 
       /* Important for grid/scroll correctness */

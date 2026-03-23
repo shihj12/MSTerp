@@ -21,7 +21,7 @@ page_home_ui <- function() {
         #home-landing {
           min-height: 100vh;
           position: fixed;
-          top: 0;
+          top: var(--titlebar-h, 0px);
           left: 0;
           right: 0;
           bottom: 0;
