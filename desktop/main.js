@@ -275,12 +275,6 @@ function createMainWindow(port) {
     show: false,
     frame: false,
     autoHideMenuBar: true,
-    titleBarStyle: "hidden",
-    titleBarOverlay: {
-      color: "#1b1b1b",
-      symbolColor: "#e0e0e0",
-      height: 40,
-    },
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

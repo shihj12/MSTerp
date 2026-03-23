@@ -373,17 +373,6 @@ msterp_theme_head <- function() {
         gap: 12px;
       }
 
-      /* Electron desktop: make topbar draggable as window titlebar */
-      .is-electron .msterp-topbar {
-        -webkit-app-region: drag;
-        padding-right: 140px; /* space for Windows overlay controls */
-      }
-      .is-electron .msterp-topbar a,
-      .is-electron .msterp-topbar button,
-      .is-electron .msterp-topbar .msterp-topbar-nav {
-        -webkit-app-region: no-drag;
-      }
-
       .msterp-topbar-left {
         display: flex;
         align-items: center;
@@ -1730,9 +1719,6 @@ msterp_theme_head <- function() {
         var homeBtn = document.getElementById('home_theme_toggle');
         if (homeBtn) homeBtn.innerHTML = next === 'dark' ? '\\u2600' : '\\u263E';
       }
-
-      // Detect Electron and add body class for desktop-specific CSS
-      if (window.msterp) document.body.classList.add('is-electron');
 
       // Sync theme toggle icon when DOM updates (for dynamic UI)
       $(document).on('shiny:connected', function() {
