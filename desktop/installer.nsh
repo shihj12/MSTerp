@@ -4,17 +4,24 @@
 ; HKCU takes precedence over HKLM, so leftover user-level entries (with no
 ; DefaultIcon) shadow the machine-level icons we register.
 !macro customInstall
-  ; Remove stale per-user associations for all our file types
+  ; Remove stale per-user associations for all our file types.
+  ; Both Software\Classes and Explorer\FileExts must be cleaned —
+  ; Explorer\FileExts is what Windows actually uses at runtime.
   DeleteRegKey HKCU "Software\Classes\.terpflow"
   DeleteRegKey HKCU "Software\Classes\terpflow_auto_file"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpflow"
   DeleteRegKey HKCU "Software\Classes\.terpbook"
   DeleteRegKey HKCU "Software\Classes\terpbook_auto_file"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpbook"
   DeleteRegKey HKCU "Software\Classes\.terpbase"
   DeleteRegKey HKCU "Software\Classes\terpbase_auto_file"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpbase"
   DeleteRegKey HKCU "Software\Classes\.complexbase"
   DeleteRegKey HKCU "Software\Classes\complexbase_auto_file"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.complexbase"
   DeleteRegKey HKCU "Software\Classes\.metabobase"
   DeleteRegKey HKCU "Software\Classes\metabobase_auto_file"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.metabobase"
 
   ; Force icon cache rebuild: delete cache files and notify Explorer.
   ; Use cmd /c with del to handle wildcards and locked files gracefully.
