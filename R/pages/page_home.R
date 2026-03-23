@@ -5,7 +5,7 @@ page_home_ui <- function() {
     tags$head(
       tags$link(
         rel = "preload",
-        href = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Source+Sans+Pro:wght@700;900&display=block",
+        href = "https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@700;900&display=swap",
         as = "style",
         onload = "this.rel='stylesheet'"
       ),

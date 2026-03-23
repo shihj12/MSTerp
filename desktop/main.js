@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
 const net = require("net");
 const http = require("http");
@@ -267,6 +267,22 @@ function createMainWindow(port) {
   pendingFileOpen = null;
   mainWindow.loadURL(url);
 
+  // Handle window.open() and target="_blank" links — open in system browser
+  mainWindow.webContents.setWindowOpenHandler(({ url: openUrl }) => {
+    if (openUrl.startsWith("http://") || openUrl.startsWith("https://")) {
+      shell.openExternal(openUrl);
+    }
+    return { action: "deny" };
+  });
+
+  // Prevent navigation away from the Shiny app
+  mainWindow.webContents.on("will-navigate", (event, navUrl) => {
+    if (!navUrl.startsWith(`http://127.0.0.1:${port}`)) {
+      event.preventDefault();
+      shell.openExternal(navUrl);
+    }
+  });
+
   mainWindow.once("ready-to-show", () => {
     if (splashWindow) {
       splashWindow.destroy();
@@ -275,21 +291,23 @@ function createMainWindow(port) {
     mainWindow.show();
   });
 
-  // Handle file downloads so they don't block Shiny's R thread
+  // Handle file downloads without blocking the main process
   mainWindow.webContents.session.on("will-download", (event, item) => {
-    const { dialog } = require("electron");
     const suggestedName = item.getFilename();
 
-    // Ask user where to save
-    const savePath = dialog.showSaveDialogSync(mainWindow, {
-      defaultPath: suggestedName,
-    });
+    // Pause download while user picks a location
+    item.pause();
 
-    if (savePath) {
-      item.setSavePath(savePath);
-    } else {
-      item.cancel();
-    }
+    dialog
+      .showSaveDialog(mainWindow, { defaultPath: suggestedName })
+      .then(({ canceled, filePath }) => {
+        if (!canceled && filePath) {
+          item.setSavePath(filePath);
+          item.resume();
+        } else {
+          item.cancel();
+        }
+      });
   });
 
   mainWindow.on("closed", () => {

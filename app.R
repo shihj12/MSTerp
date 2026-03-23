@@ -189,9 +189,6 @@ server <- function(input, output, session) {
   lapply(names(MSTERP_PAGES), function(pid) {
     call_page_server(MSTERP_PAGES[[pid]]$server, input, output, session, app_state)
   })
-  observe({
-    session$sendCustomMessage("msterp_set_active_nav", list(page_id = current_page()))
-  }, priority = 1000)
 }
 
 shinyApp(ui, server)

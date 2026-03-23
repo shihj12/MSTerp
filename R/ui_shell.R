@@ -2,9 +2,15 @@
 msterp_theme_head <- function() {
   tags$head(
     tags$link(
+      rel = "preload",
+      href = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap",
+      as = "style",
+      onload = "this.rel='stylesheet'"
+    ),
+    tags$noscript(tags$link(
       rel = "stylesheet",
       href = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap"
-    ),
+    )),
     tags$script(HTML("
       // Apply saved theme immediately to prevent flash of wrong theme
       (function(){
@@ -1736,7 +1742,7 @@ msterp_theme_head <- function() {
 
       // Set active nav item based on current page
       var pendingNavUpdate = null;
-      var navObserver = null;
+      var navPollTimer = null;
 
       var navIdMap = {
         'home': 'nav_home',
@@ -1764,27 +1770,30 @@ msterp_theme_head <- function() {
         return true;
       }
 
-      function stopNavObserver() {
-        if (navObserver) {
-          navObserver.disconnect();
-          navObserver = null;
+      function stopNavPoll() {
+        if (navPollTimer) {
+          clearTimeout(navPollTimer);
+          navPollTimer = null;
         }
       }
 
-      function startNavObserver(pageId) {
-        stopNavObserver();
+      function startNavPoll(pageId) {
+        stopNavPoll();
+        var retries = 0;
+        var maxRetries = 40; // 40 * 50ms = 2s max
 
-        navObserver = new MutationObserver(function(mutations) {
+        function poll() {
+          navPollTimer = null;
           if (applyNavUpdate(pageId)) {
-            stopNavObserver();
             pendingNavUpdate = null;
+            return;
           }
-        });
-
-        navObserver.observe(document.body, {
-          childList: true,
-          subtree: true
-        });
+          retries++;
+          if (retries < maxRetries) {
+            navPollTimer = setTimeout(poll, 50);
+          }
+        }
+        poll();
       }
 
       // Immediately highlight nav item on click (before server roundtrip)
@@ -1799,13 +1808,13 @@ msterp_theme_head <- function() {
         // Try to apply immediately
         if (applyNavUpdate(pageId)) {
           pendingNavUpdate = null;
-          stopNavObserver();
+          stopNavPoll();
           return;
         }
 
-        // If nav doesn't exist yet, use MutationObserver to watch for it
+        // If nav doesn't exist yet, poll until it appears
         pendingNavUpdate = pageId;
-        startNavObserver(pageId);
+        startNavPoll(pageId);
       });
 
       // Scroll to element handler

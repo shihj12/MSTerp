@@ -2346,7 +2346,13 @@ page_results_ui <- function() {
 
         var target = document.getElementById('page_ui');
         if (target && !target.__resObserver) {
-          var obs = new MutationObserver(function() { sync(); });
+          var obs = new MutationObserver(function() {
+            if (!document.querySelector('.res-root')) {
+              obs.disconnect();
+              target.__resObserver = null;
+            }
+            sync();
+          });
           obs.observe(target, { childList: true, subtree: true });
           target.__resObserver = obs;
         }
