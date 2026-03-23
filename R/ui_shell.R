@@ -371,6 +371,18 @@ msterp_theme_head <- function() {
         margin-bottom: 0;
         gap: 12px;
       }
+
+      /* Electron desktop: make topbar draggable as window titlebar */
+      .is-electron .msterp-topbar {
+        -webkit-app-region: drag;
+        padding-right: 140px; /* space for Windows overlay controls */
+      }
+      .is-electron .msterp-topbar a,
+      .is-electron .msterp-topbar button,
+      .is-electron .msterp-topbar .msterp-topbar-nav {
+        -webkit-app-region: no-drag;
+      }
+
       .msterp-topbar-left {
         display: flex;
         align-items: center;
@@ -1655,6 +1667,9 @@ msterp_theme_head <- function() {
         if (homeBtn) homeBtn.innerHTML = next === 'dark' ? '\\u2600' : '\\u263E';
       }
 
+      // Detect Electron and add body class for desktop-specific CSS
+      if (window.msterp) document.body.classList.add('is-electron');
+
       // Sync theme toggle icon when DOM updates (for dynamic UI)
       $(document).on('shiny:connected', function() {
         var current = document.documentElement.getAttribute('data-theme') || 'light';
@@ -1662,6 +1677,11 @@ msterp_theme_head <- function() {
         if (btn) btn.innerHTML = current === 'dark' ? '\\u2600' : '\\u263E';
         var homeBtn = document.getElementById('home_theme_toggle');
         if (homeBtn) homeBtn.innerHTML = current === 'dark' ? '\\u2600' : '\\u263E';
+
+        // Signal Electron that Shiny is fully connected and ready
+        if (window.msterp && window.msterp.signalReady) {
+          window.msterp.signalReady();
+        }
       });
 
       // Busy overlay handler

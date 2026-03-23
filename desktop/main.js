@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
 const path = require("path");
 const net = require("net");
 const http = require("http");
@@ -253,6 +253,12 @@ function createMainWindow(port) {
     icon: iconPath,
     show: false,
     autoHideMenuBar: true,
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#1b1b1b",
+      symbolColor: "#e0e0e0",
+      height: 40,
+    },
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -283,13 +289,26 @@ function createMainWindow(port) {
     }
   });
 
-  mainWindow.once("ready-to-show", () => {
+  // Don't show on ready-to-show — wait for Shiny to signal full readiness
+  mainWindow.once("ready-to-show", () => {});
+
+  // Listen for the renderer signalling that Shiny is connected and UI is ready
+  ipcMain.once("shiny-app-ready", () => {
     if (splashWindow) {
       splashWindow.destroy();
       splashWindow = null;
     }
-    mainWindow.show();
+    if (mainWindow) mainWindow.show();
   });
+
+  // Safety timeout: show after 20s regardless (covers edge cases)
+  setTimeout(() => {
+    if (splashWindow) {
+      splashWindow.destroy();
+      splashWindow = null;
+    }
+    if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
+  }, 20000);
 
   // Handle file downloads: let the download complete to a temp file first,
   // then prompt the user where to save. This avoids pausing the HTTP stream,

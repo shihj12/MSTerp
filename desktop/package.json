@@ -1,6 +1,6 @@
 {
   "name": "msterp",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "MSTerp - Proteomics & Metabolomics Analysis",
   "main": "main.js",
   "scripts": {
@@ -20,27 +20,32 @@
         {
           "ext": "terpbase",
           "name": "TerpBase Database",
-          "icon": "assets/file-base.ico"
+          "icon": "assets/file-base.ico",
+          "role": "Viewer"
         },
         {
           "ext": "complexbase",
           "name": "ComplexBase Database",
-          "icon": "assets/file-base.ico"
+          "icon": "assets/file-base.ico",
+          "role": "Viewer"
         },
         {
           "ext": "metabobase",
           "name": "MetaboBase Database",
-          "icon": "assets/file-base.ico"
+          "icon": "assets/file-base.ico",
+          "role": "Viewer"
         },
         {
           "ext": "terpbook",
           "name": "TerpBook Report",
-          "icon": "assets/file-book.ico"
+          "icon": "assets/file-book.ico",
+          "role": "Viewer"
         },
         {
           "ext": "terpflow",
           "name": "TerpFlow Network",
-          "icon": "assets/file-flow.ico"
+          "icon": "assets/file-flow.ico",
+          "role": "Viewer"
         }
       ]
     },

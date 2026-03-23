@@ -49,6 +49,15 @@ page_home_ui <- function() {
           border-bottom: 1px solid rgba(201, 65, 77, 0.15);
           gap: 12px;
         }
+        /* Electron desktop: make home banner draggable as window titlebar */
+        .is-electron #home-landing .home-banner {
+          -webkit-app-region: drag;
+          padding-right: 140px;
+        }
+        .is-electron #home-landing .home-banner a,
+        .is-electron #home-landing .home-banner button {
+          -webkit-app-region: no-drag;
+        }
         #home-landing .home-banner-left {
           display: flex;
           align-items: center;
