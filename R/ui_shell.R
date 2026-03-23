@@ -1732,6 +1732,36 @@ msterp_theme_head <- function() {
         if (window.msterp && window.msterp.signalReady) {
           window.msterp.signalReady();
         }
+
+        // Electron frameless window: add class and wire up controls
+        if (window.msterp && window.msterp.platform) {
+          document.body.classList.add('electron-app');
+          document.documentElement.style.setProperty('--titlebar-h', '28px');
+
+          $(document).on('click', '.msterp-wc-close', function() {
+            window.msterp.windowClose();
+          });
+          $(document).on('click', '.msterp-wc-minimize', function() {
+            window.msterp.windowMinimize();
+          });
+          $(document).on('click', '.msterp-wc-maximize', function() {
+            window.msterp.windowMaximize();
+          });
+
+          if (window.msterp.onMaximizedChange) {
+            window.msterp.onMaximizedChange(function(isMax) {
+              var btn = document.querySelector('.msterp-wc-maximize');
+              if (btn) btn.title = isMax ? 'Restore' : 'Maximize';
+            });
+          }
+
+          window.addEventListener('focus', function() {
+            document.body.classList.remove('window-blurred');
+          });
+          window.addEventListener('blur', function() {
+            document.body.classList.add('window-blurred');
+          });
+        }
       });
 
       // Busy overlay handler
@@ -1902,38 +1932,6 @@ msterp_theme_head <- function() {
         e.stopPropagation();
         $(this).closest('.tools-collapse-section').toggleClass('open');
       });
-
-      // Electron frameless window: detect platform and wire up controls
-      (function() {
-        if (window.msterp && window.msterp.platform) {
-          document.body.classList.add('electron-app');
-          document.documentElement.style.setProperty('--titlebar-h', '28px');
-
-          $(document).on('click', '.msterp-wc-close', function() {
-            window.msterp.windowClose();
-          });
-          $(document).on('click', '.msterp-wc-minimize', function() {
-            window.msterp.windowMinimize();
-          });
-          $(document).on('click', '.msterp-wc-maximize', function() {
-            window.msterp.windowMaximize();
-          });
-
-          if (window.msterp.onMaximizedChange) {
-            window.msterp.onMaximizedChange(function(isMax) {
-              var btn = document.querySelector('.msterp-wc-maximize');
-              if (btn) btn.title = isMax ? 'Restore' : 'Maximize';
-            });
-          }
-
-          window.addEventListener('focus', function() {
-            document.body.classList.remove('window-blurred');
-          });
-          window.addEventListener('blur', function() {
-            document.body.classList.add('window-blurred');
-          });
-        }
-      })();
 
     "))
   )

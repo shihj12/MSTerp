@@ -16,6 +16,10 @@
   DeleteRegKey HKCU "Software\Classes\.metabobase"
   DeleteRegKey HKCU "Software\Classes\metabobase_auto_file"
 
+  ; Delete stale icon cache files to force Windows to rebuild them
+  Delete "$LOCALAPPDATA\IconCache.db"
+  Delete "$LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache_*.db"
+
   ; Notify Windows Explorer that file associations have changed
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x0000, p 0, p 0)'
 !macroend

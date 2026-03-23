@@ -274,6 +274,7 @@ function createMainWindow(port) {
     icon: iconPath,
     show: false,
     frame: false,
+    backgroundColor: "#1b1b1b",
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
@@ -329,13 +330,16 @@ function createMainWindow(port) {
   // Don't show on ready-to-show — wait for Shiny to signal full readiness
   mainWindow.once("ready-to-show", () => {});
 
-  // Listen for the renderer signalling that Shiny is connected and UI is ready
+  // Listen for the renderer signalling that Shiny is connected and UI is ready.
+  // Delay slightly so renderUI has time to populate the DOM before we show.
   ipcMain.once("shiny-app-ready", () => {
-    if (splashWindow) {
-      splashWindow.destroy();
-      splashWindow = null;
-    }
-    if (mainWindow) mainWindow.show();
+    setTimeout(() => {
+      if (splashWindow) {
+        splashWindow.destroy();
+        splashWindow = null;
+      }
+      if (mainWindow) mainWindow.show();
+    }, 600);
   });
 
   // Safety timeout: show after 20s regardless (covers edge cases)
