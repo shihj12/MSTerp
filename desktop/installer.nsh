@@ -4,6 +4,11 @@
 ; HKCU takes precedence over HKLM, so leftover user-level entries (with no
 ; DefaultIcon) shadow the machine-level icons we register.
 !macro customInstall
+  ; Close any running MSTerp instance so the installer can overwrite files.
+  ; Without this, Windows file locks cause silent install failures.
+  nsExec::ExecToLog 'cmd /c taskkill /f /im MSTerp.exe 2>nul'
+  Sleep 1000
+
   ; Remove stale per-user associations for all our file types.
   ; Both Software\Classes and Explorer\FileExts must be cleaned —
   ; Explorer\FileExts is what Windows actually uses at runtime.
