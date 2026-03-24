@@ -5603,7 +5603,9 @@ page_results_server <- function(input, output, session) {
           showNotification("Pending changes applied for export preview.", type = "message")
         }, error = function(e) {
           message("[Mode switch commit] Error: ", conditionMessage(e))
-          message(paste(capture.output(traceback()), collapse = "\n"))
+          tb <- tryCatch(paste(capture.output(traceback()), collapse = "\n"),
+                         error = function(te) "(traceback unavailable)")
+          message(tb)
         })
       } else {
         message("[DEBUG-MODE] No pending changes to commit")
@@ -5612,8 +5614,12 @@ page_results_server <- function(input, output, session) {
 
     .prev_view_mode(current_mode)
     }, error = function(e) {
+      # req() signals a silent error with class "shiny.silent.error" — ignore it
+      if (inherits(e, "shiny.silent.error")) return()
       message("[Mode switch observer] Error: ", conditionMessage(e))
-      message(paste(capture.output(traceback()), collapse = "\n"))
+      tb <- tryCatch(paste(capture.output(traceback()), collapse = "\n"),
+                     error = function(te) "(traceback unavailable)")
+      message(tb)
     })
   })
 

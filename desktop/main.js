@@ -355,6 +355,14 @@ function createMainWindow(port) {
     }
   });
 
+  // Log JavaScript errors from the renderer to help diagnose crashes
+  mainWindow.webContents.on("console-message", (event, level, message, line, sourceId) => {
+    // level: 0=verbose, 1=info, 2=warning, 3=error
+    if (level >= 2 && logStream) {
+      logStream.write(`[renderer ${level === 3 ? "ERROR" : "WARN"}] ${message} (${sourceId}:${line})\n`);
+    }
+  });
+
   // Inject electron-app class as soon as the DOM is ready.
   // This must happen from the main process because Shiny's renderUI timing
   // makes renderer-side class injection unreliable.
@@ -368,19 +376,44 @@ function createMainWindow(port) {
   // Don't show on ready-to-show — wait for Shiny to signal full readiness
   mainWindow.once("ready-to-show", () => {});
 
+  // Catch renderer process crashes so they show up in the log
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    const msg = `[MSTerp] Renderer crashed! reason=${details.reason}, exitCode=${details.exitCode}`;
+    console.error(msg);
+    if (logStream) logStream.write(msg + "\n");
+    dialog.showErrorBox(
+      "MSTerp - Renderer Crash",
+      `The display process crashed (${details.reason}).\n\nPlease restart MSTerp.`
+    );
+  });
+
+  mainWindow.webContents.on("unresponsive", () => {
+    const msg = `[MSTerp] Renderer became unresponsive at ${new Date().toISOString()}`;
+    console.warn(msg);
+    if (logStream) logStream.write(msg + "\n");
+  });
+
+  mainWindow.webContents.on("responsive", () => {
+    if (logStream) logStream.write(`[MSTerp] Renderer became responsive again at ${new Date().toISOString()}\n`);
+  });
+
   // Listen for the renderer signalling that Shiny is connected and UI is ready.
-  // Then poll until the actual UI content is rendered before showing.
+  // Then poll until actual content is rendered before swapping splash → main.
   ipcMain.once("shiny-app-ready", () => {
     function showWhenReady() {
       mainWindow.webContents
-        .executeJavaScript(`!!document.querySelector('.msterp-topbar')`)
+        .executeJavaScript(
+          `!!(document.querySelector('#home-landing') || document.querySelector('.msterp-topbar'))`
+        )
         .then((found) => {
           if (found) {
+            // Show main window first (behind splash), then destroy splash
+            // to avoid any gap where neither window is visible
+            if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
             if (splashWindow) {
               splashWindow.destroy();
               splashWindow = null;
             }
-            if (mainWindow) mainWindow.show();
           } else {
             setTimeout(showWhenReady, 100);
           }
@@ -392,11 +425,11 @@ function createMainWindow(port) {
 
   // Safety timeout: show after 20s regardless (covers edge cases)
   setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
     if (splashWindow) {
       splashWindow.destroy();
       splashWindow = null;
     }
-    if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
   }, 20000);
 
   // Handle file downloads: let the download complete to a temp file first,
