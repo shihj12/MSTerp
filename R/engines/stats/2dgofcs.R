@@ -588,11 +588,21 @@ stats_2dgofcs_run <- function(payload, params = NULL, context = NULL) {
     }
   }
 
+  # Source shared enrichment utilities
+  if (!exists("build_term_proteins", mode = "function")) {
+    source("R/engines/enrichment_utils.R", local = TRUE)
+  }
+
   # Initialize term_proteins and term_info based on database mode
   term_proteins <- list()
   term_info <- NULL
 
-  if (identical(database, "complex")) {
+  # Allow callers to pre-build term_proteins (e.g., cluster loop optimization)
+  if (!is.null(payload$term_proteins) && length(payload$term_proteins) > 0) {
+    term_proteins <- payload$term_proteins
+    term_info <- payload$term_info %||% NULL
+    add_log("INFO", sprintf("Using pre-built term_proteins (%d terms)", length(term_proteins)))
+  } else if (identical(database, "complex")) {
     # =========================================================
     # Complex enrichment mode: use complexbase
     # =========================================================
@@ -667,30 +677,9 @@ stats_2dgofcs_run <- function(payload, params = NULL, context = NULL) {
     compound_to_pathway <- metabobase$compound_to_pathway %||% metabobase$compound_terms %||% NULL
     pathway_info <- metabobase$pathway_info %||% metabobase$terms %||% NULL
 
-    # Build term-to-compound mapping (similar to GO but for metabolites)
-    if (is.data.frame(compound_to_pathway)) {
-      cid_col_candidates <- intersect(c("compound_id", "hmdb_id", "kegg_id", "id"), names(compound_to_pathway))
-      path_col_candidates <- intersect(c("pathway_id", "kegg_pathway", "term_id"), names(compound_to_pathway))
-      cid_col <- if (length(cid_col_candidates) > 0) cid_col_candidates[1] else NA_character_
-      path_col <- if (length(path_col_candidates) > 0) path_col_candidates[1] else NA_character_
-
-      if (!is.na(cid_col) && !is.na(path_col)) {
-        for (i in seq_len(nrow(compound_to_pathway))) {
-          cid <- as.character(compound_to_pathway[[cid_col]][i])
-          pathways <- compound_to_pathway[[path_col]][i]
-
-          if (is.character(pathways)) {
-            pathways <- unlist(strsplit(pathways, "[,;]"))
-          }
-
-          for (pathway in pathways) {
-            pathway <- trimws(pathway)
-            if (nzchar(pathway)) {
-              term_proteins[[pathway]] <- c(term_proteins[[pathway]], cid)
-            }
-          }
-        }
-      }
+    # Build term-to-compound mapping (vectorized)
+    if (!is.null(compound_to_pathway)) {
+      term_proteins <- build_term_proteins(compound_to_pathway)
     }
 
     term_info <- pathway_info
@@ -761,39 +750,8 @@ stats_2dgofcs_run <- function(payload, params = NULL, context = NULL) {
       ))
     }
 
-    # Build term-to-protein mapping
-    if (is.data.frame(protein_to_go)) {
-      pid_col_candidates <- intersect(c("protein_id", "uniprot_id", "id"), names(protein_to_go))
-      go_col_candidates <- intersect(c("go_id", "go_ids", "term_id"), names(protein_to_go))
-      pid_col <- if (length(pid_col_candidates) > 0) pid_col_candidates[1] else NA_character_
-      go_col <- if (length(go_col_candidates) > 0) go_col_candidates[1] else NA_character_
-
-      if (!is.na(pid_col) && !is.na(go_col)) {
-        for (i in seq_len(nrow(protein_to_go))) {
-          pid <- as.character(protein_to_go[[pid_col]][i])
-          go_ids <- protein_to_go[[go_col]][i]
-
-          if (is.character(go_ids)) {
-            go_ids <- unlist(strsplit(go_ids, "[,;]"))
-          }
-
-          for (go_id in go_ids) {
-            go_id <- trimws(go_id)
-            if (nzchar(go_id)) {
-              term_proteins[[go_id]] <- c(term_proteins[[go_id]], pid)
-            }
-          }
-        }
-      }
-    } else if (is.list(protein_to_go)) {
-      for (pid in names(protein_to_go)) {
-        go_ids <- as.character(unlist(protein_to_go[[pid]]))
-        go_ids <- go_ids[!is.na(go_ids) & nzchar(go_ids)]
-        for (go_id in go_ids) {
-          term_proteins[[go_id]] <- c(term_proteins[[go_id]], pid)
-        }
-      }
-    }
+    # Build term-to-protein mapping (vectorized)
+    term_proteins <- build_term_proteins(protein_to_go)
 
     # Store go_terms for term info lookup
     term_info <- go_terms

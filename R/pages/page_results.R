@@ -2820,6 +2820,7 @@ page_results_server <- function(input, output, session) {
     load_warnings = character(),
     cache_style_by_node = list(),
     cache_plotly_by_node = list(),
+    cache_plotly_max = 20L,
     cache_vis_by_node = list(),
     has_unsaved_changes = FALSE,
     save_status = "saved",  # saved, dirty, saving, failed
@@ -2834,6 +2835,16 @@ page_results_server <- function(input, output, session) {
     switching_node = FALSE  # FIX: Flag to prevent false dirty detection during node switch
   )
   style_rev <- reactiveVal(0L)
+
+  # LRU trim for plotly cache — drop oldest entries when over limit
+  trim_plotly_cache <- function() {
+    keys <- names(rv$cache_plotly_by_node)
+    mx <- rv$cache_plotly_max %||% 20L
+    if (length(keys) > mx) {
+      drop <- keys[seq_len(length(keys) - mx)]
+      for (k in drop) rv$cache_plotly_by_node[[k]] <- NULL
+    }
+  }
 
   # ---- Pending state for deferred updates (interactive mode) ----------------
 
@@ -3285,6 +3296,7 @@ page_results_server <- function(input, output, session) {
      rs_o <- tb_load_render_state_override(nd)
      rv$cache_style_by_node[[key]] <- rs_o$style %||% list()
      rv$cache_plotly_by_node[[key]] <- rs_o$plotly %||% NULL
+     trim_plotly_cache()
      rv$cache_vis_by_node[[key]] <- rs_o$visibility %||% list()
      # term_labels are now persisted in visibility section of render_state.json
      rv$last_sparse_by_node[[key]] <- rv$cache_style_by_node[[key]]
@@ -4063,6 +4075,7 @@ page_results_server <- function(input, output, session) {
     cur_plotly$labels_by_plot[[plot_key]] <- new_labels
     cur_plotly$labels <- new_labels
     rv$cache_plotly_by_node[[key]] <- cur_plotly
+    trim_plotly_cache()
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
@@ -4206,6 +4219,7 @@ page_results_server <- function(input, output, session) {
       }
 
       rv$cache_plotly_by_node[[key]] <- cur_plotly
+      trim_plotly_cache()
 
       if (!is.null(nd)) {
         .commit_style_debounced(node_dir = nd, payload = list(plotly = cur_plotly))
@@ -9740,6 +9754,20 @@ page_results_server <- function(input, output, session) {
     # Clean up existing cluster enrichment views before creating new ones
     res_cleanup_cluster_goora_views(parent_dir)
 
+    # Pre-build term_proteins ONCE for all clusters (avoids rebuild per iteration)
+    prebuilt_term_proteins <- NULL
+    prebuilt_term_info <- NULL
+    if (!is_msea && !identical(database, "complex")) {
+      protein_to_go <- terp$protein_to_go %||% terp$protein_terms %||% NULL
+      if (!is.null(protein_to_go)) {
+        if (!exists("build_term_proteins", mode = "function")) {
+          source("R/engines/enrichment_utils.R", local = TRUE)
+        }
+        prebuilt_term_proteins <- build_term_proteins(protein_to_go)
+        prebuilt_term_info <- terp$go_terms %||% terp$terms %||% NULL
+      }
+    }
+
     # Process each cluster
     n_created <- 0
     for (i in seq_len(k)) {
@@ -9799,7 +9827,9 @@ page_results_server <- function(input, output, session) {
           ok = TRUE,
           query_proteins = query_ids,
           terpbase = terp,
-          complexbase = if (identical(database, "complex")) complexbase else NULL
+          complexbase = if (identical(database, "complex")) complexbase else NULL,
+          term_proteins = prebuilt_term_proteins,
+          term_info = prebuilt_term_info
         )
 
         enrich_params <- list(
@@ -9875,6 +9905,8 @@ page_results_server <- function(input, output, session) {
       }, error = function(e) {
         warning(sprintf("Failed to save results for cluster %d: %s", i, e$message))
       })
+
+      gc()
     }
 
     n_created
@@ -11139,6 +11171,20 @@ page_results_server <- function(input, output, session) {
       )
     }
 
+    # Pre-build term_proteins ONCE for all rankplot enrichment calls
+    rp_prebuilt_term_proteins <- NULL
+    rp_prebuilt_term_info <- NULL
+    if (!is_msea && !identical(database, "complex")) {
+      protein_to_go <- terp$protein_to_go %||% terp$protein_terms %||% NULL
+      if (!is.null(protein_to_go)) {
+        if (!exists("build_term_proteins", mode = "function")) {
+          source("R/engines/enrichment_utils.R", local = TRUE)
+        }
+        rp_prebuilt_term_proteins <- build_term_proteins(protein_to_go)
+        rp_prebuilt_term_info <- terp$go_terms %||% terp$terms %||% NULL
+      }
+    }
+
     n_created <- 0
 
     # Helper to run enrichment on a set of features and create a child view
@@ -11156,7 +11202,9 @@ page_results_server <- function(input, output, session) {
           ok = TRUE,
           query_proteins = feature_ids,
           terpbase = terp,
-          complexbase = if (identical(database, "complex")) complexbase else NULL
+          complexbase = if (identical(database, "complex")) complexbase else NULL,
+          term_proteins = rp_prebuilt_term_proteins,
+          term_info = rp_prebuilt_term_info
         )
         enrich_results <- tryCatch(stats_goora_run(payload, enrich_params), error = function(e) {
           warning(sprintf("[%s] %s %s failed: %s", group_name, position_label, db_label, e$message))
@@ -11452,6 +11500,17 @@ page_results_server <- function(input, output, session) {
           db_label <- if (is_msea) "MSEA" else if (identical(database, "complex")) "Complex" else "GO-ORA"
           entity_label <- if (is_msea) "metabolites" else "genes"
 
+          # Pre-build term_proteins ONCE for all clusters (background process)
+          bg_prebuilt_term_proteins <- NULL
+          bg_prebuilt_term_info <- NULL
+          if (!is_msea && !identical(database, "complex")) {
+            protein_to_go <- terp$protein_to_go %||% terp$protein_terms %||% NULL
+            if (!is.null(protein_to_go)) {
+              bg_prebuilt_term_proteins <- build_term_proteins(protein_to_go)
+              bg_prebuilt_term_info <- terp$go_terms %||% terp$terms %||% NULL
+            }
+          }
+
           n_created <- 0
           for (i in seq_len(k)) {
             write_prog(sprintf("Processing cluster %d of %d...", i, k), 10 + (i - 1) * 80 / k)
@@ -11502,7 +11561,9 @@ page_results_server <- function(input, output, session) {
                 ok = TRUE,
                 query_proteins = query_ids,
                 terpbase = terp,
-                complexbase = if (identical(database, "complex")) cb else NULL
+                complexbase = if (identical(database, "complex")) cb else NULL,
+                term_proteins = bg_prebuilt_term_proteins,
+                term_info = bg_prebuilt_term_info
               )
 
               goora_params <- list(
@@ -11565,6 +11626,8 @@ page_results_server <- function(input, output, session) {
                 n_created <- n_created + 1
               }, error = function(e) NULL)
             }
+
+            gc()
           }
 
           write_prog("Complete!", 100)

@@ -1732,12 +1732,9 @@ nr_build_context <- function(formatted, terpbase = NULL, complexbase = NULL, met
     if (is.null(terpbase_obj$protein_to_go) && !is.null(terpbase_obj$annot_long)) {
       annot <- terpbase_obj$annot_long
       if ("gene" %in% names(annot) && "ID" %in% names(annot)) {
-        # Group GO IDs by gene/protein
-        genes <- unique(annot$gene)
-        protein_to_go <- lapply(genes, function(g) {
-          unique(annot$ID[annot$gene == g])
-        })
-        names(protein_to_go) <- genes
+        # Group GO IDs by gene/protein (vectorized)
+        protein_to_go <- split(annot$ID, annot$gene)
+        protein_to_go <- lapply(protein_to_go, unique)
         terpbase_obj$protein_to_go <- protein_to_go
       }
     }

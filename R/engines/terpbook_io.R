@@ -43,6 +43,8 @@
 .tb_cache <- new.env(parent = emptyenv())
 .tb_cache$descriptors <- list()    # node_dir|kind -> descriptor
 .tb_cache$results <- list()        # node_dir -> results RDS
+.tb_cache$results_order <- character()  # LRU order: most recent last
+.tb_cache$results_max <- 15L       # max cached result sets
 .tb_cache$render_state <- list()   # node_dir -> render_state override
 .tb_cache$defaults <- list()       # node_dir -> node defaults
 .tb_cache$effective <- list()      # node_id -> effective render state
@@ -50,6 +52,7 @@
 tb_cache_clear <- function() {
   .tb_cache$descriptors <- list()
   .tb_cache$results <- list()
+  .tb_cache$results_order <- character()
   .tb_cache$render_state <- list()
   .tb_cache$defaults <- list()
   .tb_cache$effective <- list()
@@ -60,6 +63,8 @@ tb_cache_invalidate_node <- function(node_dir) {
   key <- tb_norm(node_dir)
   .tb_cache$render_state[[key]] <- NULL
   .tb_cache$defaults[[key]] <- NULL
+  .tb_cache$results[[key]] <- NULL
+  .tb_cache$results_order <- setdiff(.tb_cache$results_order, key)
   .tb_cache$effective <- list()  # Clear all effective states on any change
   invisible(TRUE)
 }
@@ -246,12 +251,23 @@ tb_node_paths <- function(node_dir) {
 tb_load_results <- function(node_dir, use_cache = TRUE) {
   key <- tb_norm(node_dir)
   if (isTRUE(use_cache) && !is.null(.tb_cache$results[[key]])) {
+    # Move to end (most recently used)
+    .tb_cache$results_order <- c(setdiff(.tb_cache$results_order, key), key)
     return(.tb_cache$results[[key]])
   }
   p <- tb_node_paths(node_dir)
   if (!file.exists(p$results_rds)) return(NULL)
   res <- tryCatch(readRDS(p$results_rds), error = function(e) NULL)
-  if (isTRUE(use_cache)) .tb_cache$results[[key]] <- res
+  if (isTRUE(use_cache) && !is.null(res)) {
+    .tb_cache$results[[key]] <- res
+    .tb_cache$results_order <- c(setdiff(.tb_cache$results_order, key), key)
+    # Evict oldest if over limit
+    while (length(.tb_cache$results_order) > .tb_cache$results_max) {
+      evict_key <- .tb_cache$results_order[1]
+      .tb_cache$results[[evict_key]] <- NULL
+      .tb_cache$results_order <- .tb_cache$results_order[-1]
+    }
+  }
   res
 }
 
