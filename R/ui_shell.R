@@ -447,8 +447,8 @@ msterp_theme_head <- function() {
         background: var(--banner);
         -webkit-app-region: drag;
         align-items: center;
+        justify-content: flex-end;
         padding: 0 10px;
-        gap: 8px;
       }
       body.electron-app .msterp-titlebar {
         display: flex;
@@ -1953,8 +1953,7 @@ titlebar_ui <- function() {
       tags$button(class = "msterp-wc-close", title = "Close"),
       tags$button(class = "msterp-wc-minimize", title = "Minimize"),
       tags$button(class = "msterp-wc-maximize", title = "Maximize")
-    ),
-    span(class = "msterp-titlebar-text", "MSTerp")
+    )
   )
 }
 

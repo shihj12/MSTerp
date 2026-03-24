@@ -12,6 +12,7 @@ let splashWindow = null;
 let mainWindow = null;
 let rProcess = null;
 let rExited = false;
+let rStreamsClosed = null; // Promise that resolves when R stdout/stderr are fully drained
 let logStream = null;
 let isQuitting = false;
 let appPort = null;
@@ -177,36 +178,62 @@ function spawnR(port) {
   const logFile = path.join(app.getPath("userData"), "msterp.log");
   logStream = fs.createWriteStream(logFile, { flags: "w" });
   logStream.write(`[MSTerp] Starting at ${new Date().toISOString()}\n`);
+  logStream.write(`[MSTerp] Electron: ${app.getVersion()}\n`);
   logStream.write(`[MSTerp] Rscript: ${rscript}\n`);
   logStream.write(`[MSTerp] App dir: ${appDir}\n`);
-  logStream.write(`[MSTerp] Port: ${port}\n\n`);
+  logStream.write(`[MSTerp] R_LIBS_USER: ${env.R_LIBS_USER || "(not set)"}\n`);
+  logStream.write(`[MSTerp] Port: ${port}\n`);
+  logStream.write(`[MSTerp] R expr: ${rExpr}\n\n`);
 
   rExited = false;
 
-  const child = spawn(rscript, ["-e", rExpr], {
-    cwd: appDir,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
+  let child;
+  try {
+    child = spawn(rscript, ["-e", rExpr], {
+      cwd: appDir,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (spawnErr) {
+    if (logStream) {
+      logStream.write(`[MSTerp] spawn() failed: ${spawnErr.message}\n`);
+      logStream.write(`[MSTerp] stack: ${spawnErr.stack}\n`);
+    }
+    throw spawnErr;
+  }
+
+  child.on("error", (err) => {
+    console.error(`[MSTerp] R process error: ${err.message}`);
+    if (logStream) logStream.write(`[MSTerp] Process error: ${err.message}\n`);
   });
+
+  // Track when stdout and stderr are fully drained so shutdownR can wait
+  let stdoutDone = false;
+  let stderrDone = false;
+  let resolveStreams;
+  rStreamsClosed = new Promise((resolve) => { resolveStreams = resolve; });
+  function checkStreamsDone() {
+    if (stdoutDone && stderrDone) resolveStreams();
+  }
 
   child.stdout.on("data", (data) => {
     const msg = data.toString().trim();
     console.log(`[R stdout] ${msg}`);
     if (logStream) logStream.write(`[stdout] ${msg}\n`);
   });
+  child.stdout.on("close", () => { stdoutDone = true; checkStreamsDone(); });
 
   child.stderr.on("data", (data) => {
     const msg = data.toString().trim();
     console.log(`[R stderr] ${msg}`);
     if (logStream) logStream.write(`[stderr] ${msg}\n`);
   });
+  child.stderr.on("close", () => { stderrDone = true; checkStreamsDone(); });
 
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
     rExited = true;
     if (logStream) {
-      logStream.write(`\n[MSTerp] R exited with code ${code}\n`);
-      logStream.end();
-      logStream = null;
+      logStream.write(`\n[MSTerp] R exited with code ${code}, signal ${signal}\n`);
     }
   });
 
@@ -417,27 +444,33 @@ function createMainWindow(port) {
 }
 
 // ─── Shutdown: kill R process tree ────────────────────────────
-function shutdownR() {
-  return new Promise((resolve) => {
-    // Close log stream if still open
-    if (logStream) {
-      logStream.write(`\n[MSTerp] Shutting down at ${new Date().toISOString()}\n`);
-      logStream.end();
-      logStream = null;
-    }
-
-    if (rProcess && rProcess.pid && !rProcess.killed) {
+async function shutdownR() {
+  if (rProcess && rProcess.pid && !rProcess.killed) {
+    // Kill R first, then wait for streams to flush so all output is captured
+    await new Promise((resolve) => {
       treeKill(rProcess.pid, "SIGTERM", (err) => {
-        if (err) {
-          console.error("Error killing R process:", err);
-        }
+        if (err) console.error("Error killing R process:", err);
         rProcess = null;
         resolve();
       });
-    } else {
-      resolve();
-    }
-  });
+    });
+  }
+
+  // Wait for stdout/stderr to drain (with a safety timeout)
+  if (rStreamsClosed) {
+    await Promise.race([
+      rStreamsClosed,
+      new Promise((r) => setTimeout(r, 3000)),
+    ]);
+    rStreamsClosed = null;
+  }
+
+  // Now close the log stream — all R output has been written
+  if (logStream) {
+    logStream.write(`\n[MSTerp] Shutting down at ${new Date().toISOString()}\n`);
+    logStream.end();
+    logStream = null;
+  }
 }
 
 // ─── Auto-updater ─────────────────────────────────────────────
@@ -529,6 +562,11 @@ app.whenReady().then(async () => {
     setupAutoUpdater();
   } catch (err) {
     console.error("[MSTerp] Startup error:", err);
+    // Log the startup error before shutdownR closes the log stream
+    if (logStream) {
+      logStream.write(`\n[MSTerp] Startup error: ${err.message}\n`);
+      logStream.write(`[MSTerp] Stack: ${err.stack}\n`);
+    }
     dialog.showErrorBox(
       "MSTerp - Startup Error",
       `Failed to start MSTerp:\n\n${err.message}\n\nPlease ensure MSTerp is installed correctly.`
