@@ -8,6 +8,14 @@ const treeKill = require("tree-kill");
 // electron-updater is loaded lazily in setupAutoUpdater() to avoid
 // crashes during dev mode (npm start) where packaged app metadata is missing.
 
+// ─── Chromium performance flags ──────────────────────────────
+// Must be set before app.whenReady(). Reduce rendering overhead
+// vs a system browser and prevent renderer deprioritization.
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("enable-zero-copy");
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+
 let splashWindow = null;
 let mainWindow = null;
 let rProcess = null;
@@ -17,6 +25,28 @@ let logStream = null;
 let isQuitting = false;
 let appPort = null;
 let pendingFileOpen = null;
+
+// ─── Buffered log writer ─────────────────────────────────────
+// Batches log writes to avoid main-thread contention from
+// frequent R stdout/stderr output during interactive use.
+let logBuffer = [];
+let logFlushTimer = null;
+
+function bufferedLog(msg) {
+  if (!logStream) return;
+  logBuffer.push(msg);
+  if (!logFlushTimer) {
+    logFlushTimer = setTimeout(flushLog, 500);
+  }
+}
+
+function flushLog() {
+  if (logStream && logBuffer.length > 0) {
+    logStream.write(logBuffer.join(""));
+    logBuffer = [];
+  }
+  logFlushTimer = null;
+}
 
 // ─── File association handling ────────────────────────────────
 // When user double-clicks a .terpbase/.terpbook/.terpflow file,
@@ -217,16 +247,12 @@ function spawnR(port) {
   }
 
   child.stdout.on("data", (data) => {
-    const msg = data.toString().trim();
-    console.log(`[R stdout] ${msg}`);
-    if (logStream) logStream.write(`[stdout] ${msg}\n`);
+    bufferedLog(`[stdout] ${data.toString().trim()}\n`);
   });
   child.stdout.on("close", () => { stdoutDone = true; checkStreamsDone(); });
 
   child.stderr.on("data", (data) => {
-    const msg = data.toString().trim();
-    console.log(`[R stderr] ${msg}`);
-    if (logStream) logStream.write(`[stderr] ${msg}\n`);
+    bufferedLog(`[stderr] ${data.toString().trim()}\n`);
   });
   child.stderr.on("close", () => { stderrDone = true; checkStreamsDone(); });
 
@@ -308,6 +334,8 @@ function createMainWindow(port) {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
+      backgroundThrottling: false,
+      v8CacheOptions: "bypassHeatCheck",
     },
   });
 
@@ -358,8 +386,8 @@ function createMainWindow(port) {
   // Log JavaScript errors from the renderer to help diagnose crashes
   mainWindow.webContents.on("console-message", (event, level, message, line, sourceId) => {
     // level: 0=verbose, 1=info, 2=warning, 3=error
-    if (level >= 2 && logStream) {
-      logStream.write(`[renderer ${level === 3 ? "ERROR" : "WARN"}] ${message} (${sourceId}:${line})\n`);
+    if (level >= 2) {
+      bufferedLog(`[renderer ${level === 3 ? "ERROR" : "WARN"}] ${message} (${sourceId}:${line})\n`);
     }
   });
 
@@ -498,7 +526,8 @@ async function shutdownR() {
     rStreamsClosed = null;
   }
 
-  // Now close the log stream — all R output has been written
+  // Flush buffered log entries before closing
+  flushLog();
   if (logStream) {
     logStream.write(`\n[MSTerp] Shutting down at ${new Date().toISOString()}\n`);
     logStream.end();
@@ -591,8 +620,8 @@ app.whenReady().then(async () => {
     // 5. Open main window
     createMainWindow(appPort);
 
-    // 6. Check for app updates (non-blocking)
-    setupAutoUpdater();
+    // 6. Check for app updates (delayed to avoid startup resource contention)
+    setTimeout(() => setupAutoUpdater(), 30000);
   } catch (err) {
     console.error("[MSTerp] Startup error:", err);
     // Log the startup error before shutdownR closes the log stream
