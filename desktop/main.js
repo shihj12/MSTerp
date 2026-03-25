@@ -258,6 +258,8 @@ function spawnR(port) {
 
   child.on("exit", (code, signal) => {
     rExited = true;
+    // Flush buffered stderr/stdout so the last R output appears BEFORE the exit line
+    flushLog();
     if (logStream) {
       logStream.write(`\n[MSTerp] R exited with code ${code}, signal ${signal}\n`);
     }
@@ -405,7 +407,7 @@ function createMainWindow(port) {
   mainWindow.once("ready-to-show", () => {});
 
   // Catch renderer process crashes so they show up in the log
-  mainWindow.webContents.on("render-process-gone", (event, details) => {
+  mainWindow.webContents.on("render-process-gone", async (event, details) => {
     const msg = `[MSTerp] Renderer crashed! reason=${details.reason}, exitCode=${details.exitCode}`;
     console.error(msg);
     if (logStream) logStream.write(msg + "\n");
@@ -413,6 +415,9 @@ function createMainWindow(port) {
       "MSTerp - Renderer Crash",
       `The display process crashed (${details.reason}).\n\nPlease restart MSTerp.`
     );
+    // Kill R so it doesn't linger as a zombie process
+    await shutdownR();
+    app.quit();
   });
 
   mainWindow.webContents.on("unresponsive", () => {
@@ -645,9 +650,9 @@ app.on("window-all-closed", async () => {
 
 app.on("before-quit", async (e) => {
   if (isQuitting) return;
+  isQuitting = true;
   if (rProcess && !rProcess.killed) {
     e.preventDefault();
-    isQuitting = true;
     await shutdownR();
     app.quit();
   }

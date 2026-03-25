@@ -1476,6 +1476,9 @@ tb_volcano_plotly <- function(df, style, meta, xlim, ylim, labs, saved, comparis
       modeBarButtonsToRemove = c("select2d", "lasso2d", "autoScale2d")
     )
 
+  p <- plotly::event_register(p, "plotly_click")
+  p <- plotly::event_register(p, "plotly_relayout")
+
   p
 }
 
@@ -1700,8 +1703,7 @@ tb_2dgofcs_plotly <- function(df_plot, style, meta, xlim, ylim, labs, saved, x_l
       displayModeBar = FALSE,
       modeBarButtonsToRemove = c("select2d", "lasso2d", "autoScale2d")
     )
-  # NOTE: No event_register calls - clicking on 2dgofcs does nothing
-  # Labels are added via the styles panel textbox only
+  p <- plotly::event_register(p, "plotly_relayout")
 
   p
 }
@@ -7824,6 +7826,9 @@ tb_rankplot_plotly <- function(df, style, meta, xlim, ylim, labs, saved, y_axis_
       displayModeBar = FALSE,
       modeBarButtonsToRemove = c("select2d", "lasso2d", "autoScale2d")
     )
+
+  p <- plotly::event_register(p, "plotly_click")
+  p <- plotly::event_register(p, "plotly_relayout")
 
   p
 }
