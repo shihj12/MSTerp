@@ -392,15 +392,27 @@ function createTitlebarOverlay() {
     }
   });
 
-  // Blur/focus styling
+  // Hide overlay when app loses focus; show when it regains focus.
+  // Hiding (instead of CSS-only dimming) prevents the overlay from
+  // rendering on top of other applications.
   mainWindow.on("focus", () => {
     if (titlebarWindow && !titlebarWindow.isDestroyed()) {
-      titlebarWindow.webContents.executeJavaScript("document.body.classList.remove('blurred')");
+      titlebarWindow.showInactive();
+      syncPosition();
     }
   });
   mainWindow.on("blur", () => {
     if (titlebarWindow && !titlebarWindow.isDestroyed()) {
-      titlebarWindow.webContents.executeJavaScript("document.body.classList.add('blurred')");
+      titlebarWindow.hide();
+    }
+  });
+
+  // Re-show overlay after Shiny page reloads (e.g. file load triggers
+  // a full page refresh; the mainWindow "show" event doesn't re-fire).
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed() && mainWindow.isVisible()) {
+      titlebarWindow.showInactive();
+      syncPosition();
     }
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "msterp",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "MSTerp - Proteomics & Metabolomics Analysis",
   "main": "main.js",
   "scripts": {

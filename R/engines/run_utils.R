@@ -1780,8 +1780,16 @@ nr_build_context <- function(formatted, terpbase = NULL, complexbase = NULL, met
       }
     }
 
+    # Pre-compute the inverted term->proteins mapping once. Enrichment engines
+    # (goora, 1dgofcs, 2dgofcs) each call build_term_proteins() independently;
+    # caching here avoids ~40 redundant rebuilds (~100MB each) in a typical pipeline.
+    if (!is.null(terpbase_obj$protein_to_go)) {
+      terpbase_obj$term_proteins <- build_term_proteins(terpbase_obj$protein_to_go)
+    }
+
     # Free raw source tables — all engines use the derived mappings above
-    # (protein_to_go, go_terms, protein_to_loc, background), never annot_long/terms_by_id.
+    # (protein_to_go, go_terms, term_proteins, protein_to_loc, background),
+    # never annot_long/terms_by_id.
     # NOTE: Do NOT NULL metabobase tables — msea.R and pathway_fcs.R read them directly.
     terpbase_obj$annot_long <- NULL
     terpbase_obj$terms_by_id <- NULL
@@ -3419,12 +3427,18 @@ nr_execute_run <- function(formatted_path,
   }
 
   # Memory profiling helper — logs R heap usage at key points.
-  # Output goes to the run log file (readable via terpbook log viewer).
+  # Writes to both stderr (for RStudio console) and the run log file
+  # (for Electron, where callr child stderr is lost).
   mem_log <- function(label) {
     mem <- gc(verbose = FALSE, reset = FALSE)
     # mem columns: [,1]=Ncells size, [,2]=Vcells size (in MB)
     used_mb <- sum(mem[, 2])  # current heap usage
-    message(sprintf("[MEM] %s: %.1f MB", label, used_mb))
+    msg <- sprintf("[MEM] %s: %.1f MB", label, used_mb)
+    message(msg)
+    # Write to run log if run_root exists yet (created after context build)
+    if (exists("run_root", inherits = FALSE) && !is.null(run_root)) {
+      nr_log(run_root, msg)
+    }
   }
 
   mem_log("pipeline_start")

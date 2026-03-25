@@ -6,7 +6,6 @@ suppressPackageStartupMessages({
   library(DT)
   library(colourpicker)
   library(sortable)
-  library(shinyFiles)
   library(htmltools)
 
   library(dplyr)

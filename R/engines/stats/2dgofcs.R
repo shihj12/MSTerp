@@ -748,8 +748,13 @@ stats_2dgofcs_run <- function(payload, params = NULL, context = NULL) {
       ))
     }
 
-    # Build term-to-protein mapping (vectorized)
-    term_proteins <- build_term_proteins(protein_to_go)
+    # Use pre-computed mapping from pipeline context if available,
+    # otherwise build on demand (e.g. tool-based enrichment).
+    term_proteins <- if (!is.null(terpbase$term_proteins)) {
+      terpbase$term_proteins
+    } else {
+      build_term_proteins(protein_to_go)
+    }
 
     # Store go_terms for term info lookup
     term_info <- go_terms

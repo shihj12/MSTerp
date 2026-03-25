@@ -1971,12 +1971,14 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
       }
 
       rv$bg_process <- NULL
+      rm(result)
+      gc()
     } else {
       # Still running - poll again
       invalidateLater(500, session)
     }
   })
-  
+
   # Poll progress + status
   output$nr_progress_json <- renderText({
     if (is.null(rv$run_root)) return("")
@@ -2628,6 +2630,8 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
 
       rv$queue_items[[idx]]$end_time <- Sys.time()
       rv$queue_bg_process <- NULL
+      rm(result)
+      gc()
 
       # Continue to next item
       start_next_queue_item()
