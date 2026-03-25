@@ -1800,11 +1800,24 @@ nr_build_context <- function(formatted, terpbase = NULL, complexbase = NULL, met
   if (!is.null(complexbase_obj) && !is.list(complexbase_obj)) {
     complexbase_obj <- NULL
   }
+  # Pre-compute complex term_proteins mapping (same rationale as terpbase above)
+  if (!is.null(complexbase_obj) && is.null(complexbase_obj$term_proteins)) {
+    if (exists("complexbase_build_term_proteins", mode = "function")) {
+      complexbase_obj$term_proteins <- complexbase_build_term_proteins(complexbase_obj)
+    }
+  }
 
   # Extract metabobase object if provided
   metabobase_obj <- if (isTRUE(metabobase$ok)) metabobase$metabobase else metabobase
   if (!is.null(metabobase_obj) && !is.list(metabobase_obj)) {
     metabobase_obj <- NULL
+  }
+  # Pre-compute metabolomics term_proteins mapping
+  if (!is.null(metabobase_obj)) {
+    cp <- metabobase_obj$compound_to_pathway %||% metabobase_obj$compound_terms
+    if (!is.null(cp) && is.null(metabobase_obj$term_proteins)) {
+      metabobase_obj$term_proteins <- build_term_proteins(cp)
+    }
   }
 
   list(

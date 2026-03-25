@@ -163,8 +163,12 @@ stats_goora_run <- function(payload, params = NULL, context = NULL) {
       source("R/engines/complexbase.R", local = TRUE)
     }
 
-    # Build term-to-protein mapping (gene symbols from embedded gene_symbol column)
-    term_proteins <- complexbase_build_term_proteins(complexbase)
+    # Use pre-computed mapping if available, otherwise build on demand
+    term_proteins <- if (!is.null(complexbase$term_proteins)) {
+      complexbase$term_proteins
+    } else {
+      complexbase_build_term_proteins(complexbase)
+    }
     term_info <- complexbase_get_term_info(complexbase)
 
     add_log("INFO", sprintf("Loaded %d protein complex mappings", length(term_proteins)))
@@ -202,8 +206,10 @@ stats_goora_run <- function(payload, params = NULL, context = NULL) {
     compound_to_pathway <- metabobase$compound_to_pathway %||% metabobase$compound_terms %||% NULL
     pathway_info <- metabobase$pathway_info %||% metabobase$terms %||% NULL
 
-    # Build term-to-compound mapping (vectorized)
-    if (!is.null(compound_to_pathway)) {
+    # Use pre-computed mapping if available, otherwise build on demand
+    if (!is.null(metabobase$term_proteins)) {
+      term_proteins <- metabobase$term_proteins
+    } else if (!is.null(compound_to_pathway)) {
       term_proteins <- build_term_proteins(compound_to_pathway)
     }
 
