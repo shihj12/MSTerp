@@ -1779,24 +1779,39 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
         write_prog("running", "Loading engine code...", 8)
         write_log("Loading engine code...")
 
-        # Source all required files
+        # Source only computation files (skip Shiny/UI code to save ~50MB RAM)
         tryCatch({
-          source(file.path(app_root, "R", "00_init.R"), local = FALSE)
+          # NOTE: 00_init.R deliberately NOT sourced — it loads library(shiny)
+          # and the full Shiny dependency tree, none of which is needed here.
+          # %||% is redefined in run_utils.R, terpflow.R, etc.
 
-          # Source engines directory
-          engine_files <- list.files(file.path(app_root, "R", "engines"),
-                                      pattern = "\\.R$", full.names = TRUE)
-          for (f in engine_files) source(f, local = FALSE)
+          # Selective sourcing: only files needed for pipeline computation.
+          # Excluded (saves ~200-400MB):
+          #   terpbook.R    — 10K-line result renderer, not used during pipeline
+          #   terpbase.R    — database builder, loads dplyr/readxl/stringr/tidyr/tibble
+          #   terpout.R     — legacy runner, unused by nr_execute_run
+          #   autosave.R    — UI-only feature
+          #   database_updater.R — UI-only feature
+          #   merger.R      — UI data merging tool
+          #   ppi_utils.R   — lazily sourced by ppi_network.R when needed
+          engine_allowlist <- c(
+            "run_utils.R", "registry.R", "enrichment_utils.R",
+            "data_type_context.R", "terpflow.R", "loader.R",
+            "complexbase.R", "metabobase.R", "terpbook_io.R",
+            "pubchem_resolver.R"
+          )
+          engine_dir <- file.path(app_root, "R", "engines")
+          for (f in engine_allowlist) {
+            fp <- file.path(engine_dir, f)
+            if (file.exists(fp)) source(fp, local = FALSE)
+          }
 
-          # Source stats engines
+          # Source ALL stats engines (lightweight, no file-level library() calls)
           stats_files <- list.files(file.path(app_root, "R", "engines", "stats"),
                                      pattern = "\\.R$", full.names = TRUE)
           for (f in stats_files) source(f, local = FALSE)
 
-          # Source utils
-          utils_files <- list.files(file.path(app_root, "R", "utils"),
-                                     pattern = "\\.R$", full.names = TRUE)
-          for (f in utils_files) source(f, local = FALSE)
+          # R/utils/ files are viewer-only (uniprot, export helpers, etc.) — skip them
 
           write_log("Engine code loaded")
         }, error = function(e) {
@@ -2460,14 +2475,21 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
       write_prog("running", "Loading engine code...", 8)
       write_log("Loading engine code...")
 
+      # Selective sourcing (same allowlist as main runner — see comments there)
       tryCatch({
-        source(file.path(app_root, "R", "00_init.R"), local = FALSE)
-        engine_files <- list.files(file.path(app_root, "R", "engines"), pattern = "\\.R$", full.names = TRUE)
-        for (f in engine_files) source(f, local = FALSE)
-        stats_files <- list.files(file.path(app_root, "R", "engines", "stats"), pattern = "\\.R$", full.names = TRUE)
+        engine_allowlist <- c(
+          "run_utils.R", "registry.R", "enrichment_utils.R",
+          "data_type_context.R", "terpflow.R", "loader.R",
+          "complexbase.R", "metabobase.R", "terpbook_io.R",
+          "pubchem_resolver.R"
+        )
+        engine_dir <- file.path(app_root, "R", "engines")
+        for (f in engine_allowlist) {
+          fp <- file.path(engine_dir, f)
+          if (file.exists(fp)) source(fp, local = FALSE)
+        }
+        stats_files <- list.files(file.path(engine_dir, "stats"), pattern = "\\.R$", full.names = TRUE)
         for (f in stats_files) source(f, local = FALSE)
-        utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
-        for (f in utils_files) source(f, local = FALSE)
         write_log("Engine code loaded")
       }, error = function(e) {
         write_prog("error", paste("Failed to load engine code:", conditionMessage(e)), 0)

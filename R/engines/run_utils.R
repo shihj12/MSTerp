@@ -1779,6 +1779,12 @@ nr_build_context <- function(formatted, terpbase = NULL, complexbase = NULL, met
         terpbase_obj$background <- unique(bg)
       }
     }
+
+    # Free raw source tables — all engines use the derived mappings above
+    # (protein_to_go, go_terms, protein_to_loc, background), never annot_long/terms_by_id.
+    # NOTE: Do NOT NULL metabobase tables — msea.R and pathway_fcs.R read them directly.
+    terpbase_obj$annot_long <- NULL
+    terpbase_obj$terms_by_id <- NULL
   }
 
   # Extract complexbase object if provided
@@ -1872,6 +1878,14 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
     eng <- registry$engines[[eid]]
   }
 
+  # Only include database objects for engines that actually need them.
+  # This avoids holding references to large objects in every step payload,
+  # preventing copy-on-modify duplication if any field is later modified.
+  req <- if (!is.null(eng)) eng$requirements %||% list() else list()
+  needs_terpbase <- isTRUE(req$requires_terpbase)
+  needs_complexbase <- needs_terpbase  # enrichment engines that use terpbase also use complexbase
+  needs_metabobase <- isTRUE(req$requires_metabobase)
+
   payload <- list(
     ok = TRUE,
     engine_id = eid,
@@ -1889,17 +1903,15 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
     n_groups = ctx$n_groups,
     metadata = ctx$metadata,
 
-    # Terpbase (if required)
-    terpbase = ctx$terpbase,
-    has_terpbase = !is.null(ctx$terpbase),
+    # Databases: only included when the engine requires them
+    terpbase = if (needs_terpbase) ctx$terpbase else NULL,
+    has_terpbase = needs_terpbase && !is.null(ctx$terpbase),
 
-    # ComplexBase (for protein complex enrichment)
-    complexbase = ctx$complexbase,
-    has_complexbase = !is.null(ctx$complexbase),
+    complexbase = if (needs_complexbase) ctx$complexbase else NULL,
+    has_complexbase = needs_complexbase && !is.null(ctx$complexbase),
 
-    # MetaboBase (for metabolite pathway enrichment)
-    metabobase = ctx$metabobase,
-    has_metabobase = !is.null(ctx$metabobase),
+    metabobase = if (needs_metabobase) ctx$metabobase else NULL,
+    has_metabobase = needs_metabobase && !is.null(ctx$metabobase),
 
     # Contaminants list (for dataprocessor)
     contaminants = ctx$contaminants %||% character(0),
@@ -1914,21 +1926,18 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
     )
   )
 
-  # Validate terpbase requirement
-  if (!is.null(eng)) {
-    req <- eng$requirements %||% list()
-    if (isTRUE(req$requires_terpbase) && is.null(ctx$terpbase)) {
-      payload$ok <- FALSE
-      payload$error <- sprintf("Engine '%s' requires terpbase", eid)
-    }
-    if (isTRUE(req$requires_metabobase) && is.null(ctx$metabobase)) {
-      payload$ok <- FALSE
-      payload$error <- sprintf("Engine '%s' requires metabobase", eid)
-    }
-    if (isTRUE(req$requires_silac) && !isTRUE(ctx$is_silac)) {
-      payload$ok <- FALSE
-      payload$error <- sprintf("Engine '%s' requires SILAC data (format file must have is_silac = TRUE)", eid)
-    }
+  # Validate database requirements
+  if (needs_terpbase && is.null(ctx$terpbase)) {
+    payload$ok <- FALSE
+    payload$error <- sprintf("Engine '%s' requires terpbase", eid)
+  }
+  if (needs_metabobase && is.null(ctx$metabobase)) {
+    payload$ok <- FALSE
+    payload$error <- sprintf("Engine '%s' requires metabobase", eid)
+  }
+  if (isTRUE(req$requires_silac) && !isTRUE(ctx$is_silac)) {
+    payload$ok <- FALSE
+    payload$error <- sprintf("Engine '%s' requires SILAC data (format file must have is_silac = TRUE)", eid)
   }
 
   payload
@@ -3409,6 +3418,16 @@ nr_execute_run <- function(formatted_path,
     }
   }
 
+  # Memory profiling helper — logs R heap usage at key points.
+  # Output goes to the run log file (readable via terpbook log viewer).
+  mem_log <- function(label) {
+    mem <- gc(verbose = FALSE, reset = FALSE)
+    # mem columns: [,1]=Ncells size, [,2]=Vcells size (in MB)
+    used_mb <- sum(mem[, 2])  # current heap usage
+    message(sprintf("[MEM] %s: %.1f MB", label, used_mb))
+  }
+
+  mem_log("pipeline_start")
   update_progress("running", "Loading formatted data...", 10)
 
   # Load inputs
@@ -3568,6 +3587,13 @@ nr_execute_run <- function(formatted_path,
       multi_payload$y_label <- .build_axis_label(axis_config$y)
     }
   }
+
+  # --- Memory cleanup: free raw loader objects now that ctx holds all needed data ---
+  # formatted$data is redundant with ctx$mat + ctx$ids; terpbase/complexbase/metabobase
+  # wrappers are redundant with ctx$terpbase, ctx$complexbase, ctx$metabobase.
+  rm(formatted, terpbase, complexbase, metabobase)
+  gc()
+  mem_log("after_context_cleanup")
 
   update_progress("running", "Creating terpbook output...", 25)
 
@@ -3854,6 +3880,12 @@ nr_execute_run <- function(formatted_path,
 
       step_duration <- as.numeric(difftime(Sys.time(), step_start_time, units = "secs"))
       nr_log(run_root, sprintf("  Step %d completed in %.2f seconds (write: %.2f sec)", i, step_duration, write_duration))
+
+      # Free container intermediates and reclaim memory
+      rm(sub_views, container_results)
+      gc()
+      mem_log(sprintf("after_step_%d_container", i))
+
       next
     }
 
@@ -3903,6 +3935,11 @@ nr_execute_run <- function(formatted_path,
 
     step_duration <- as.numeric(difftime(Sys.time(), step_start_time, units = "secs"))
     nr_log(run_root, sprintf("  Step %d completed in %.2f seconds (write: %.2f sec)", i, step_duration, write_duration))
+
+    # Free step results and reclaim memory before next step
+    rm(payload, results)
+    gc()
+    mem_log(sprintf("after_step_%d_%s", i, step$engine_id))
   }
 
   update_progress("running", "Validating output...", 95)

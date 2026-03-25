@@ -460,7 +460,9 @@ msterp_theme_head <- function() {
         pointer-events: none;
       }
 
-      /* Traffic-light window controls */
+      /* Traffic-light window controls — hidden in Electron where a
+         separate overlay window handles them (stays responsive when R is busy) */
+      body.electron-app .msterp-window-controls { display: none; }
       .msterp-window-controls {
         display: flex;
         align-items: center;
@@ -875,7 +877,8 @@ msterp_theme_head <- function() {
       .msterp-busy {
         display: none;
         position: fixed;
-        inset: 0;
+        top: var(--titlebar-h, 0px);
+        left: 0; right: 0; bottom: 0;
         background: rgba(0,0,0,0.55);
         z-index: 9999;
         align-items: center;

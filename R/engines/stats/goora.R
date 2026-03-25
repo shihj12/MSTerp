@@ -444,20 +444,19 @@ stats_goora_run <- function(payload, params = NULL, context = NULL) {
     ))
   }
 
-  # Build results data.frame
-  terms_df <- do.call(rbind, lapply(results, function(r) {
-    data.frame(
-      term_id = r$term_id,
-      term_name = r$term_name,
-      ontology = r$ontology,
-      pval = r$pval,
-      fold_enrichment = r$fold_enrichment,
-      n_genes = r$n_genes,
-      n_term = r$n_term,
-      protein_ids = r$protein_ids,
-      stringsAsFactors = FALSE
-    )
-  }))
+  # Build results data.frame via direct vector extraction (avoids 2-3x peak
+  # memory overhead from do.call(rbind, lapply(...)) with intermediate copies)
+  terms_df <- data.frame(
+    term_id = vapply(results, `[[`, "", "term_id"),
+    term_name = vapply(results, `[[`, "", "term_name"),
+    ontology = vapply(results, `[[`, "", "ontology"),
+    pval = vapply(results, `[[`, 0, "pval"),
+    fold_enrichment = vapply(results, `[[`, 0, "fold_enrichment"),
+    n_genes = vapply(results, `[[`, 0L, "n_genes"),
+    n_term = vapply(results, `[[`, 0L, "n_term"),
+    protein_ids = vapply(results, `[[`, "", "protein_ids"),
+    stringsAsFactors = FALSE
+  )
 
   # Compute FDR (BH adjustment)
   terms_df$fdr <- p.adjust(terms_df$pval, method = "BH")

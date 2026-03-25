@@ -9,15 +9,14 @@ const treeKill = require("tree-kill");
 // crashes during dev mode (npm start) where packaged app metadata is missing.
 
 // ─── Chromium performance flags ──────────────────────────────
-// Must be set before app.whenReady(). Reduce rendering overhead
-// vs a system browser and prevent renderer deprioritization.
-app.commandLine.appendSwitch("enable-gpu-rasterization");
-app.commandLine.appendSwitch("enable-zero-copy");
-app.commandLine.appendSwitch("ignore-gpu-blocklist");
+// Must be set before app.whenReady(). Prevent renderer deprioritization.
+// GPU rasterization/zero-copy removed — minimal benefit for DOM-heavy Shiny
+// app but allocates GPU texture buffers that waste ~50-100MB.
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 
 let splashWindow = null;
 let mainWindow = null;
+let titlebarWindow = null;
 let rProcess = null;
 let rExited = false;
 let rStreamsClosed = null; // Promise that resolves when R stdout/stderr are fully drained
@@ -317,6 +316,101 @@ function extensionToFilter(ext) {
   return map[key] || { name: `${ext.replace(".", "").toUpperCase()} File`, extensions: [ext.replace(".", "")] };
 }
 
+// ─── Create titlebar overlay ──────────────────────────────────
+// A tiny frameless window that floats over the main window's titlebar area.
+// Because it's a separate BrowserWindow with its own renderer process,
+// it stays responsive even when the main window's page is frozen (R busy).
+function createTitlebarOverlay() {
+  if (!mainWindow) return;
+
+  const [x, y] = mainWindow.getPosition();
+  const [w] = mainWindow.getSize();
+
+  titlebarWindow = new BrowserWindow({
+    width: w,
+    height: 28,
+    x,
+    y,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    parent: mainWindow,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "titlebar-preload.cjs"),
+    },
+  });
+
+  titlebarWindow.loadFile(path.join(__dirname, "titlebar.html"));
+  // Default to click-through; the overlay toggles this via IPC when
+  // the mouse hovers over the button area.
+  titlebarWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  ipcMain.on("titlebar-ignore-mouse", (_event, ignore) => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) {
+      titlebarWindow.setIgnoreMouseEvents(ignore, { forward: true });
+    }
+  });
+
+  // Track main window position and size changes
+  const syncPosition = () => {
+    if (!mainWindow || !titlebarWindow || titlebarWindow.isDestroyed()) return;
+    const [mx, my] = mainWindow.getPosition();
+    const [mw] = mainWindow.getSize();
+    titlebarWindow.setBounds({ x: mx, y: my, width: mw, height: 28 });
+  };
+
+  mainWindow.on("move", syncPosition);
+  mainWindow.on("resize", syncPosition);
+  mainWindow.on("maximize", syncPosition);
+  mainWindow.on("unmaximize", syncPosition);
+  mainWindow.on("restore", syncPosition);
+
+  // Show/hide with main window
+  mainWindow.on("show", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) titlebarWindow.showInactive();
+  });
+  mainWindow.on("hide", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) titlebarWindow.hide();
+  });
+  mainWindow.on("minimize", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) titlebarWindow.hide();
+  });
+  mainWindow.on("restore", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) {
+      titlebarWindow.showInactive();
+      syncPosition();
+    }
+  });
+
+  // Blur/focus styling
+  mainWindow.on("focus", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) {
+      titlebarWindow.webContents.executeJavaScript("document.body.classList.remove('blurred')");
+    }
+  });
+  mainWindow.on("blur", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) {
+      titlebarWindow.webContents.executeJavaScript("document.body.classList.add('blurred')");
+    }
+  });
+
+  // Clean up
+  mainWindow.on("closed", () => {
+    if (titlebarWindow && !titlebarWindow.isDestroyed()) titlebarWindow.destroy();
+    titlebarWindow = null;
+  });
+}
+
 // ─── Create main window ──────────────────────────────────────
 function createMainWindow(port) {
   const iconPath = path.join(__dirname, "assets", "icon.png");
@@ -420,13 +514,17 @@ function createMainWindow(port) {
     app.quit();
   });
 
-  mainWindow.webContents.on("unresponsive", () => {
-    const msg = `[MSTerp] Renderer became unresponsive at ${new Date().toISOString()}`;
+  // Suppress Chromium's native "page unresponsive" dialog.
+  // R is single-threaded — long operations (file loading, enrichment) block
+  // Shiny's event loop, making the page appear hung. RStudio tolerates this;
+  // Chromium does not. Handling this event prevents the kill/wait dialog.
+  mainWindow.on("unresponsive", () => {
+    const msg = `[MSTerp] Window unresponsive (R likely busy) at ${new Date().toISOString()}`;
     console.warn(msg);
     if (logStream) logStream.write(msg + "\n");
   });
 
-  mainWindow.webContents.on("responsive", () => {
+  mainWindow.on("responsive", () => {
     if (logStream) logStream.write(`[MSTerp] Renderer became responsive again at ${new Date().toISOString()}\n`);
   });
 
@@ -624,6 +722,7 @@ app.whenReady().then(async () => {
 
     // 5. Open main window
     createMainWindow(appPort);
+    createTitlebarOverlay();
 
     // 6. Check for app updates (delayed to avoid startup resource contention)
     setTimeout(() => setupAutoUpdater(), 30000);

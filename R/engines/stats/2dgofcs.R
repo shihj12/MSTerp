@@ -243,20 +243,18 @@
     ))
   }
 
-  # Build data.frame
-  terms_df <- do.call(rbind, lapply(results, function(r) {
-    data.frame(
-      term_id = r$term_id,
-      term_name = r$term_name,
-      ontology = r$ontology,
-      pval = r$pval,
-      score_x = r$score_x,
-      score_y = r$score_y,
-      protein_ids = r$protein_ids,
-      n_genes = r$n_genes,
-      stringsAsFactors = FALSE
-    )
-  }))
+  # Build data.frame via direct vector extraction (memory-efficient)
+  terms_df <- data.frame(
+    term_id = vapply(results, `[[`, "", "term_id"),
+    term_name = vapply(results, `[[`, "", "term_name"),
+    ontology = vapply(results, `[[`, "", "ontology"),
+    pval = vapply(results, `[[`, 0, "pval"),
+    score_x = vapply(results, `[[`, 0, "score_x"),
+    score_y = vapply(results, `[[`, 0, "score_y"),
+    protein_ids = vapply(results, `[[`, "", "protein_ids"),
+    n_genes = vapply(results, `[[`, 0L, "n_genes"),
+    stringsAsFactors = FALSE
+  )
 
   # Compute FDR
   terms_df$fdr <- p.adjust(terms_df$pval, method = "BH")

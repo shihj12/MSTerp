@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: transparent;
+    overflow: hidden;
+    height: 100%;
+    user-select: none;
+  }
+  .controls {
+    position: absolute;
+    top: 0; right: 0;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px;
+  }
+  .controls button {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+  }
+  .wc-close    { background: #ff5f57; }
+  .wc-minimize { background: #febc2e; }
+  .wc-maximize { background: #28c840; }
+  .wc-close:hover    { background: #e0443e; }
+  .wc-minimize:hover { background: #dea123; }
+  .wc-maximize:hover { background: #1aab29; }
+  body.blurred .controls button { background: #555; }
+</style>
+</head>
+<body>
+<div class="controls">
+  <button class="wc-close" title="Close"></button>
+  <button class="wc-minimize" title="Minimize"></button>
+  <button class="wc-maximize" title="Maximize"></button>
+</div>
+<script>
+  document.querySelector(".wc-close").addEventListener("click", () => window.titlebar.close());
+  document.querySelector(".wc-minimize").addEventListener("click", () => window.titlebar.minimize());
+  document.querySelector(".wc-maximize").addEventListener("click", () => window.titlebar.maximize());
+
+  // Make the overlay click-through everywhere except over the buttons.
+  // This lets the main window handle drag-to-move and all other interactions.
+  const buttons = document.querySelector(".controls");
+  document.addEventListener("mousemove", (e) => {
+    const rect = buttons.getBoundingClientRect();
+    const overButtons = (
+      e.clientX >= rect.left && e.clientX <= rect.right &&
+      e.clientY >= rect.top  && e.clientY <= rect.bottom
+    );
+    window.titlebar.setIgnoreMouseEvents(!overButtons);
+  });
+  // Default to click-through
+  window.titlebar.setIgnoreMouseEvents(true);
+</script>
+</body>
+</html>

@@ -502,18 +502,16 @@ stats_1dgofcs_run <- function(payload, params = NULL, context = NULL) {
 
       # Build terms data.frame for this comparison
       if (length(comp_results) > 0) {
-        terms_df <- do.call(rbind, lapply(comp_results, function(r) {
-          data.frame(
-            term_id = r$term_id,
-            term_name = r$term_name,
-            ontology = r$ontology,
-            pval = r$pval,
-            score = r$score,
-            n_genes = r$n_genes,
-            protein_ids = r$protein_ids,
-            stringsAsFactors = FALSE
-          )
-        }))
+        terms_df <- data.frame(
+          term_id = vapply(comp_results, `[[`, "", "term_id"),
+          term_name = vapply(comp_results, `[[`, "", "term_name"),
+          ontology = vapply(comp_results, `[[`, "", "ontology"),
+          pval = vapply(comp_results, `[[`, 0, "pval"),
+          score = vapply(comp_results, `[[`, 0, "score"),
+          n_genes = vapply(comp_results, `[[`, 0L, "n_genes"),
+          protein_ids = vapply(comp_results, `[[`, "", "protein_ids"),
+          stringsAsFactors = FALSE
+        )
         terms_df$fdr <- p.adjust(terms_df$pval, method = "BH")
         terms_df$neglog10_fdr <- -log10(pmax(terms_df$fdr, 1e-300))
         terms_df <- terms_df[terms_df$fdr <= fdr_cutoff, , drop = FALSE]
@@ -684,19 +682,17 @@ stats_1dgofcs_run <- function(payload, params = NULL, context = NULL) {
     ))
   }
 
-  # Build data.frame
-  terms_df <- do.call(rbind, lapply(results, function(r) {
-    data.frame(
-      term_id = r$term_id,
-      term_name = r$term_name,
-      ontology = r$ontology,
-      pval = r$pval,
-      score = r$score,
-      n_genes = r$n_genes,
-      protein_ids = r$protein_ids,
-      stringsAsFactors = FALSE
-    )
-  }))
+  # Build data.frame via direct vector extraction (memory-efficient)
+  terms_df <- data.frame(
+    term_id = vapply(results, `[[`, "", "term_id"),
+    term_name = vapply(results, `[[`, "", "term_name"),
+    ontology = vapply(results, `[[`, "", "ontology"),
+    pval = vapply(results, `[[`, 0, "pval"),
+    score = vapply(results, `[[`, 0, "score"),
+    n_genes = vapply(results, `[[`, 0L, "n_genes"),
+    protein_ids = vapply(results, `[[`, "", "protein_ids"),
+    stringsAsFactors = FALSE
+  )
 
   # Compute FDR
   terms_df$fdr <- p.adjust(terms_df$pval, method = "BH")
