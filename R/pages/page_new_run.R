@@ -21,6 +21,44 @@ nr_fileinput_path <- function(f) {
 
 nr_ext <- function(path) tolower(tools::file_ext(path %||% ""))
 
+# Extract pipeline name from a completed terpbook manifest
+nr_get_pipeline_name <- function(run_root) {
+  mp <- file.path(run_root, "manifest.json")
+  if (!file.exists(mp)) return(NULL)
+  man <- tryCatch(jsonlite::read_json(mp, simplifyVector = TRUE), error = function(e) NULL)
+  if (is.null(man)) return(NULL)
+  man$pipeline$pipeline_name %||% man$pipeline_name %||% NULL
+}
+
+# Export a completed run_root as a .terpbook ZIP to a target directory
+nr_export_terpbook <- function(run_root, export_dir, run_name = NULL) {
+  if (!dir.exists(run_root)) return(list(ok = FALSE, path = NULL, error = "run_root missing"))
+  if (is.null(export_dir) || !nzchar(export_dir)) return(list(ok = FALSE, path = NULL, error = "No export dir"))
+
+  export_dir <- normalizePath(export_dir, winslash = "/", mustWork = FALSE)
+
+  # Create directory if needed
+
+  if (!dir.exists(export_dir)) {
+    ok <- tryCatch({ dir.create(export_dir, recursive = TRUE); dir.exists(export_dir) },
+                   error = function(e) FALSE)
+    if (!ok) return(list(ok = FALSE, path = NULL, error = paste0("Cannot create: ", export_dir)))
+  }
+
+  # Generate timestamped filename
+  nm <- if (!is.null(run_name) && nzchar(run_name)) nr_sanitize(run_name) else "terpbook"
+  filename <- paste0(nm, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".terpbook")
+  dest <- file.path(export_dir, filename)
+
+  # ZIP using res_safe_zip (cross-platform helper from page_results.R)
+  tryCatch({
+    res_safe_zip(zipfile = dest, files = basename(run_root), root = dirname(run_root))
+    list(ok = TRUE, path = dest, error = NULL)
+  }, error = function(e) {
+    list(ok = FALSE, path = NULL, error = conditionMessage(e))
+  })
+}
+
 nr_ui_validate_terpbase <- function(path) {
   if (is.null(path) || !nzchar(path) || !file.exists(path)) return(list(ok = FALSE, msg = "Missing"))
   ex <- nr_ext(path)
@@ -1195,6 +1233,14 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
       div(class = "nr-section",
           strong("Run Name"),
           textInput("nr_run_name", label = NULL, placeholder = "e.g., my_analysis", width = "70%")
+      ),
+
+      div(class = "nr-section",
+          strong("Auto-Export Directory"),
+          tags$small(class = "text-muted", style = "display: block; margin-bottom: 4px;",
+                     "Optional. Completed .terpbook files will be saved here automatically."),
+          textInput("nr_export_dir", label = NULL,
+                    placeholder = "e.g., C:/Users/me/exports", width = "100%")
       )
     )
   }
@@ -1931,6 +1977,18 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
       rv$last_status <- "done"
       rv$last_msg <- "Run complete!"
       ui_log(sprintf("Run complete! Output: %s", rv$run_root))
+
+      # Auto-export .terpbook if export directory specified
+      export_dir <- input$nr_export_dir
+      if (!is.null(export_dir) && nzchar(trimws(export_dir))) {
+        export_result <- nr_export_terpbook(rv$run_root, trimws(export_dir),
+                                            nr_get_pipeline_name(rv$run_root))
+        if (isTRUE(export_result$ok)) {
+          ui_log(sprintf("Auto-exported to: %s", export_result$path))
+        } else {
+          ui_log(sprintf("Auto-export failed: %s", export_result$error), "WARN")
+        }
+      }
     }
   }, ignoreInit = TRUE)
 
@@ -1962,6 +2020,18 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
           rv$run_root <- nr_norm(result$run_root)
           rv$manifest_path <- file.path(rv$run_root, "manifest.json")
           rv$log_path <- file.path(rv$run_root, "log.txt")
+        }
+
+        # Auto-export .terpbook if export directory specified
+        export_dir <- isolate(input$nr_export_dir)
+        if (!is.null(export_dir) && nzchar(trimws(export_dir))) {
+          export_result <- nr_export_terpbook(rv$run_root, trimws(export_dir),
+                                              nr_get_pipeline_name(rv$run_root))
+          if (isTRUE(export_result$ok)) {
+            ui_log(sprintf("Auto-exported to: %s", export_result$path))
+          } else {
+            ui_log(sprintf("Auto-export failed: %s", export_result$error), "WARN")
+          }
         }
       } else {
         rv$last_status <- "error"
@@ -2242,7 +2312,8 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
       progress = list(pct = 0, msg = "Pending"),
       error = NULL,
       start_time = NULL,
-      end_time = NULL
+      end_time = NULL,
+      export_dir = trimws(input$nr_export_dir %||% "")
     )
 
     # Persist files to durable temp location
@@ -2622,6 +2693,18 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
         }
         rv$queue_items[[idx]]$run_root <- final_run_root
         ui_log(sprintf("Item %d complete: %s (output: %s)", idx, item$name, final_run_root %||% "unknown"))
+
+        # Auto-export for this queue item
+        item_export_dir <- rv$queue_items[[idx]]$export_dir
+        if (!is.null(item_export_dir) && nzchar(item_export_dir)) {
+          export_name <- nr_get_pipeline_name(final_run_root) %||% item$name
+          export_result <- nr_export_terpbook(final_run_root, item_export_dir, export_name)
+          if (isTRUE(export_result$ok)) {
+            ui_log(sprintf("  Auto-exported: %s", export_result$path))
+          } else {
+            ui_log(sprintf("  Auto-export failed for '%s': %s", item$name, export_result$error), "WARN")
+          }
+        }
       } else {
         rv$queue_items[[idx]]$status <- "error"
         rv$queue_items[[idx]]$error <- result$error %||% "Unknown error"
