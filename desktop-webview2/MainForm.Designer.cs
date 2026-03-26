@@ -23,7 +23,7 @@ partial class MainForm
         this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
         this.ClientSize = new System.Drawing.Size(1280, 900);
         this.MinimumSize = new System.Drawing.Size(1024, 768);
-        this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None;
+        this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
         this.BackColor = System.Drawing.Color.FromArgb(27, 27, 27);
         this.Text = "MSTerp";
         this.Name = "MainForm";

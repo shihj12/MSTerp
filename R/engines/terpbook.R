@@ -9067,10 +9067,26 @@ tb_render_gene_barchart <- function(results, style, meta) {
   outline_width <- if (show_bar_outline) bar_outline_width else 0
 
   # Get data (bars are groups, averaged)
-  group_means <- data$group_means
-  group_sem <- data$group_sem
   group_order <- data$group_order
   group_colors <- data$group_colors
+
+  # Recompute group stats and significance from sample-level data when log-transformed
+  if (data_type == "raw" && log_transform != "none" && !is.null(data$mat_sub) && !is.null(data$group_annotations)) {
+    mat_transformed <- data$mat_sub
+    if (log_transform == "log2") {
+      mat_transformed <- log2(mat_transformed + 1)
+    } else if (log_transform == "log10") {
+      mat_transformed <- log10(mat_transformed + 1)
+    }
+    recomputed <- compute_group_stats(mat_transformed, data$group_annotations)
+    group_means <- recomputed$means
+    group_sem <- recomputed$sem
+    significance_data <- compute_pairwise_significance(mat_transformed, data$group_annotations, data$genes)
+  } else {
+    group_means <- data$group_means
+    group_sem <- data$group_sem
+    significance_data <- data$significance
+  }
 
   if (is.null(group_means) || !selected_gene %in% rownames(group_means)) {
     p <- ggplot2::ggplot() +
@@ -9096,19 +9112,6 @@ tb_render_gene_barchart <- function(results, style, meta) {
   )
   df$x <- factor(df$x, levels = group_order)
 
-  # Apply log transform if requested (only for raw data)
-  if (data_type == "raw" && log_transform != "none") {
-    if (log_transform == "log2") {
-      original_y <- df$y
-      df$y <- log2(df$y + 1)
-      # Delta method approximation for SEM of log-transformed data
-      df$sem <- df$sem / (original_y * log(2) + 1)
-    } else if (log_transform == "log10") {
-      original_y <- df$y
-      df$y <- log10(df$y + 1)
-      df$sem <- df$sem / (original_y * log(10) + 1)
-    }
-  }
 
   # Build plot - handle color mode
   if (bar_color_mode == "flat") {
@@ -9146,8 +9149,8 @@ tb_render_gene_barchart <- function(results, style, meta) {
   )
 
   # Add significance bars if enabled
-  if (show_significance && !is.null(data$significance) && !is.null(data$significance[[selected_gene]])) {
-    sig_data <- data$significance[[selected_gene]]
+  if (show_significance && !is.null(significance_data) && !is.null(significance_data[[selected_gene]])) {
+    sig_data <- significance_data[[selected_gene]]
     if (length(sig_data) > 0) {
       # Calculate y positions for significance bars
       y_max_data <- max(df$y + df$sem, na.rm = TRUE)
@@ -9925,7 +9928,6 @@ tb_render_replicate_clustering <- function(results, style, meta) {
 
   label_size <- as.numeric(style$label_size %||% 3)
   color_branches <- isTRUE(style$color_branches %||% FALSE)
-  show_group_bar <- isTRUE(style$show_group_bar %||% TRUE)
   hang_val <- as.numeric(style$hang %||% 0.1)
 
   # Convert to dendrogram and color leaves by group
@@ -9969,45 +9971,23 @@ tb_render_replicate_clustering <- function(results, style, meta) {
     dend <- dendrapply(dend, color_branch_fn)
   }
 
-  # Build the plot using base R wrapped via ggplotify
+  # Build horizontal dendrogram using base R wrapped via ggplotify
   plot_fn <- function() {
-    n_samples <- length(hc$labels)
-
-    # Determine margins based on longest label
+    # Right margin accommodates horizontal labels; no y-axis needed
     max_label_len <- max(nchar(hc$labels), na.rm = TRUE)
-    bottom_margin <- max(5, min(15, max_label_len * 0.6))
+    right_margin <- max(5, min(15, max_label_len * 0.6))
 
-    par(mar = c(bottom_margin, 4, 2, 1))
-    plot(dend, main = "", ylab = "Distance", xlab = "")
-
-    # Add group color bar below leaves if requested
-    if (show_group_bar && length(group_colors) > 0) {
-      # Get leaf order
-      leaf_order <- labels(dend)
-      leaf_groups <- group_map[leaf_order]
-      leaf_cols <- vapply(leaf_groups, function(g) {
-        if (!is.na(g) && g %in% names(group_colors)) group_colors[g] else "gray80"
-      }, character(1))
-
-      # Draw small colored rectangles at the base
-      usr <- par("usr")
-      rect_y_top <- usr[3]
-      rect_y_bot <- usr[3] - (usr[4] - usr[3]) * 0.02
-      for (i in seq_along(leaf_order)) {
-        rect(i - 0.4, rect_y_bot, i + 0.4, rect_y_top,
-             col = leaf_cols[i], border = NA, xpd = TRUE)
-      }
-
-      # Add legend
-      legend("topright",
-             legend = names(group_colors),
-             fill = unname(group_colors),
-             border = NA,
-             bty = "n",
-             cex = 0.8)
-    }
+    par(mar = c(2, 1, 2, right_margin))
+    plot(dend, horiz = TRUE, main = "", xlab = "", ylab = "",
+         axes = FALSE)
   }
 
+  # Temporarily switch to a writable directory so ggplotify / base R
+
+  # does not try to create Rplots.pdf in a non-writable working dir
+  old_wd <- getwd()
+  setwd(tempdir())
+  on.exit(setwd(old_wd), add = TRUE)
   p <- suppressWarnings(ggplotify::as.ggplot(plot_fn))
   attr(p, "tb_skip_force_black_text") <- TRUE
 

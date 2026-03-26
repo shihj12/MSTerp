@@ -9,7 +9,7 @@
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
     <AssemblyName>MSTerp</AssemblyName>
     <RootNamespace>MSTerp</RootNamespace>
-    <Version>1.0.18</Version>
+    <Version>1.1.01</Version>
   </PropertyGroup>
 
   <ItemGroup>

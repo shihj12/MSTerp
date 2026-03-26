@@ -19,9 +19,6 @@ public sealed partial class MainForm : Form
     private Button? _btnMaximize;
     private Button? _btnMinimize;
 
-    // For frameless window dragging
-    private bool _dragging;
-    private Point _dragStart;
 
     // Download save-as filter map
     private static readonly Dictionary<string, (string Name, string Ext)> ExtFilterMap = new(StringComparer.OrdinalIgnoreCase)
@@ -101,36 +98,8 @@ public sealed partial class MainForm : Form
 
         _titleBar.Controls.AddRange([_titleLabel, _btnClose, _btnMinimize, _btnMaximize]);
 
-        // Drag-to-move on titlebar
-        _titleBar.MouseDown += (_, e) =>
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                _dragging = true;
-                _dragStart = e.Location;
-            }
-        };
-        _titleBar.MouseMove += (_, e) =>
-        {
-            if (_dragging)
-            {
-                var screen = PointToScreen(e.Location);
-                Location = new Point(screen.X - _dragStart.X, screen.Y - _dragStart.Y);
-            }
-        };
-        _titleBar.MouseUp += (_, _) => _dragging = false;
+        // Drag + snap handled natively via HTCAPTION in WndProc
         _titleBar.DoubleClick += (_, _) => ToggleMaximize();
-
-        _titleLabel.MouseDown += (_, e) => { _dragging = true; _dragStart = e.Location; };
-        _titleLabel.MouseMove += (_, e) =>
-        {
-            if (_dragging)
-            {
-                var screen = PointToScreen(e.Location);
-                Location = new Point(screen.X - _dragStart.X, screen.Y - _dragStart.Y);
-            }
-        };
-        _titleLabel.MouseUp += (_, _) => _dragging = false;
         _titleLabel.DoubleClick += (_, _) => ToggleMaximize();
 
         Controls.Add(_titleBar);
@@ -484,7 +453,9 @@ public sealed partial class MainForm : Form
     // Win32 constants for frameless window behavior
     private const int ResizeBorder = 6;
     private const int WM_NCHITTEST = 0x0084;
+    private const int WM_NCCALCSIZE = 0x0083;
     private const int WM_GETMINMAXINFO = 0x0024;
+    private const int HTCAPTION = 2;
     private const int HTLEFT = 10;
     private const int HTRIGHT = 11;
     private const int HTTOP = 12;
@@ -511,6 +482,17 @@ public sealed partial class MainForm : Form
     {
         switch (m.Msg)
         {
+            // Remove default window chrome — makes entire window client area
+            case WM_NCCALCSIZE:
+            {
+                if (m.WParam != IntPtr.Zero)
+                {
+                    m.Result = IntPtr.Zero;
+                    return;
+                }
+                break;
+            }
+
             // Constrain maximize to working area (don't cover taskbar)
             case WM_GETMINMAXINFO:
             {
@@ -526,13 +508,14 @@ public sealed partial class MainForm : Form
                 return;
             }
 
-            // Resize borders for frameless window
+            // Resize borders + title bar caption for drag/snap
             case WM_NCHITTEST:
             {
                 var pt = PointToClient(new Point(m.LParam.ToInt32()));
                 var w = ClientSize.Width;
                 var h = ClientSize.Height;
 
+                // Resize borders first (corners, then edges)
                 if (pt.Y < ResizeBorder)
                 {
                     if (pt.X < ResizeBorder) { m.Result = HTTOPLEFT; return; }
@@ -547,6 +530,20 @@ public sealed partial class MainForm : Form
                 }
                 if (pt.X < ResizeBorder) { m.Result = HTLEFT; return; }
                 if (pt.X > w - ResizeBorder) { m.Result = HTRIGHT; return; }
+
+                // Title bar region — enables native drag + Windows Snap
+                // Exclude the button area (right side) so clicks pass through to buttons
+                if (_titleBar != null && pt.Y < _titleBar.Height)
+                {
+                    // Check if cursor is over any title bar button
+                    var titlePt = _titleBar.PointToClient(PointToScreen(pt));
+                    var child = _titleBar.GetChildAtPoint(titlePt);
+                    if (child is Button)
+                        break; // Let WinForms handle the button click
+
+                    m.Result = HTCAPTION;
+                    return;
+                }
                 break;
             }
         }

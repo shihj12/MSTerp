@@ -1513,8 +1513,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             default = 3, min = 1, max = 10),
           msterp_schema_field("color_branches", "bool", "Color branches by group",
             default = FALSE, advanced = TRUE),
-          msterp_schema_field("show_group_bar", "bool", "Show group color bar",
-            default = TRUE),
           msterp_schema_field("hang", "num", "Leaf hang",
             default = 0.1, min = -1, max = 1, advanced = TRUE)
         ),

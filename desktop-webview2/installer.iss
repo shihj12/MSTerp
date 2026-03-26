@@ -3,7 +3,7 @@
 ; portable R, R packages, and the Shiny app.
 
 #define MyAppName "MSTerp"
-#define MyAppVersion "1.0.18"
+#define MyAppVersion "1.1.01"
 #define MyAppPublisher "MSTerp"
 #define MyAppURL "https://github.com/shihj12/MSTerp"
 #define MyAppExeName "MSTerp.exe"
@@ -88,10 +88,6 @@ Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpFlow"; ValueType: string; Value
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpFlow\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\file-flow.ico"; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpFlow\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-[InstallDelete]
-; Clean stale per-user file associations that shadow machine-level icons
-Type: files; Name: "{localappdata}\IconCache.db"
-
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
@@ -106,22 +102,19 @@ end;
 
 procedure CleanStaleAssociations;
 begin
-  // Remove per-user associations that shadow machine-level ones
+  // Remove per-user class definitions that shadow machine-level ones.
+  // Do NOT delete FileExts entries — they contain UserChoice hashes
+  // that Windows 10/11 needs for icon display.
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.terpbase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\terpbase_auto_file');
-  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpbase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.complexbase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\complexbase_auto_file');
-  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.complexbase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.metabobase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\metabobase_auto_file');
-  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.metabobase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.terpbook');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\terpbook_auto_file');
-  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpbook');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.terpflow');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\terpflow_auto_file');
-  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpflow');
 end;
 
 procedure RefreshIconCache;
@@ -132,6 +125,9 @@ begin
   Exec('cmd.exe', '/c del /f /q "' + ExpandConstant('{localappdata}') + '\IconCache.db" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('cmd.exe', '/c del /f /q "' + ExpandConstant('{localappdata}') + '\Microsoft\Windows\Explorer\iconcache_*.db" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('cmd.exe', '/c del /f /q "' + ExpandConstant('{localappdata}') + '\Microsoft\Windows\Explorer\thumbcache_*.db" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Force Explorer to rebuild icons from registry (Windows 10/11)
+  Exec('ie4uinit.exe', '-show', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

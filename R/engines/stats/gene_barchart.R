@@ -191,6 +191,7 @@ stats_gene_barchart_run <- function(payload, params = NULL, context = NULL) {
       targets = targets,
       genes = targets,           # backward compat alias
       data_type = data_type,
+      mat_sub = mat_sub,         # sample-level matrix for render-time recomputation
       group_means = group_stats$means,
       group_sem = group_stats$sem,
       group_order = group_order,
