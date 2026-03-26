@@ -1479,6 +1479,52 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       render_spec = list(plots = c("vert_dis_plot"), tables = character(0), tabs = NULL)
     ),
 
+    replicate_clustering = list(
+      engine_id = "replicate_clustering",
+      label = "Replicate Clustering",
+      category = "qc",
+      supported_data_types = c("proteomics", "metabolomics", "multi"),
+      description = "Hierarchical clustering dendrogram of all replicates to assess group reproducibility.",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein", "metabolite"),
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("protein")
+      ),
+      params_schema = list(
+        msterp_schema_field("distance_method", "choice", "Distance metric",
+          default = "pearson",
+          choices = c("pearson", "spearman", "euclidean"),
+          help = "Pearson/Spearman use 1-correlation as distance; Euclidean uses raw distances."
+        ),
+        msterp_schema_field("linkage_method", "choice", "Linkage method",
+          default = "complete",
+          choices = c("complete", "average", "ward.D2", "single")
+        ),
+        msterp_schema_field("log_transform", "choice", "Log transform",
+          default = "log10", choices = c("log10", "log2", "none")
+        )
+      ),
+      style_schema = c(
+        list(
+          msterp_schema_field("label_size", "num", "Label size",
+            default = 3, min = 1, max = 10),
+          msterp_schema_field("color_branches", "bool", "Color branches by group",
+            default = FALSE, advanced = TRUE),
+          msterp_schema_field("show_group_bar", "bool", "Show group color bar",
+            default = TRUE),
+          msterp_schema_field("hang", "num", "Leaf hang",
+            default = 0.1, min = -1, max = 1, advanced = TRUE)
+        ),
+        mk_style(width = 8, height = 5, axis_text_size = 20)
+      ),
+      viewer_schema = list(),
+      outputs = list(figures = c("dendrogram"), tables = c("cluster_info"), interactive = FALSE),
+      render_spec = list(plots = c("dendrogram"), tables = c("cluster_info"), tabs = NULL)
+    ),
+
     # ----------------------------
     # Trends
     # ----------------------------

@@ -9898,6 +9898,135 @@ tb_render_multi_correlation <- function(results, style, meta) {
   )
 }
 
+# ---- Replicate Clustering ---------------------------------------------------
+
+tb_render_replicate_clustering <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
+  tb_require_pkg("ggplotify")
+
+  data <- results$data %||% results
+  hc <- data$hc
+  group_map <- data$group_map %||% character(0)
+  group_colors <- data$group_colors %||% character(0)
+
+  # Early return if no hclust object
+
+  if (is.null(hc) || !inherits(hc, "hclust")) {
+    p_empty <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = "No clustering data available",
+                        size = 6, color = "gray50") +
+      ggplot2::theme_void()
+    return(list(
+      plots = list(dendrogram = p_empty),
+      tables = list(cluster_info = data.frame())
+    ))
+  }
+
+  label_size <- as.numeric(style$label_size %||% 3)
+  color_branches <- isTRUE(style$color_branches %||% FALSE)
+  show_group_bar <- isTRUE(style$show_group_bar %||% TRUE)
+  hang_val <- as.numeric(style$hang %||% 0.1)
+
+  # Convert to dendrogram and color leaves by group
+  dend <- as.dendrogram(hc, hang = hang_val)
+
+  # Color leaf labels by group
+  label_col_fn <- function(n) {
+    if (is.leaf(n)) {
+      lbl <- attr(n, "label")
+      grp <- group_map[lbl]
+      col <- if (!is.na(grp) && grp %in% names(group_colors)) {
+        group_colors[grp]
+      } else {
+        "black"
+      }
+      attr(n, "nodePar") <- list(
+        lab.col = col,
+        lab.cex = label_size / 3,
+        pch = NA
+      )
+    }
+    n
+  }
+  dend <- dendrapply(dend, label_col_fn)
+
+  # Color branches by majority group if requested
+  if (color_branches) {
+    color_branch_fn <- function(n) {
+      if (!is.leaf(n)) {
+        leaves <- labels(n)
+        grps <- group_map[leaves]
+        grps <- grps[!is.na(grps)]
+        if (length(grps) > 0) {
+          majority <- names(sort(table(grps), decreasing = TRUE))[1]
+          col <- group_colors[majority] %||% "gray50"
+          attr(n, "edgePar") <- list(col = col, lwd = 1.5)
+        }
+      }
+      n
+    }
+    dend <- dendrapply(dend, color_branch_fn)
+  }
+
+  # Build the plot using base R wrapped via ggplotify
+  plot_fn <- function() {
+    n_samples <- length(hc$labels)
+
+    # Determine margins based on longest label
+    max_label_len <- max(nchar(hc$labels), na.rm = TRUE)
+    bottom_margin <- max(5, min(15, max_label_len * 0.6))
+
+    par(mar = c(bottom_margin, 4, 2, 1))
+    plot(dend, main = "", ylab = "Distance", xlab = "")
+
+    # Add group color bar below leaves if requested
+    if (show_group_bar && length(group_colors) > 0) {
+      # Get leaf order
+      leaf_order <- labels(dend)
+      leaf_groups <- group_map[leaf_order]
+      leaf_cols <- vapply(leaf_groups, function(g) {
+        if (!is.na(g) && g %in% names(group_colors)) group_colors[g] else "gray80"
+      }, character(1))
+
+      # Draw small colored rectangles at the base
+      usr <- par("usr")
+      rect_y_top <- usr[3]
+      rect_y_bot <- usr[3] - (usr[4] - usr[3]) * 0.02
+      for (i in seq_along(leaf_order)) {
+        rect(i - 0.4, rect_y_bot, i + 0.4, rect_y_top,
+             col = leaf_cols[i], border = NA, xpd = TRUE)
+      }
+
+      # Add legend
+      legend("topright",
+             legend = names(group_colors),
+             fill = unname(group_colors),
+             border = NA,
+             bty = "n",
+             cex = 0.8)
+    }
+  }
+
+  p <- suppressWarnings(ggplotify::as.ggplot(plot_fn))
+  attr(p, "tb_skip_force_black_text") <- TRUE
+
+  # Build cluster_info table
+  cluster_info <- data$cluster_info
+  if (is.null(cluster_info)) {
+    cluster_info <- data.frame(
+      sample = hc$labels,
+      group = as.character(group_map[hc$labels]),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  list(
+    plots = list(dendrogram = p),
+    tables = list(cluster_info = cluster_info)
+  )
+}
+
 # ---- Dispatcher --------------------------------------------------------------
 
 terpbook_render_node <- function(engine_id, results, effective_state, registry = NULL, node_meta = NULL) {
@@ -9980,6 +10109,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "ppi_network" = tb_render_ppi_network(results, style, meta),
     "multi_scatter" = tb_render_multi_scatter(results, style, meta),
     "multi_correlation" = tb_render_multi_correlation(results, style, meta),
+    "replicate_clustering" = tb_render_replicate_clustering(results, style, meta),
     {
       # Fallback for unknown engines
       plots <- list()

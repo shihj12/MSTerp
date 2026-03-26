@@ -844,7 +844,6 @@ res_render_overview <- function(run_root, manifest, nodes_df, terpbook_filename 
             downloadButton("res_dl_log", "Log (.txt)", class = "btn-sm", style = "width: 100%;"),
             actionButton("res_bulk_download_modal", "Bulk Download Graphs...", class = "btn-sm", style = "width: 100%;"),
             actionButton("res_dl_terpbook_pdf_modal", "Terpbook (.pdf)", class = "btn-sm", style = "width: 100%;"),
-            downloadButton("res_dl_processed", "Processed Data (.xlsx)", class = "btn-sm", style = "width: 100%;"),
             downloadButton("res_dl_markers", "Marker Sets (.xlsx)", class = "btn-sm", style = "width: 100%;"),
             # Contaminant removal is proteomics-only; hide for metabolomics
             if (!identical(manifest$data_type, "metabolomics"))
@@ -1848,10 +1847,14 @@ page_results_ui <- function() {
           display:flex;
           align-items:center;
           justify-content:center;
+          padding: 6px 16px;
+          background: var(--bg-muted);
+          border-top: 1px solid var(--border-light);
         }
         .res-download-buttons {
           width: 100%;
           display:flex;
+          flex-wrap: wrap;
           gap: 8px;
         }
         .res-download-buttons .btn {
@@ -6898,7 +6901,8 @@ page_results_server <- function(input, output, session) {
           div(
             class = "res-only-panel",
             table_body
-          )
+          ),
+          uiOutput("res_download_ui")
         )
       )
     }
@@ -6930,17 +6934,37 @@ page_results_server <- function(input, output, session) {
     has_plot <- length(plots) > 0
     eng <- tolower(active_engine_id() %||% "")
 
-    # Compact horizontal layout for bottom bar
+    is_processing_engine <- eng %in% c("dataprocessor", "peptide_aggregate_to_protein", "half_life")
+
+    save_btn <- downloadButton(
+      "res_save_terpbook",
+      if (isTRUE(rv$has_unsaved_changes)) "Save .terpbook *" else "Save .terpbook",
+      class = paste("btn-sm", if (isTRUE(rv$has_unsaved_changes)) "btn-primary" else "")
+    )
+
+    # Table-only processing engines: dedicated download bar + optional substep section
+    if (!has_plot && is_processing_engine) {
+      return(
+        div(
+          div(
+            class = "res-size-bar",
+            style = "justify-content: flex-end;",
+            downloadButton("res_dl_dp_processed", "Processed Data (.xlsx)", class = "btn-primary btn-sm"),
+            save_btn
+          ),
+          if (identical(eng, "dataprocessor")) uiOutput("res_dp_substep_download_ui")
+        )
+      )
+    }
+
+    # Default: compact horizontal layout for bottom bar
     div(
       style = "display: flex; gap: 8px; align-items: center;",
       if (has_plot) actionButton("res_download_plot_modal", "Download", class = "btn-primary btn-sm"),
       if (has_plot) actionButton("res_copy_plot", "Copy", class = "btn-sm"),
+      if (is_processing_engine) downloadButton("res_dl_dp_processed", "Processed Data (.xlsx)", class = "btn-primary btn-sm"),
       if (identical(eng, "dataprocessor")) uiOutput("res_dp_substep_download_ui"),
-      downloadButton(
-        "res_save_terpbook",
-        if (isTRUE(rv$has_unsaved_changes)) "Save .terpbook *" else "Save .terpbook",
-        class = paste("btn-sm", if (isTRUE(rv$has_unsaved_changes)) "btn-primary" else "")
-      )
+      save_btn
     )
   })
 
@@ -13364,35 +13388,22 @@ page_results_server <- function(input, output, session) {
     }
   )
 
-  # Download processed data (from dataprocessor step)
-  output$res_dl_processed <- downloadHandler(
+  # Download full processed data for the ACTIVE dataprocessor step
+  output$res_dl_dp_processed <- downloadHandler(
     filename = function() {
-      paste0("processed_data_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx")
+      row <- active_node_row()
+      label <- if (!is.null(row) && nzchar(row$label[[1]] %||% "")) {
+        gsub("[^A-Za-z0-9_.-]", "_", row$label[[1]])
+      } else {
+        "dataprocessor"
+      }
+      paste0("processed_data_", label, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx")
     },
     content = function(file) {
-      req(rv$nodes_df, rv$run_root)
+      res <- active_results()
 
       msterp_set_busy(session, TRUE, "Exporting processed data...")
       on.exit(msterp_set_busy(session, FALSE), add = TRUE)
-
-      df <- rv$nodes_df
-      dp_idx <- which(tolower(df$engine_id) == "dataprocessor")
-
-      res <- NULL
-
-      if (length(dp_idx) > 0) {
-        # Load dataprocessor results (preferred source)
-        dp_dir <- df$node_dir[dp_idx[1]]
-        res <- tb_load_results(dp_dir)
-      }
-
-      # Fall back to input data snapshot (e.g., metabolomics with auto-resolved IDs, no dataprocessor)
-      if (is.null(res) || is.null(res$data)) {
-        input_path <- file.path(rv$run_root, "input_data.rds")
-        if (file.exists(input_path)) {
-          res <- list(data = readRDS(input_path))
-        }
-      }
 
       if (is.null(res) || is.null(res$data)) {
         if (requireNamespace("openxlsx", quietly = TRUE)) {

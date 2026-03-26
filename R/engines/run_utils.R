@@ -611,9 +611,23 @@ nr_validate_run_compatibility <- function(formatted, terpflow,
     TRUE
   }
 
-  apply_engine_output_level <- function(eng, level) {
+  apply_engine_output_level <- function(eng, level, step_params = NULL) {
     out <- nr_normalize_analysis_level(eng$output_level %||% NULL)
     if (!is.null(out)) return(out)
+
+    # Dataprocessor: inspect plan_json for aggregate/average by protein/gene
+    if (identical(eng$engine_id, "dataprocessor") && !is.null(step_params$plan_json)) {
+      plan <- tryCatch(jsonlite::fromJSON(step_params$plan_json, simplifyVector = FALSE), error = function(e) NULL)
+      if (!is.null(plan$substeps)) {
+        for (ss in plan$substeps) {
+          if ((ss$op %||% "") %in% c("aggregate_rows", "average_rows") &&
+              (ss$opts$id_col %||% "") %in% c("protein", "gene")) {
+            return("protein")
+          }
+        }
+      }
+    }
+
     level
   }
 
@@ -685,7 +699,7 @@ nr_validate_run_compatibility <- function(formatted, terpflow,
 
           validate_step_requirements(sub_eng, sub_where)
           validate_engine_input_level(sub_eng, data_level, sub_where)
-          data_level <- apply_engine_output_level(sub_eng, data_level)
+          data_level <- apply_engine_output_level(sub_eng, data_level, ss$params)
         }
 
         if (nzchar(forced_eid) && !forced_present) {
@@ -710,7 +724,7 @@ nr_validate_run_compatibility <- function(formatted, terpflow,
 
       validate_step_requirements(eng, where)
       validate_engine_input_level(eng, data_level, where)
-      data_level <- apply_engine_output_level(eng, data_level)
+      data_level <- apply_engine_output_level(eng, data_level, s$params)
     }
   }
 
@@ -795,9 +809,24 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
     merge_defaults_safe(style_defaults_for_engine_id(engine_id), style %||% list())
   }
 
-  apply_output_level <- function(eng, level) {
+  apply_output_level <- function(eng, level, step_params = NULL) {
     out <- nr_normalize_analysis_level(eng$output_level %||% NULL)
-    if (!is.null(out)) out else level
+    if (!is.null(out)) return(out)
+
+    # Dataprocessor: inspect plan_json for aggregate/average by protein/gene
+    if (identical(eng$engine_id, "dataprocessor") && !is.null(step_params$plan_json)) {
+      dp_plan <- tryCatch(jsonlite::fromJSON(step_params$plan_json, simplifyVector = FALSE), error = function(e) NULL)
+      if (!is.null(dp_plan$substeps)) {
+        for (ss in dp_plan$substeps) {
+          if ((ss$op %||% "") %in% c("aggregate_rows", "average_rows") &&
+              (ss$opts$id_col %||% "") %in% c("protein", "gene")) {
+            return("protein")
+          }
+        }
+      }
+    }
+
+    level
   }
 
   plan <- list(
@@ -871,7 +900,7 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
           paired_children = NULL
         )
 
-        out_level <- apply_output_level(sub_eng, current_level)
+        out_level <- apply_output_level(sub_eng, current_level, ss$params)
         sub_entry$output_level <- out_level
         current_level <- out_level
 
@@ -1549,7 +1578,7 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
       }
     }
 
-    out_level <- apply_output_level(eng, current_level)
+    out_level <- apply_output_level(eng, current_level, s$params)
     step_entry$output_level <- out_level
     current_level <- out_level
 
@@ -1985,7 +2014,7 @@ nr_engine_ids <- function() {
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
     "idquant_overlap", "idquant_overlap_detected", "idquant_overlap_quantified",
     "ppi_network", "multi_scatter", "multi_correlation", "multi_cross_correlation",
-    "msea", "pathway_fcs", "gene_barchart")
+    "msea", "pathway_fcs", "gene_barchart", "replicate_clustering")
 }
 
 #' Get list of fully implemented engines (not stubs)
@@ -2005,7 +2034,7 @@ nr_implemented_engines <- function() {
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
     "idquant_overlap", "idquant_overlap_detected", "idquant_overlap_quantified",
     "ppi_network", "multi_scatter", "multi_correlation", "multi_cross_correlation",
-    "msea", "pathway_fcs", "gene_barchart")
+    "msea", "pathway_fcs", "gene_barchart", "replicate_clustering")
 }
 
 #' Check if an engine is implemented (not a stub)
@@ -2168,6 +2197,7 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "gene_barchart"    = stats_gene_barchart_run(payload, payload$params, context),
     "msea"             = stats_msea_run(payload, payload$params, context),
     "pathway_fcs"      = stats_pathway_fcs_run(payload, payload$params, context),
+    "replicate_clustering" = stats_replicate_clustering_run(payload, payload$params, context),
     # "class_enrichment" = stats_class_enrichment_run(payload, payload$params, context),
     # Unknown engine
     nr_engine_error_result(engine_id, sprintf("Engine '%s' not implemented", engine_id))
@@ -3777,8 +3807,17 @@ nr_execute_run <- function(formatted_path,
 
       if (identical(engine_id, "peptide_aggregate_to_protein")) {
         if (is.null(ctx$metadata) || !is.list(ctx$metadata)) ctx$metadata <- list()
+        ctx$metadata$analysis_level <- "protein"
         ctx$metadata$current_analysis_level <- "protein"
         nr_log(run_root, "  Context analysis level updated to protein")
+      }
+
+      # Dataprocessor signals level change when aggregate/average by protein/gene
+      if (identical(engine_id, "dataprocessor") && !is.null(results$data$output_analysis_level)) {
+        if (is.null(ctx$metadata) || !is.list(ctx$metadata)) ctx$metadata <- list()
+        ctx$metadata$analysis_level <- results$data$output_analysis_level
+        ctx$metadata$current_analysis_level <- results$data$output_analysis_level
+        nr_log(run_root, sprintf("  Context analysis level updated to '%s' (dataprocessor)", results$data$output_analysis_level))
       }
     }
 

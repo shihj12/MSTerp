@@ -22,13 +22,14 @@ compute_welch_anova <- function(mat, group_vec) {
     df <- data.frame(value = row, group = groups)
     df <- df[!is.na(df$value), ]
 
-    # Need at least 2 groups with data
-    groups_with_data <- unique(df$group[!is.na(df$value)])
-    if (length(groups_with_data) < 2) return(NA_real_)
-
-    # Need at least 2 observations per group for variance estimation
+    # Keep only groups with at least 2 observations (needed for variance estimation)
     group_counts <- table(df$group)
-    if (any(group_counts[group_counts > 0] < 2)) return(NA_real_)
+    valid_groups <- names(group_counts[group_counts >= 2])
+    if (length(valid_groups) < 2) return(NA_real_)
+
+    # Subset to valid groups and drop unused factor levels
+    df <- df[df$group %in% valid_groups, , drop = FALSE]
+    df$group <- factor(df$group)
 
     tryCatch({
       res <- stats::oneway.test(value ~ group, data = df, var.equal = FALSE)

@@ -111,6 +111,9 @@ stats_dataprocessor_run <- function(payload, params = NULL, context = NULL) {
   contaminant_mat <- NULL
   contaminant_ids_df <- NULL
 
+  # Track if any substep changes the analysis level (e.g., aggregate by protein/gene)
+  output_analysis_level <- NULL
+
   # Execute each substep
   substep_summary <- list()
   substep_states <- list(list(
@@ -274,6 +277,11 @@ stats_dataprocessor_run <- function(payload, params = NULL, context = NULL) {
         ids <- agg_ids
 
         add_log("INFO", sprintf("Aggregated (sum) from %d to %d rows by column '%s'", n_before, nrow(mat), id_col))
+
+        # Aggregating by protein/gene means data is now at protein level
+        if ((opts$id_col %||% "") %in% c("protein", "gene")) {
+          output_analysis_level <- "protein"
+        }
       } else {
         add_log("WARN", sprintf("Column '%s' not found for aggregation; available: %s",
                                  id_col, paste(names(ids), collapse = ", ")))
@@ -331,6 +339,11 @@ stats_dataprocessor_run <- function(payload, params = NULL, context = NULL) {
         ids <- agg_ids
 
         add_log("INFO", sprintf("Averaged (%s) from %d to %d rows by column '%s'", mean_type, n_before, nrow(mat), id_col))
+
+        # Averaging by protein/gene means data is now at protein level
+        if ((opts$id_col %||% "") %in% c("protein", "gene")) {
+          output_analysis_level <- "protein"
+        }
       } else {
         add_log("WARN", sprintf("Column '%s' not found for averaging; available: %s",
                                  id_col, paste(names(ids), collapse = ", ")))
@@ -591,7 +604,9 @@ stats_dataprocessor_run <- function(payload, params = NULL, context = NULL) {
       # Store design info for re-runnable Excel export
       metadata = payload$metadata,
       samples = payload$samples,
-      groups = payload$groups
+      groups = payload$groups,
+      # Signal level change when aggregate/average by protein/gene (NULL = no change)
+      output_analysis_level = output_analysis_level
     )
   )
 }
