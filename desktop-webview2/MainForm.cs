@@ -67,11 +67,40 @@ public sealed partial class MainForm : Form
     }
     private bool _loadStarted;
 
+    // Panel subclass that forwards WM_NCHITTEST to the parent form
+    // when the cursor is not over a child Button, so the form's
+    // WndProc can return HTCAPTION for drag/snap.
+    private sealed class HitTestTransparentPanel : Panel
+    {
+        private const int WM_NCHITTEST = 0x0084;
+        private const int HTTRANSPARENT = -1;
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_NCHITTEST)
+            {
+                var pt = PointToClient(new Point(m.LParam.ToInt32()));
+                var child = GetChildAtPoint(pt);
+                if (child is Button)
+                {
+                    // Let the button handle the click normally
+                    base.WndProc(ref m);
+                    return;
+                }
+                // Otherwise fall through to parent form for HTCAPTION
+                m.Result = (IntPtr)HTTRANSPARENT;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+    }
+
     private void SetupTitleBar()
     {
         // Native titlebar panel — always responsive even when WebView2 is frozen.
-        // Manually positioned (not Dock) so we can leave resize borders at edges.
-        _titleBar = new Panel
+        // Uses HitTestTransparentPanel so mouse events fall through to the form's
+        // WndProc, which returns HTCAPTION for drag/snap support.
+        _titleBar = new HitTestTransparentPanel
         {
             Height = 28,
             BackColor = Color.FromArgb(27, 27, 27),
