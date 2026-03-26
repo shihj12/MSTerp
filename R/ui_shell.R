@@ -1739,39 +1739,9 @@ msterp_theme_head <- function() {
         var homeBtn = document.getElementById('home_theme_toggle');
         if (homeBtn) homeBtn.innerHTML = current === 'dark' ? '\\u2600' : '\\u263E';
 
-        // Signal Electron that Shiny is fully connected and ready
-        if (window.msterp && window.msterp.signalReady) {
-          window.msterp.signalReady();
-        }
-
-        // Electron frameless window: add class and wire up controls
-        if (window.msterp && window.msterp.platform) {
-          document.body.classList.add('electron-app');
-          document.documentElement.style.setProperty('--titlebar-h', '28px');
-
-          $(document).on('click', '.msterp-wc-close', function() {
-            window.msterp.windowClose();
-          });
-          $(document).on('click', '.msterp-wc-minimize', function() {
-            window.msterp.windowMinimize();
-          });
-          $(document).on('click', '.msterp-wc-maximize', function() {
-            window.msterp.windowMaximize();
-          });
-
-          if (window.msterp.onMaximizedChange) {
-            window.msterp.onMaximizedChange(function(isMax) {
-              var btn = document.querySelector('.msterp-wc-maximize');
-              if (btn) btn.title = isMax ? 'Restore' : 'Maximize';
-            });
-          }
-
-          window.addEventListener('focus', function() {
-            document.body.classList.remove('window-blurred');
-          });
-          window.addEventListener('blur', function() {
-            document.body.classList.add('window-blurred');
-          });
+        // WebView2 desktop wrapper: signal ready to C# host
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage('shiny-app-ready');
         }
       });
 

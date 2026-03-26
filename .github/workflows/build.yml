@@ -8,9 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     runs-on: windows-latest
@@ -19,10 +16,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
         with:
-          node-version: 20
+          dotnet-version: '8.0.x'
 
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
@@ -37,20 +34,22 @@ jobs:
         shell: pwsh
         run: .\desktop\scripts\install-r-packages.ps1
 
-      - name: Install Electron dependencies
-        working-directory: desktop
-        run: npm install
+      - name: Publish C# WebView2 wrapper
+        shell: pwsh
+        run: dotnet publish desktop-webview2\MSTerp.csproj -c Release -r win-x64 --self-contained false -o desktop-webview2\publish
+
+      - name: Install InnoSetup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
 
       - name: Build installer
-        working-directory: desktop
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc desktop-webview2\installer.iss
 
       - name: Upload artifacts to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            desktop/dist/*.exe
-            desktop/dist/*.zip
-            desktop/dist/latest.yml
+            desktop-webview2/dist/*.exe
