@@ -33,8 +33,8 @@ ChangesAssociations=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checked
-Name: "fileassoc"; Description: "Associate .terpbase, .terpbook, .terpflow files with MSTerp"; GroupDescription: "File associations:"; Flags: checked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "fileassoc"; Description: "Associate .terpbase, .terpbook, .terpflow files with MSTerp"; GroupDescription: "File associations:"
 
 [Files]
 ; C# WebView2 app (published output)
@@ -46,7 +46,7 @@ Source: "..\R-portable\*"; DestDir: "{app}\R-portable"; Flags: ignoreversion rec
 ; Shiny app source
 Source: "..\app.R"; DestDir: "{app}\app"; Flags: ignoreversion
 Source: "..\R\*"; DestDir: "{app}\app\R"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\www\*"; DestDir: "{app}\app\www"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: DirExists(ExpandConstant('{#SourcePath}\..\www'))
+Source: "..\www\*"; DestDir: "{app}\app\www"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\terpbase\*"; DestDir: "{app}\app\terpbase"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\complexbase\*"; DestDir: "{app}\app\complexbase"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\metabobase\*"; DestDir: "{app}\app\metabobase"; Flags: ignoreversion recursesubdirs createallsubdirs
