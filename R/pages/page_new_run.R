@@ -863,6 +863,17 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     }
   }, ignoreInit = TRUE)
 
+  # Browse button for export directory — opens native folder picker
+  observeEvent(input$nr_browse_export_dir, {
+    chosen <- tryCatch(utils::choose.dir(
+      default = if (nzchar(input$nr_export_dir %||% "")) input$nr_export_dir else getwd(),
+      caption = "Select export directory"
+    ), error = function(e) NA)
+    if (!is.na(chosen) && nzchar(chosen)) {
+      updateTextInput(session, "nr_export_dir", value = normalizePath(chosen, winslash = "/"))
+    }
+  }, ignoreInit = TRUE)
+
   v_terpbase <- reactive(nr_ui_validate_terpbase(terpbase_path_rx()))
   v_metabobase <- reactive(nr_ui_validate_metabobase(metabobase_path_rx()))
   v_complexbase <- reactive(nr_ui_validate_complexbase(complexbase_path_rx()))
@@ -1239,8 +1250,13 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
           strong("Auto-Export Directory"),
           tags$small(class = "text-muted", style = "display: block; margin-bottom: 4px;",
                      "Optional. Completed .terpbook files will be saved here automatically."),
-          textInput("nr_export_dir", label = NULL,
-                    placeholder = "e.g., C:/Users/me/exports", width = "100%")
+          div(style = "display: flex; gap: 6px; align-items: flex-start;",
+              textInput("nr_export_dir", label = NULL,
+                        placeholder = "e.g., C:/Users/me/exports", width = "100%"),
+              actionButton("nr_browse_export_dir", "Browse",
+                           class = "btn-sm btn-outline-secondary",
+                           style = "margin-top: 0px; white-space: nowrap;")
+          )
       )
     )
   }
