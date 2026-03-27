@@ -8976,6 +8976,272 @@ tb_render_fc_heatmap <- function(results, style, context = NULL) {
   )
 }
 
+#' Render Pathway FC Heatmap
+#'
+#' Renders a heatmap of GO/complex enrichment scores (Perseus-style)
+#' across group-vs-control comparisons.
+#' Rows = terms, columns = comparisons, values in [-1, 1].
+#'
+#' @param results Engine results from stats_pathway_fc_heatmap_run
+#' @param style Style parameters from registry style_schema + viewer_schema
+#' @param context Rendering context
+#' @return list(plots, figures, tables)
+tb_render_pathway_fc_heatmap <- function(results, style, context = NULL) {
+  tb_require_pkg("ggplot2")
+  tb_require_pkg("pheatmap")
+  tb_require_pkg("ggplotify")
+
+  `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+  params <- list()
+  data <- results
+  if (is.list(results) && !is.null(results$data) && is.list(results$data)) {
+    params <- results$params %||% list()
+    data <- results$data
+  }
+
+  mat <- data$mat_score
+  term_info_df <- data$term_info
+
+  # Early return if no valid matrix
+  if (is.null(mat) || !is.matrix(mat) || nrow(mat) == 0 || ncol(mat) == 0) {
+    p_empty <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = "No heatmap data available",
+                        size = 6, color = "gray50") +
+      ggplot2::theme_void()
+
+    return(list(
+      plots = list(pathway_fc_heatmap = p_empty),
+      figures = list(pathway_fc_heatmap = p_empty),
+      tables = list(pathway_fc_heatmap_data = data.frame())
+    ))
+  }
+
+  # Apply flip_fc from viewer_schema
+  if (isTRUE(style$flip_fc)) {
+    mat <- -mat
+  }
+
+  # Build row labels from term_info
+  show_go_id <- isTRUE(style$show_go_id %||% FALSE)
+  if (!is.null(term_info_df) && is.data.frame(term_info_df) && nrow(term_info_df) > 0) {
+    label_map <- stats::setNames(term_info_df$term_name, term_info_df$term_id)
+    row_labels <- label_map[rownames(mat)]
+    # Fallback for missing names
+    row_labels[is.na(row_labels)] <- rownames(mat)[is.na(row_labels)]
+
+    if (show_go_id) {
+      row_labels <- paste0(rownames(mat), " | ", row_labels)
+    }
+    rownames(mat) <- row_labels
+  }
+
+  # Filter NA rows
+  exclude_na_rows <- isTRUE(style$exclude_na_rows %||% TRUE)
+  if (exclude_na_rows) {
+    keep <- rowSums(!is.na(mat)) > 0  # Keep rows with at least one non-NA value
+    mat <- mat[keep, , drop = FALSE]
+  }
+
+  # Check again after filtering
+  if (nrow(mat) == 0 || ncol(mat) == 0) {
+    p_empty <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = "All rows filtered out (no overlap with data)",
+                        size = 6, color = "gray50") +
+      ggplot2::theme_void()
+
+    return(list(
+      plots = list(pathway_fc_heatmap = p_empty),
+      figures = list(pathway_fc_heatmap = p_empty),
+      tables = list(pathway_fc_heatmap_data = data.frame())
+    ))
+  }
+
+  # --- Clustering ---
+  cluster_rows_requested <- isTRUE(params$cluster_rows %||% TRUE)
+  cluster_rows_arg <- FALSE
+  cluster_method <- style$cluster_method %||% "hierarchical"
+  kmeans_clusters <- NULL
+
+  if (cluster_rows_requested && nrow(mat) >= 2) {
+    if (cluster_method %in% c("kmeans", "kmedians")) {
+      k <- as.integer(style$cluster_k %||% 2)
+      k <- min(k, nrow(mat))
+      if (k < 2) k <- 2
+
+      m_complete <- mat[stats::complete.cases(mat), , drop = FALSE]
+      if (nrow(m_complete) >= k) {
+        if (cluster_method == "kmeans") {
+          set.seed(42)
+          km <- stats::kmeans(m_complete, centers = k, nstart = 25)
+          cluster_assignments <- km$cluster
+        } else {
+          if (requireNamespace("cluster", quietly = TRUE)) {
+            set.seed(42)
+            pam_result <- cluster::pam(m_complete, k = k)
+            cluster_assignments <- pam_result$clustering
+          } else {
+            set.seed(42)
+            km <- stats::kmeans(m_complete, centers = k, nstart = 25)
+            cluster_assignments <- km$cluster
+          }
+        }
+        names(cluster_assignments) <- rownames(m_complete)
+
+        kmeans_clusters <- rep(NA_integer_, nrow(mat))
+        names(kmeans_clusters) <- rownames(mat)
+        kmeans_clusters[names(cluster_assignments)] <- cluster_assignments
+
+        valid_rows <- !is.na(kmeans_clusters)
+        row_order <- order(kmeans_clusters[valid_rows])
+        valid_row_names <- rownames(mat)[valid_rows][row_order]
+        na_row_names <- rownames(mat)[!valid_rows]
+
+        new_order <- c(valid_row_names, na_row_names)
+        mat <- mat[new_order, , drop = FALSE]
+        kmeans_clusters <- kmeans_clusters[new_order]
+      }
+      cluster_rows_arg <- FALSE
+    } else {
+      # Hierarchical clustering
+      distance_method <- style$distance_method %||% "correlation"
+      corr_type <- style$correlation_type %||% "spearman"
+      linkage <- style$linkage_method %||% "average"
+
+      clust_rows <- if (distance_method == "correlation") {
+        which(rowSums(!is.na(mat)) >= 2)
+      } else {
+        which(rowSums(is.na(mat)) == 0)
+      }
+
+      if (length(clust_rows) >= 2) {
+        m_sub <- mat[clust_rows, , drop = FALSE]
+
+        if (distance_method == "correlation") {
+          cmat <- suppressWarnings(stats::cor(t(m_sub), use = "pairwise.complete.obs", method = corr_type))
+          cmat[is.na(cmat)] <- 0
+          diag(cmat) <- 1
+          d <- stats::as.dist(1 - cmat)
+        } else if (distance_method == "euclidean") {
+          d <- stats::dist(m_sub, method = "euclidean")
+        } else {
+          d <- stats::dist(m_sub, method = "manhattan")
+        }
+
+        hc <- stats::hclust(d, method = linkage)
+        if (is.null(hc$labels)) hc$labels <- rownames(m_sub)
+
+        if (length(hc$order) == nrow(mat)) {
+          cluster_rows_arg <- hc
+        } else {
+          cluster_rows_arg <- if (any(!is.finite(mat))) FALSE else TRUE
+        }
+      } else {
+        cluster_rows_arg <- if (any(!is.finite(mat))) FALSE else TRUE
+      }
+    }
+  }
+
+  # --- Style parameters ---
+  transpose <- isTRUE(style$transpose %||% FALSE)
+  show_dendrogram <- isTRUE(style$show_dendrogram %||% TRUE)
+  if (cluster_method %in% c("kmeans", "kmedians")) show_dendrogram <- FALSE
+  show_row_labels <- isTRUE(style$show_row_labels %||% TRUE)
+  row_font_size <- suppressWarnings(as.numeric(style$row_font_size %||% 8))
+  if (!is.finite(row_font_size) || row_font_size <= 0) row_font_size <- 8
+
+  na_color <- as.character(style$na_color %||% "grey50")[1]
+  width <- suppressWarnings(as.numeric(style$width %||% 10))
+  height <- suppressWarnings(as.numeric(style$height %||% 8))
+  if (!is.finite(width) || width <= 0) width <- 10
+  if (!is.finite(height) || height <= 0) height <- 8
+
+  palette_name <- as.character(style$color_palette %||% "RdBu")[1]
+  get_palette <- function(name, n = 100) {
+    name <- as.character(name %||% "RdBu")[1]
+    if (identical(name, "viridis")) {
+      if (requireNamespace("viridisLite", quietly = TRUE)) {
+        return(viridisLite::viridis(n))
+      }
+      return(grDevices::colorRampPalette(c("#440154", "#21908C", "#FDE725"))(n))
+    }
+    if (identical(name, "RdBu")) {
+      return(grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n))
+    }
+    if (identical(name, "RdYlBu")) {
+      return(grDevices::colorRampPalette(c("#4575B4", "#FFFFBF", "#D73027"))(n))
+    }
+    if (identical(name, "PuOr")) {
+      return(grDevices::colorRampPalette(c("#542788", "#F7F7F7", "#B35806"))(n))
+    }
+    grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n)
+  }
+
+  # Transpose if requested
+  if (transpose) {
+    mat <- t(mat)
+  }
+
+  # Symmetric color breaks centered at 0 for [-1, 1] score range
+  max_abs <- max(abs(mat), na.rm = TRUE)
+  if (!is.finite(max_abs) || max_abs == 0) max_abs <- 1
+  max_abs <- max(max_abs, 0.01)  # Avoid degenerate breaks
+  breaks <- seq(-max_abs, max_abs, length.out = 101)
+
+  hm <- pheatmap::pheatmap(
+    mat,
+    cluster_rows = if (transpose) FALSE else cluster_rows_arg,
+    cluster_cols = if (transpose) cluster_rows_arg else FALSE,
+    treeheight_row = if (!transpose && show_dendrogram) 50 else 0,
+    treeheight_col = if (transpose && show_dendrogram) 50 else 0,
+    annotation_col = NULL,
+    annotation_row = NULL,
+    annotation_colors = NULL,
+    annotation_legend = FALSE,
+    legend = TRUE,
+    na_col = na_color,
+    scale = "none",
+    show_rownames = if (transpose) TRUE else show_row_labels,
+    show_colnames = if (transpose) show_row_labels else TRUE,
+    fontsize_row = if (transpose) 8 else row_font_size,
+    fontsize_col = if (transpose) row_font_size else 8,
+    angle_col = if (transpose) 90 else 270,
+    color = get_palette(palette_name, n = 100),
+    breaks = breaks,
+    border_color = "black",
+    silent = TRUE,
+    width = width,
+    height = height
+  )
+
+  p <- ggplotify::as.ggplot(hm)
+  attr(p, "tb_skip_force_black_text") <- TRUE
+
+  # Build data table for export
+  tbl <- data.frame(
+    term_id = data$term_order,
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(term_info_df) && is.data.frame(term_info_df)) {
+    tbl <- merge(tbl, term_info_df, by = "term_id", all.x = TRUE, sort = FALSE)
+  }
+  # Append score columns from the original (non-flipped) matrix
+  score_mat <- data$mat_score
+  if (!is.null(score_mat) && nrow(score_mat) > 0) {
+    for (cn in colnames(score_mat)) {
+      tbl[[cn]] <- score_mat[tbl$term_id, cn]
+    }
+  }
+
+  list(
+    plots = list(pathway_fc_heatmap = p),
+    figures = list(pathway_fc_heatmap = p),
+    tables = list(pathway_fc_heatmap_data = tbl)
+  )
+}
+
 #' Render FC F-test Heatmap
 #'
 #' Renders a fold change heatmap for statistically significant genes.
@@ -10098,6 +10364,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "heatmap"  = tb_render_heatmap(results, style, meta),
     "ftest_heatmap" = tb_render_ftest_heatmap(results, style, meta),
     "fc_heatmap" = tb_render_fc_heatmap(results, style, meta),
+    "pathway_fc_heatmap" = tb_render_pathway_fc_heatmap(results, style, meta),
     "fc_ftest_heatmap" = tb_render_fc_ftest_heatmap(results, style, meta),
     "gene_barchart" = tb_render_gene_barchart(results, style, meta),
     "volcano"  = tb_render_volcano(results, style, meta),

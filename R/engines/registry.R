@@ -2021,6 +2021,160 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       render_spec = list(plots = c("fc_heatmap"), tables = character(0), tabs = NULL)
     ),
 
+    pathway_fc_heatmap = list(
+      engine_id = "pathway_fc_heatmap",
+      label = "Pathway FC Heatmap",
+      category = "enrichment",
+      supported_data_types = c("proteomics", "multi"),
+      description = "Heatmap of GO/complex enrichment scores across group-vs-control comparisons.",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein"),
+      requirements = list(
+        min_groups = 2,
+        requires_terpbase = TRUE,
+        required_ids = c("gene"),
+        analysis_levels = c("protein")
+      ),
+      params_schema = list(
+        msterp_schema_field(
+          "term_list", "string", "Term IDs (one per line)",
+          default = "",
+          help = "Paste GO term IDs (e.g., GO:0006915) or complex IDs, one per line (max 500). Unmatched entries are skipped."
+        ),
+        msterp_schema_field(
+          "database", "choice", "Database",
+          default = "go",
+          choices = c("go", "complex"),
+          choice_labels = c("Gene Ontology", "Protein Complexes"),
+          help = "Select enrichment database: GO terms or protein complexes (CORUM/ComplexPortal)"
+        ),
+        msterp_schema_field(
+          "is_log_transformed", "bool", "Data is already log-transformed",
+          default = FALSE,
+          help = "Enable if your data is already log2-transformed. Skips log2(x+1) transform for fold change calculation.",
+          advanced = TRUE
+        ),
+        msterp_schema_field(
+          "min_overlap", "int", "Min overlap",
+          default = 3, min = 1,
+          help = "Minimum proteins overlapping between a term and data. Terms below this threshold are scored NA.",
+          advanced = TRUE
+        ),
+        msterp_schema_field(
+          "cluster_rows", "bool", "Cluster rows",
+          default = TRUE,
+          help = "If TRUE, rows (terms) are clustered; if FALSE, preserves input order.",
+          advanced = TRUE
+        )
+      ),
+      style_schema = c(
+        list(
+          msterp_schema_field(
+            "color_palette", "choice", "Color palette",
+            default = "RdBu",
+            choices = c("viridis", "RdBu", "RdYlBu", "PuOr"),
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_row_labels", "bool", "Show row labels",
+            default = TRUE
+          ),
+          msterp_schema_field(
+            "show_go_id", "bool", "Show term ID in labels",
+            default = FALSE,
+            help = "Prepend term ID to row labels (e.g., 'GO:0006915 | Apoptotic process')",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "row_font_size", "int", "Row font size",
+            default = 8, min = 4, max = 20, advanced = TRUE
+          ),
+          msterp_schema_field(
+            "exclude_na_rows", "bool", "Hide rows with NAs",
+            default = TRUE,
+            help = "If TRUE, hides rows where all comparisons are NA (term had no overlap in data)."
+          ),
+          msterp_schema_field(
+            "na_color", "string", "NA color (hex or named)",
+            default = "grey50", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "width", "num", "Plot width (in)",
+            default = 10, min = 2, max = 24, advanced = TRUE
+          ),
+          msterp_schema_field(
+            "height", "num", "Plot height (in)",
+            default = 8, min = 2, max = 24, advanced = TRUE
+          ),
+          msterp_schema_field(
+            "cluster_k", "int", "Cluster preview (k)",
+            default = 2, min = 2, max = 20,
+            help = "Number of clusters to show.",
+            hidden = TRUE
+          ),
+          msterp_schema_field(
+            "show_cluster_colors", "bool", "Show cluster colors",
+            default = FALSE,
+            help = "Show cluster membership color bar on left side of heatmap.",
+            hidden = TRUE
+          ),
+          msterp_schema_field(
+            "cluster_method", "choice", "Clustering method",
+            default = "hierarchical",
+            choices = c("hierarchical", "kmeans", "kmedians"),
+            choice_labels = c("Hierarchical", "K-means", "K-medians"),
+            help = "K-means/K-medians replace dendrogram with cluster color bars.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "distance_method", "choice", "Distance method",
+            default = "correlation",
+            choices = c("correlation", "euclidean", "manhattan"),
+            choice_labels = c("Correlation-based", "Euclidean", "Manhattan"),
+            help = "Only used for hierarchical clustering.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "correlation_type", "choice", "Correlation type",
+            default = "spearman",
+            choices = c("spearman", "pearson", "kendall"),
+            choice_labels = c("Spearman", "Pearson", "Kendall"),
+            help = "Only used when distance method is correlation-based.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "linkage_method", "choice", "Linkage method",
+            default = "average",
+            choices = c("average", "complete", "single", "ward.D2"),
+            choice_labels = c("Average", "Complete", "Single", "Ward"),
+            help = "Only used for hierarchical clustering.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "transpose", "bool", "Transpose (terms as columns)",
+            default = FALSE,
+            help = "Flip orientation so terms become columns and comparisons become rows.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_dendrogram", "bool", "Show dendrogram",
+            default = TRUE,
+            help = "Show or hide the dendrogram visualization (only for hierarchical clustering).",
+            advanced = TRUE
+          )
+        )
+      ),
+      viewer_schema = list(
+        msterp_schema_field(
+          "flip_fc", "bool", "Flip score direction",
+          default = FALSE,
+          help = "Negate score values to swap enrichment direction."
+        )
+      ),
+      outputs = list(figures = c("pathway_fc_heatmap"), tables = c("pathway_fc_heatmap_data"), interactive = FALSE),
+      render_spec = list(plots = c("pathway_fc_heatmap"), tables = character(0), tabs = NULL)
+    ),
+
     fc_ftest_heatmap = list(
       engine_id = "fc_ftest_heatmap",
       label = "FC F-test Heatmap",

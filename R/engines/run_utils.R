@@ -2008,7 +2008,7 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
 nr_engine_ids <- function() {
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
     "pca", "volcano", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
-    "fc_heatmap", "fc_ftest_heatmap",
+    "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
@@ -2028,7 +2028,7 @@ nr_implemented_engines <- function() {
   # All engines in this list have implementations in R/engines/stats/
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
     "pca", "volcano", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
-    "fc_heatmap", "fc_ftest_heatmap",
+    "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
@@ -2189,6 +2189,7 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "ftest_heatmap" = stats_ftest_heatmap_run(payload, payload$params, context),
     "fc_heatmap" = stats_fc_heatmap_run(payload, payload$params, context),
     "fc_ftest_heatmap" = stats_fc_ftest_heatmap_run(payload, payload$params, context),
+    "pathway_fc_heatmap" = stats_pathway_fc_heatmap_run(payload, payload$params, context),
     "peptide_aggregate_to_protein" = stats_peptide_aggregate_to_protein_run(payload, payload$params, context),
     "ppi_network" = stats_ppi_network_run(payload, payload$params, context),
     "multi_scatter" = stats_multi_scatter_run(payload, payload$params, context),
@@ -3595,9 +3596,11 @@ nr_execute_run <- function(formatted_path,
     update_progress("running", "Building multi-dataset payload...", 22)
 
     # Build multi-dataset payload
+    # Use augmented terpbase/complexbase from ctx (has protein_to_go, term_proteins, etc.)
     multi_result <- nr_build_multi_payload(
       multi_session,
-      terpbase = if (isTRUE(terpbase$ok)) terpbase else NULL,
+      terpbase = ctx$terpbase,
+      complexbase = ctx$complexbase,
       axis_config = axis_config
     )
 
@@ -3904,7 +3907,7 @@ nr_execute_run <- function(formatted_path,
         nr_log(run_root, sprintf("  - Substep %d: %s", j, ss$engine_id))
 
         # Use multi-dataset payload for multi-dataset engines
-        multi_engine_ids <- c("multi_scatter", "multi_correlation", "go_fcs_2d", "multi_cross_correlation")
+        multi_engine_ids <- c("multi_scatter", "multi_correlation", "2dgofcs", "multi_cross_correlation", "pathway_fc_heatmap")
         # In mixed-entity mode, PCA also uses the multi_payload (with combined matrix)
         if (identical(multi_payload$multi_subtype, "protein-metabolomics")) {
           multi_engine_ids <- c(multi_engine_ids, "pca")
@@ -3983,7 +3986,7 @@ nr_execute_run <- function(formatted_path,
     nr_log(run_root, sprintf("=== Step %d: %s ===", i, step$engine_id))
 
     # Use multi-dataset payload for multi-dataset engines
-    multi_engine_ids_top <- c("multi_scatter", "multi_correlation", "go_fcs_2d", "multi_cross_correlation")
+    multi_engine_ids_top <- c("multi_scatter", "multi_correlation", "2dgofcs", "multi_cross_correlation", "pathway_fc_heatmap")
     if (identical(multi_payload$multi_subtype, "protein-metabolomics")) {
       multi_engine_ids_top <- c(multi_engine_ids_top, "pca")
     }
@@ -4600,7 +4603,7 @@ nr_build_multi_session_from_formatted <- function(formatted) {
 #' @param terpbase Terpbase object (optional, for GO enrichment)
 #' @param axis_config List with x and y axis configuration
 #' @return list with mode="multi_dataset" and aligned data
-nr_build_multi_payload <- function(linked_session, terpbase = NULL, axis_config = NULL) {
+nr_build_multi_payload <- function(linked_session, terpbase = NULL, complexbase = NULL, axis_config = NULL) {
   if (is.null(linked_session) || linked_session$mode != "multi_dataset") {
     return(list(ok = FALSE, error = "Invalid linked session"))
   }
@@ -4612,7 +4615,7 @@ nr_build_multi_payload <- function(linked_session, terpbase = NULL, axis_config 
   ds_b <- linked_session$dataset_b
 
   if (is_mixed) {
-    return(.build_mixed_entity_payload(linked_session, terpbase, axis_config))
+    return(.build_mixed_entity_payload(linked_session, terpbase, complexbase, axis_config))
   }
 
   # --- Same-entity-type pathway (protein-protein or metabolomics-metabolomics) ---
@@ -4664,6 +4667,7 @@ nr_build_multi_payload <- function(linked_session, terpbase = NULL, axis_config 
     groups_b = groups_b,
     aligned_proteins = aligned_proteins,
     terpbase = terpbase,
+    complexbase = complexbase,
 
     # Axis configuration (set by New Run page)
     axis_config = axis_config,
@@ -4692,7 +4696,7 @@ nr_build_multi_payload <- function(linked_session, terpbase = NULL, axis_config 
 #' @param terpbase Terpbase object (optional)
 #' @param axis_config Axis configuration (optional)
 #' @return Payload with mode="multi_dataset", multi_subtype="protein-metabolomics"
-.build_mixed_entity_payload <- function(linked_session, terpbase = NULL, axis_config = NULL) {
+.build_mixed_entity_payload <- function(linked_session, terpbase = NULL, complexbase = NULL, axis_config = NULL) {
   ds_a <- linked_session$dataset_a
   ds_b <- linked_session$dataset_b
   features_a <- linked_session$features_a
@@ -4809,6 +4813,7 @@ nr_build_multi_payload <- function(linked_session, terpbase = NULL, axis_config 
     groups_b = groups_b,
     aligned_proteins = character(0),
     terpbase = terpbase,
+    complexbase = complexbase,
 
     # Metadata
     metadata = list(
@@ -5123,13 +5128,15 @@ nr_compute_axis_values <- function(payload, axis_spec) {
     non_ctrl_groups <- setdiff(unique(samples$group_name), ctrl_groups)
 
     if (length(ctrl_groups) == 0 || length(non_ctrl_groups) == 0) {
-      # Fallback: first two groups
+      # Fallback: first two groups (no control marked)
       all_groups <- unique(samples$group_name)
       if (length(all_groups) < 2) {
         return(list(ok = FALSE, error = "Need at least 2 groups for fold change"))
       }
       grp_denom <- all_groups[1]
       grp_num <- all_groups[2]
+      message(sprintf("[axis] Warning: no control group marked. Using '%s' as denominator and '%s' as numerator (first two groups).",
+                      grp_denom, grp_num))
     } else {
       grp_denom <- ctrl_groups[1]
       grp_num <- non_ctrl_groups[1]
@@ -5180,6 +5187,8 @@ nr_compute_axis_values <- function(payload, axis_spec) {
       }
       grp_b <- all_groups[1]
       grp_a <- all_groups[2]
+      message(sprintf("[axis] Warning: no control group marked. Using '%s' and '%s' for p-value (first two groups).",
+                      grp_a, grp_b))
     } else {
       grp_b <- ctrl_groups[1]
       grp_a <- non_ctrl_groups[1]
