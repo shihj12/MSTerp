@@ -3,7 +3,7 @@
 ; portable R, R packages, and the Shiny app.
 
 #define MyAppName "MSTerp"
-#define MyAppVersion "1.1.05"
+#define MyAppVersion "1.1.06"
 #define MyAppPublisher "MSTerp"
 #define MyAppURL "https://github.com/shihj12/MSTerp"
 #define MyAppExeName "MSTerp.exe"
@@ -103,8 +103,6 @@ end;
 procedure CleanStaleAssociations;
 begin
   // Remove per-user class definitions that shadow machine-level ones.
-  // Do NOT delete FileExts entries — they contain UserChoice hashes
-  // that Windows 10/11 needs for icon display.
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.terpbase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\terpbase_auto_file');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.complexbase');
@@ -115,6 +113,15 @@ begin
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\terpbook_auto_file');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.terpflow');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\terpflow_auto_file');
+
+  // Remove stale Explorer FileExts — these contain UserChoice entries
+  // that may point to old ProgIDs (e.g., terpbase_auto_file) from the
+  // Electron-era NSIS installer, shadowing our new HKLM associations.
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpbase');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.complexbase');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.metabobase');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpbook');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpflow');
 end;
 
 procedure RefreshIconCache;

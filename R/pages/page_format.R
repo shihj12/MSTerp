@@ -1911,6 +1911,7 @@ page_format_server <- function(input, output, session, app_state) {
   merge_preview <- reactiveVal(NULL)
   merge_map     <- reactiveVal(NULL)     # editable mapping (data.frame)
   merge_built_path <- reactiveVal(NULL)
+  merge_file_cache <- reactiveVal(list()) # cache uploaded file info across re-renders
   
   merge_clear_built <- function() {
     merge_built_path(NULL)
@@ -1954,7 +1955,8 @@ page_format_server <- function(input, output, session, app_state) {
             style = "margin: 6px 0 0;",
             downloadButton("fmt_sample_merge", "Sample formatted .xlsx", class = "btn btn-default btn-sm")
           ),
-          uiOutput("merge_file_inputs")
+          uiOutput("merge_file_inputs"),
+          actionButton("merge_load", "Load & preview", class = "btn-primary", width = "100%")
         ),
         if (has_preview) fmt_step_ui(
           "2",
@@ -1997,47 +1999,80 @@ page_format_server <- function(input, output, session, app_state) {
       fileInput(paste0("merge_file_", i), paste0("File ", i, " (.xlsx formatted)"), multiple = FALSE, accept = c(".xlsx"))
     }))
   })
-  
+
+  # Cache uploaded file info so paths survive fileInput re-renders
+  observe({
+    n <- input$merge_nfiles %||% 2
+    cache <- isolate(merge_file_cache())
+    changed <- FALSE
+    for (i in seq_len(n)) {
+      fi <- input[[paste0("merge_file_", i)]]
+      if (!is.null(fi) && !is.null(fi$datapath) && nzchar(fi$datapath)) {
+        key <- as.character(i)
+        if (is.null(cache[[key]]) || cache[[key]]$datapath != fi$datapath) {
+          cache[[key]] <- list(datapath = fi$datapath, name = fi$name)
+          changed <- TRUE
+        }
+      }
+    }
+    # Trim cache entries beyond current nfiles
+    cache_keys <- as.integer(names(cache))
+    excess <- cache_keys[cache_keys > n]
+    if (length(excess) > 0) {
+      for (k in excess) cache[[as.character(k)]] <- NULL
+      changed <- TRUE
+    }
+    if (changed) merge_file_cache(cache)
+  })
+
   merge_paths <- reactive({
     n <- input$merge_nfiles %||% 2
+    cache <- merge_file_cache()
     paths <- character(0)
     labels <- character(0)
-    
+
     for (i in seq_len(n)) {
       fi <- input[[paste0("merge_file_", i)]]
       if (!is.null(fi) && !is.null(fi$datapath) && nzchar(fi$datapath)) {
         paths  <- c(paths, fi$datapath)
         labels <- c(labels, tools::file_path_sans_ext(fi$name))
+      } else {
+        # Fall back to cached file info (survives fileInput re-renders)
+        ci <- cache[[as.character(i)]]
+        if (!is.null(ci)) {
+          paths  <- c(paths, ci$datapath)
+          labels <- c(labels, tools::file_path_sans_ext(ci$name))
+        }
       }
     }
     list(paths = paths, labels = make.names(labels, unique = TRUE))
   })
   
-  observeEvent(merge_paths(), {
+  observeEvent(input$merge_load, {
     merge_clear_built()
-    
+
     mp <- merge_paths()
     if (length(mp$paths) < 2) {
       merge_preview(NULL)
       merge_map(NULL)
-      output$merge_status <- renderText("Upload at least 2 formatted files.")
+      output$merge_status <- renderText("Upload at least 2 formatted files before loading.")
       return()
     }
-    
+
     busy_step(TRUE, "Reading workbooks…", 10)
     prev <- tryCatch(msterp_merge_preview(mp$paths, file_ids = mp$labels), error = function(e) e)
     busy_step(FALSE)
-    
+
     if (inherits(prev, "error")) {
       merge_preview(NULL)
       merge_map(NULL)
       output$merge_status <- renderText(paste("Error:", prev$message))
       return()
     }
-    
+
     merge_preview(prev)
     merge_map(prev$mapping)
-    
+
     output$merge_status <- renderText(sprintf(
       "Loaded %d files. Level: %s. Primary ID: %s.",
       length(prev$file_ids), prev$level, prev$primary_col
@@ -2048,6 +2083,7 @@ page_format_server <- function(input, output, session, app_state) {
     merge_preview(NULL)
     merge_map(NULL)
     merge_clear_built()
+    merge_file_cache(list())
     output$merge_status <- renderText("")
 
     n <- input$merge_nfiles %||% 2
@@ -2151,6 +2187,15 @@ page_format_server <- function(input, output, session, app_state) {
       }
     }
     
+    # Renumber replicates after group name/color edits
+    m_new <- m_new[order(m_new$group_name, m_new$color,
+                         m_new$source_file, m_new$replicate), ]
+    grp_key <- paste0(m_new$group_name, "\u2016", m_new$color)
+    for (key in unique(grp_key)) {
+      rows <- which(grp_key == key)
+      m_new$replicate[rows] <- seq_along(rows)
+    }
+
     if (!isTRUE(all.equal(m_new, m))) {
       merge_map(m_new)
       merge_clear_built()
@@ -2297,11 +2342,18 @@ page_format_server <- function(input, output, session, app_state) {
     tmp <- tempfile(fileext = ".xlsx")
     
     # Use your merger progress callback (requires msterp_merge_execute(..., progress=...))
+    merge_need <- c("source_file","source_col","merged_col","display_name","group_name","replicate","color")
+    merge_miss <- setdiff(merge_need, names(m))
+    if (length(merge_miss) > 0) {
+      output$merge_status <- renderText(paste("Mapping is missing columns:", paste(merge_miss, collapse = ", "),
+                                              "\nHas:", paste(names(m), collapse = ", ")))
+      return()
+    }
     res <- tryCatch({
       busy_step(TRUE, "Merging files…", 10)
       msterp_merge_execute(
         prev,
-        m[, c("source_file","source_col","merged_col","display_name","group_name","replicate","color"), drop = FALSE],
+        m[, merge_need, drop = FALSE],
         tmp,
         progress = function(msg, pct) busy_step(TRUE, msg, pct)
       )

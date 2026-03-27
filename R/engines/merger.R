@@ -195,6 +195,8 @@ msterp_merge_preview <- function(paths, file_ids = NULL) {
   }
   id_cols <- id_cols_list[[1]]
   primary_col <- prims[[1]]$primary_col
+  # Ensure primary_col is always included in id_cols
+  if (!primary_col %in% id_cols) id_cols <- c(primary_col, id_cols)
   
   maps <- Map(function(obj, fid) {
     cols <- msterp_extract_columns(obj$design)
@@ -255,7 +257,17 @@ msterp_merge_preview <- function(paths, file_ids = NULL) {
   # Resolve collisions for display_name similarly
   dup_disp <- duplicated(map_all$display_name) | duplicated(map_all$display_name, fromLast = TRUE)
   map_all$display_name[dup_disp] <- paste0(map_all$source_file[dup_disp], "__", map_all$display_name[dup_disp])
-  
+
+  # Renumber replicates sequentially within each (group_name, color) group
+  # so that same-named groups from different files get consecutive rep numbers
+  map_all <- map_all[order(map_all$group_name, map_all$color,
+                           map_all$source_file, map_all$replicate), ]
+  grp_key <- paste0(map_all$group_name, "\u2016", map_all$color)
+  for (key in unique(grp_key)) {
+    rows <- which(grp_key == key)
+    map_all$replicate[rows] <- seq_along(rows)
+  }
+
   still_bad <- any(duplicated(map_all$merged_col)) || any(duplicated(map_all$display_name))
   
   list(
@@ -340,6 +352,11 @@ msterp_merge_execute <- function(preview, mapping_df, out_path, progress = NULL)
     df <- datasets[[i]]$data
     fid <- file_ids[[i]]
     
+    missing_id <- setdiff(id_cols, names(df))
+    if (length(missing_id) > 0) {
+      stop(sprintf("File '%s' data sheet missing ID columns: %s (has: %s)",
+                   fid, paste(missing_id, collapse = ", "), paste(names(df), collapse = ", ")))
+    }
     ids_i <- df[, id_cols, drop = FALSE]
     ids_i <- ids_i[!is.na(ids_i[[primary_col]]) & nzchar(as.character(ids_i[[primary_col]])), , drop = FALSE]
     
@@ -441,7 +458,16 @@ msterp_merge_execute <- function(preview, mapping_df, out_path, progress = NULL)
   groups <- groups[, c("group_id", "group_name", "color"), drop = FALSE]
   
   mapping_df2 <- dplyr::left_join(mapping_df, groups, by = c("group_name", "color"))
-  
+
+  # Safety: renumber replicates within each merged group (handles user edits after preview)
+  mapping_df2 <- mapping_df2[order(mapping_df2$group_name, mapping_df2$color,
+                                    mapping_df2$source_file, mapping_df2$replicate), ]
+  grp_key2 <- paste0(mapping_df2$group_name, "\u2016", mapping_df2$color)
+  for (key in unique(grp_key2)) {
+    rows <- which(grp_key2 == key)
+    mapping_df2$replicate[rows] <- seq_along(rows)
+  }
+
   col_recs <- data.frame(
     data_col     = mapping_df2$merged_col,
     display_name = mapping_df2$display_name,
