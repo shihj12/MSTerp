@@ -1058,8 +1058,8 @@ tb_render_spearman <- tb_render_scatter_correlation
     # Format as log[2](Group1/Group2) from Group1_vs_Group2
     parts <- unlist(strsplit(comparison_name, "_vs_", fixed = TRUE))
     if (length(parts) == 2) {
-      g1 <- parts[1]
-      g2 <- parts[2]
+      g1 <- if (flip_fc) parts[2] else parts[1]
+      g2 <- if (flip_fc) parts[1] else parts[2]
       bquote(log[2](.(g1) / .(g2)))
     } else {
       bquote(log[2]*FC ~ (.(comparison_name)))
@@ -1334,7 +1334,9 @@ tb_volcano_plotly <- function(df, style, meta, xlim, ylim, labs, saved, comparis
   x_axis_label <- if (nzchar(comparison_name)) {
     parts <- unlist(strsplit(comparison_name, "_vs_", fixed = TRUE))
     if (length(parts) == 2) {
-      paste0("log<sub>2</sub>(", parts[1], "/", parts[2], ")")
+      p1 <- if (flip_fc) parts[2] else parts[1]
+      p2 <- if (flip_fc) parts[1] else parts[2]
+      paste0("log<sub>2</sub>(", p1, "/", p2, ")")
     } else {
       paste0("log<sub>2</sub>FC (", comparison_name, ")")
     }
@@ -1716,13 +1718,19 @@ tb_2dgofcs_plotly <- function(df_plot, style, meta, xlim, ylim, labs, saved, x_l
   comparison <- comp$comparison %||% list()
   group_b <- comparison$group_b %||% "Treatment"
   group_a <- comparison$group_a %||% "Control"
+  flip_fc <- isTRUE(style$flip_fc %||% FALSE)
 
-  # Format title
+  # Format title (swap group order when flip_fc is enabled)
   title <- if (nzchar(comparison_name)) {
     parts <- unlist(strsplit(comparison_name, "_vs_", fixed = TRUE))
-    if (length(parts) == 2) paste0(parts[1], " vs. ", parts[2]) else comparison_name
+    if (length(parts) == 2) {
+      if (flip_fc) parts <- rev(parts)
+      paste0(parts[1], " vs. ", parts[2])
+    } else {
+      comparison_name
+    }
   } else {
-    paste0(group_b, " vs. ", group_a)
+    if (flip_fc) paste0(group_a, " vs. ", group_b) else paste0(group_b, " vs. ", group_a)
   }
 
   # Use passed params first, then comparison, then defaults
@@ -1735,6 +1743,13 @@ tb_2dgofcs_plotly <- function(df_plot, style, meta, xlim, ylim, labs, saved, x_l
   n_down <- comparison$n_sig_down %||% 0
   n_unique_b <- comparison$n_unique_b %||% 0
   n_unique_a <- comparison$n_unique_a %||% 0
+
+  # Swap up/down counts and group labels when flip_fc is enabled
+  if (flip_fc) {
+    tmp <- n_up; n_up <- n_down; n_down <- tmp
+    tmp <- n_unique_b; n_unique_b <- n_unique_a; n_unique_a <- tmp
+    tmp <- group_b; group_b <- group_a; group_a <- tmp
+  }
 
   col_up <- style$col_sig_up %||% "#FF4242"
   col_down <- style$col_sig_down %||% "#4245FF"
@@ -5699,7 +5714,11 @@ tb_render_1dgofcs <- function(results, style, meta) {
 
     for (comp_name in names(analyses)) {
       analysis <- analyses[[comp_name]]
-      comp_label <- analysis$score_label %||% paste0("log2(", gsub("_vs_", "/", comp_name), ")")
+      comp_label <- analysis$score_label %||% {
+        parts <- unlist(strsplit(comp_name, "_vs_", fixed = TRUE))
+        if (length(parts) == 2 && isTRUE(style$flip_fc)) parts <- rev(parts)
+        paste0("log2(", paste(parts, collapse = "/"), ")")
+      }
       df <- analysis$terms
 
       if (!is.null(df) && is.data.frame(df) && nrow(df) > 0) {
@@ -6692,7 +6711,11 @@ tb_render_pathway_fcs <- function(results, style, meta) {
 
     for (comp_name in names(analyses)) {
       analysis <- analyses[[comp_name]]
-      comp_label <- analysis$score_label %||% paste0("log2(", gsub("_vs_", "/", comp_name), ")")
+      comp_label <- analysis$score_label %||% {
+        parts <- unlist(strsplit(comp_name, "_vs_", fixed = TRUE))
+        if (length(parts) == 2 && isTRUE(style$flip_fc)) parts <- rev(parts)
+        paste0("log2(", paste(parts, collapse = "/"), ")")
+      }
       comp_results <- list(
         engine_id = "pathway_fcs",
         params = results$params,

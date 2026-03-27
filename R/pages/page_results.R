@@ -3290,6 +3290,10 @@ page_results_server <- function(input, output, session) {
   
   observeEvent(list(rv$loaded, rv$active_node_id), {
     req(rv$loaded, rv$active_node_id)
+
+    # Flush any pending debounced saves from the outgoing node before loading new state
+    .commit_style_debounced$flush()
+
     nd <- active_node_dir()
     req(!is.null(nd))
 
@@ -3607,7 +3611,7 @@ page_results_server <- function(input, output, session) {
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
-      .commit_style_debounced(node_dir = nd, payload = list(style = cur_style))
+      .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
     }
 
     if (isTRUE(update_input)) {
@@ -4082,7 +4086,7 @@ page_results_server <- function(input, output, session) {
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
-      .commit_style_debounced(node_dir = nd, payload = list(plotly = cur_plotly))
+      .commit_style_debounced$call(node_dir = nd, payload = list(plotly = cur_plotly))
     }
 
     rv$has_unsaved_changes <- TRUE
@@ -4128,7 +4132,8 @@ page_results_server <- function(input, output, session) {
     has_rankplot_labels <- !is.null(pending_rankplot_labels())
     has_positions <- length(pending_label_positions()) > 0
     has_term_edits <- length(pending_term_labels()) > 0
-    has_volcano_labels || has_rankplot_labels || has_positions || has_term_edits
+    has_style <- .commit_style_debounced$has_pending()
+    has_volcano_labels || has_rankplot_labels || has_positions || has_term_edits || has_style
   }
 
   # Clear pending changes without committing (e.g., on data reload)
@@ -4171,7 +4176,7 @@ page_results_server <- function(input, output, session) {
       rv$cache_style_by_node[[key]] <- cur_style
 
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(style = cur_style))
+        .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
       }
 
       pending_volcano_labels(NULL)
@@ -4195,7 +4200,7 @@ page_results_server <- function(input, output, session) {
       rv$cache_style_by_node[[key]] <- cur_style
 
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(style = cur_style))
+        .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
       }
 
       pending_rankplot_labels(NULL)
@@ -4225,7 +4230,7 @@ page_results_server <- function(input, output, session) {
       trim_plotly_cache()
 
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(plotly = cur_plotly))
+        .commit_style_debounced$call(node_dir = nd, payload = list(plotly = cur_plotly))
       }
 
       pending_label_positions(list())
@@ -4251,7 +4256,7 @@ page_results_server <- function(input, output, session) {
       rv$cache_vis_by_node[[key]] <- vis
 
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+        .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
       }
 
       pending_term_labels(list())
@@ -4741,7 +4746,8 @@ page_results_server <- function(input, output, session) {
 
   # Observer for Overview button (always present)
   observeEvent(input$res_nav_overview, {
-    # Commit pending changes before switching nodes
+    # Flush debounced style saves and commit pending changes before switching nodes
+    .commit_style_debounced$flush()
     if (res_has_pending_changes()) {
       tryCatch(
         res_commit_pending_changes(trigger_source = "node_switch"),
@@ -4777,7 +4783,8 @@ page_results_server <- function(input, output, session) {
           node_id <- nid
           btn_id <- paste0("res_nav_", gsub("[^A-Za-z0-9_]", "_", node_id))
           rv$nav_obs[[node_id]] <- observeEvent(input[[btn_id]], {
-            # Commit pending changes before switching nodes
+            # Flush debounced style saves and commit pending changes before switching nodes
+            .commit_style_debounced$flush()
             if (res_has_pending_changes()) {
               tryCatch(
                 res_commit_pending_changes(trigger_source = "node_switch"),
@@ -5718,7 +5725,7 @@ page_results_server <- function(input, output, session) {
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
-      .commit_style_debounced(node_dir = nd, payload = list(style = cur_style))
+      .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
     }
 
     # Clear pending state and trigger re-render
@@ -6049,7 +6056,7 @@ page_results_server <- function(input, output, session) {
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
-      .commit_style_debounced(node_dir = nd, payload = list(style = cur_style))
+      .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
     }
 
     rv$has_unsaved_changes <- TRUE
@@ -6139,7 +6146,7 @@ page_results_server <- function(input, output, session) {
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
-      .commit_style_debounced(node_dir = nd, payload = list(style = cur_style))
+      .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
     }
 
     # Clear pending state and trigger re-render
@@ -6336,9 +6343,11 @@ page_results_server <- function(input, output, session) {
 
   .commit_style_debounced <- local({
     pending_payload <- list()
+    last_node_dir <- NULL
     debounced_fn <- tb_debounce_ms(350, function(node_dir) {
       payload <- pending_payload
       pending_payload <<- list()
+      last_node_dir <<- NULL
       tryCatch(
         tb_save_render_state_atomic(node_dir, payload),
         error = function(e) {
@@ -6347,13 +6356,32 @@ page_results_server <- function(input, output, session) {
         }
       )
     })
-    function(node_dir, payload) {
+
+    call <- function(node_dir, payload) {
       # Accumulate patches so rapid style + plotly saves don't lose data
       if (!is.null(payload$style)) pending_payload$style <<- payload$style
       if (!is.null(payload$plotly)) pending_payload$plotly <<- payload$plotly
       if (!is.null(payload$visibility)) pending_payload$visibility <<- payload$visibility
+      last_node_dir <<- node_dir
       debounced_fn(node_dir)
     }
+
+    flush <- function() {
+      if (length(pending_payload) == 0 || is.null(last_node_dir)) return(invisible(FALSE))
+      payload <- pending_payload
+      nd <- last_node_dir
+      pending_payload <<- list()
+      last_node_dir <<- NULL
+      tryCatch(
+        tb_save_render_state_atomic(nd, payload),
+        error = function(e) message("[flush] Error: ", conditionMessage(e))
+      )
+      invisible(TRUE)
+    }
+
+    has_pending <- function() length(pending_payload) > 0
+
+    list(call = call, flush = flush, has_pending = has_pending)
   })
 
   # Download updated .terpbook with all changes
@@ -8053,7 +8081,7 @@ page_results_server <- function(input, output, session) {
 
           nd <- active_node_dir()
           if (!is.null(nd)) {
-            .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+            .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
           }
 
           rv$has_unsaved_changes <- TRUE
@@ -8081,7 +8109,7 @@ page_results_server <- function(input, output, session) {
 
           nd <- active_node_dir()
           if (!is.null(nd)) {
-            .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+            .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
           }
 
           rv$has_unsaved_changes <- TRUE
@@ -8285,7 +8313,7 @@ page_results_server <- function(input, output, session) {
       # Save to file
       nd <- active_node_dir()
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+        .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
       }
 
       # Mark as changed and trigger re-render
@@ -8315,7 +8343,7 @@ page_results_server <- function(input, output, session) {
       # Save to file
       nd <- active_node_dir()
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+        .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
       }
 
       # Mark as changed and trigger re-render
@@ -8354,7 +8382,7 @@ page_results_server <- function(input, output, session) {
       # Save to file
       nd <- active_node_dir()
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+        .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
       }
 
       # Mark as changed and trigger re-render
@@ -9061,7 +9089,7 @@ page_results_server <- function(input, output, session) {
       # Save to file
       nd <- active_node_dir()
       if (!is.null(nd)) {
-        .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+        .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
       }
 
       # Mark as changed and trigger re-render
@@ -12393,7 +12421,7 @@ page_results_server <- function(input, output, session) {
 
                 nd <- active_node_dir()
                 if (!is.null(nd)) {
-                  .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+                  .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
                 }
 
                 rv$has_unsaved_changes <- TRUE
@@ -12421,7 +12449,7 @@ page_results_server <- function(input, output, session) {
 
                 nd <- active_node_dir()
                 if (!is.null(nd)) {
-                  .commit_style_debounced(node_dir = nd, payload = list(visibility = vis))
+                  .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
                 }
 
                 rv$has_unsaved_changes <- TRUE
