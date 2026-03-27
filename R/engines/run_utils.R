@@ -3809,6 +3809,13 @@ nr_execute_run <- function(formatted_path,
         if (is.null(ctx$metadata) || !is.list(ctx$metadata)) ctx$metadata <- list()
         ctx$metadata$analysis_level <- "protein"
         ctx$metadata$current_analysis_level <- "protein"
+        # Also update id_primary_col to protein col (same rationale as dataprocessor path)
+        prot_col <- as.character(ctx$metadata$id_protein_col %||% "")[1]
+        old_primary <- as.character(ctx$metadata$id_primary_col %||% "")[1]
+        if (nzchar(prot_col) && !identical(old_primary, prot_col)) {
+          ctx$metadata$id_primary_col <- prot_col
+          nr_log(run_root, sprintf("  id_primary_col updated: '%s' -> '%s'", old_primary, prot_col))
+        }
         nr_log(run_root, "  Context analysis level updated to protein")
       }
 
@@ -3818,6 +3825,20 @@ nr_execute_run <- function(formatted_path,
         ctx$metadata$analysis_level <- results$data$output_analysis_level
         ctx$metadata$current_analysis_level <- results$data$output_analysis_level
         nr_log(run_root, sprintf("  Context analysis level updated to '%s' (dataprocessor)", results$data$output_analysis_level))
+
+        # When aggregation promotes peptide→protein, update id_primary_col so downstream
+        # engines (Volcano, GO ORA) use protein IDs instead of stale peptide identifiers.
+        # Without this, the old peptide column (e.g. "EG.ModifiedSequence") persists in ids
+        # and Volcano picks up peptide sequences as primary IDs, causing enrichment to fail.
+        if (identical(results$data$output_analysis_level, "protein")) {
+          prot_col <- as.character(ctx$metadata$id_protein_col %||% "")[1]
+          old_primary <- as.character(ctx$metadata$id_primary_col %||% "")[1]
+          if (nzchar(prot_col) && !identical(old_primary, prot_col)) {
+            ctx$metadata$id_primary_col <- prot_col
+            nr_log(run_root, sprintf("  id_primary_col updated: '%s' -> '%s' (peptide->protein promotion)",
+                                      old_primary, prot_col))
+          }
+        }
       }
     }
 
