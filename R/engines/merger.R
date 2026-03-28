@@ -19,8 +19,8 @@ msterp_collapse_dupes_first <- function(df, key_col, value_cols, coerce_char = F
   if (anyDuplicated(df[[key_col]]) == 0) return(df[, c(key_col, value_cols), drop = FALSE])
   
   idx <- split(seq_len(nrow(df)), df[[key_col]])
-  out <- data.frame(stringsAsFactors = FALSE, check.names = FALSE)
-  out[[key_col]] <- names(idx)
+  out <- data.frame(x__ = names(idx), stringsAsFactors = FALSE, check.names = FALSE)
+  names(out)[1] <- key_col
   
   for (col in value_cols) {
     v <- df[[col]]
