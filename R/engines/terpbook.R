@@ -5620,6 +5620,49 @@ tb_render_pca <- function(results, style, meta) {
     }
   }
 
+  # Group centroid labels (replaces legend when enabled)
+  if (isTRUE(style$show_group_labels %||% FALSE)) {
+    centroids <- stats::aggregate(
+      cbind(PC1, PC2) ~ group,
+      data = scores,
+      FUN = mean
+    )
+
+    label_color_mode <- style$group_label_color_mode %||% "group"
+    label_alpha <- tb_num(style$group_label_alpha, 1)
+    label_size  <- tb_num(style$group_label_size, 5)
+    use_bg      <- isTRUE(style$group_label_bg %||% FALSE)
+    geom_fn     <- if (use_bg) ggplot2::geom_label else ggplot2::geom_text
+
+    if (label_color_mode == "flat") {
+      flat_col <- style$group_label_flat_color %||% "#000000"
+      label_layer <- geom_fn(
+        data = centroids,
+        ggplot2::aes(x = PC1, y = PC2, label = group),
+        color = flat_col,
+        size = label_size,
+        alpha = label_alpha,
+        fontface = "bold",
+        show.legend = FALSE,
+        inherit.aes = FALSE
+      )
+    } else {
+      # "group" mode: color text by group color
+      label_layer <- geom_fn(
+        data = centroids,
+        ggplot2::aes(x = PC1, y = PC2, label = group, color = group),
+        size = label_size,
+        alpha = label_alpha,
+        fontface = "bold",
+        show.legend = FALSE,
+        inherit.aes = FALSE
+      )
+    }
+
+    p_scores <- p_scores + label_layer +
+      ggplot2::theme(legend.position = "none")
+  }
+
   # FIX: Use coord_cartesian instead of coord_fixed to allow flexible aspect ratio
   # This lets users control the plot proportions via width/height settings
   # The xlim/ylim are still computed symmetrically for visual balance
