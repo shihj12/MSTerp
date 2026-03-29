@@ -310,7 +310,7 @@ tools_1dgofcs_server <- function(input, output, session, app_state, rv_1dgofcs, 
   # Output: genes and scores where scores are derived from rank position
   parse_gene_score_input <- function(text) {
     if (is.null(text) || !nzchar(text)) return(list(genes = character(0), scores = numeric(0)))
-    lines <- unlist(strsplit(text, "\\r?\\n"))
+    lines <- unlist(strsplit(text, "[\n\r\t,;]+"))
     lines <- trimws(lines)
     lines <- lines[nzchar(lines)]
 

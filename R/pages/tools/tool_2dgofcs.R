@@ -338,7 +338,7 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
   parse_ranked_lists_input <- function(text_x, text_y) {
     parse_one_list <- function(text) {
       if (is.null(text) || !nzchar(text)) return(character(0))
-      lines <- unlist(strsplit(text, "\\r?\\n"))
+      lines <- unlist(strsplit(text, "[\n\r\t,;]+"))
       lines <- trimws(lines)
       lines[nzchar(lines)]
     }

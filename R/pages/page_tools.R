@@ -12,6 +12,7 @@ source(file.path("R", "pages", "tools", "tool_msea.R"), local = FALSE)
 source(file.path("R", "pages", "tools", "tool_pathway_fcs.R"), local = FALSE)
 source(file.path("R", "pages", "tools", "tool_terpbase.R"), local = FALSE)
 source(file.path("R", "pages", "tools", "tool_id_reconcile.R"), local = FALSE)
+source(file.path("R", "pages", "tools", "tool_venn.R"), local = FALSE)
 # ComplexBase and MetaboBase builders removed from UI — use scripts/ to rebuild
 # source(file.path("R", "pages", "tools", "tool_complexbase.R"), local = FALSE)
 # source(file.path("R", "pages", "tools", "tool_metabobase.R"), local = FALSE)
@@ -173,6 +174,13 @@ tools_landing_ui <- function() {
       tags$p("Reconcile metabolite names/IDs against a MetaboBase and annotate with cross-references."),
       actionButton("tools_open_id_reconcile", "Open ID Reconcile", class = "btn btn-primary")
     ),
+    # Venn Diagram card
+    div(
+      class = "card",
+      tags$h3("Venn Diagram"),
+      tags$p("Compare overlaps between 2-6 lists of items (genes, proteins, metabolites, etc.)."),
+      actionButton("tools_open_venn", "Open Venn Diagram", class = "btn btn-primary")
+    ),
     # QC snapshots card
     div(
       class = "card",
@@ -293,6 +301,14 @@ page_tools_server <- function(input, output, session, app_state) {
     bg_process = NULL
   )
 
+  # Reactive values for Venn Diagram
+  rv_venn <- reactiveValues(
+    plot = NULL,
+    regions = NULL,
+    status_msg = NULL,
+    status_level = NULL
+  )
+
 
   # Shared TerpBase loading function
   tools_load_terpbase <- function(path, rv_target) {
@@ -344,6 +360,8 @@ page_tools_server <- function(input, output, session, app_state) {
       tools_terpbase_ui()
     } else if (tool == "id_reconcile") {
       tools_id_reconcile_ui()
+    } else if (tool == "venn") {
+      tools_venn_ui()
     } else {
       tools_landing_ui()
     }
@@ -533,6 +551,15 @@ page_tools_server <- function(input, output, session, app_state) {
     current_tool("landing")
   }, ignoreInit = TRUE)
 
+  # Navigation for Venn Diagram
+  observeEvent(input$tools_open_venn, {
+    current_tool("venn")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$tools_venn_back, {
+    current_tool("landing")
+  }, ignoreInit = TRUE)
+
   # Helper to restore parameters after UI is rendered
   # Uses observe + invalidateLater for a delayed update without shinyjs
   tools_restore_after_delay <- function(restore_fn, delay_ms = 150) {
@@ -556,10 +583,11 @@ page_tools_server <- function(input, output, session, app_state) {
       p <- rv$stored_params
       genes <- rv$stored_genes
       # Schedule restore after UI renders
-      observe({
+      o <- observe({
         invalidateLater(150, session)
-      }, once = TRUE)
-      observe({
+        o$destroy()
+      })
+      o2 <- observe({
         # Check if input exists (UI has rendered)
         req(input$tools_goora_fdr_cutoff)
         isolate({
@@ -581,14 +609,15 @@ page_tools_server <- function(input, output, session, app_state) {
           if (!is.null(p$height)) updateNumericInput(session, "tools_goora_height", value = p$height)
           if (!is.null(genes)) updateTextAreaInput(session, "tools_goora_genes", value = genes)
         })
-      }, once = TRUE)
+        o2$destroy()
+      })
     }
 
     # Restore 1D GO-FCS parameters
     if (tool == "1dgofcs" && !is.null(rv_1dgofcs$stored_params)) {
       p <- rv_1dgofcs$stored_params
       genes <- rv_1dgofcs$stored_genes
-      observe({
+      o <- observe({
         req(input$tools_1dgofcs_fdr_cutoff)
         isolate({
           if (!is.null(p$fdr_cutoff)) updateNumericInput(session, "tools_1dgofcs_fdr_cutoff", value = p$fdr_cutoff)
@@ -608,7 +637,8 @@ page_tools_server <- function(input, output, session, app_state) {
           if (!is.null(p$height)) updateNumericInput(session, "tools_1dgofcs_height", value = p$height)
           if (!is.null(genes)) updateTextAreaInput(session, "tools_1dgofcs_genes", value = genes)
         })
-      }, once = TRUE)
+        o$destroy()
+      })
     }
 
     # Restore 2D GO-FCS parameters
@@ -617,7 +647,7 @@ page_tools_server <- function(input, output, session, app_state) {
       genes <- rv_2dgofcs$stored_genes
       x_label <- rv_2dgofcs$stored_x_label
       y_label <- rv_2dgofcs$stored_y_label
-      observe({
+      o <- observe({
         req(input$tools_2dgofcs_fdr_cutoff)
         isolate({
           if (!is.null(p$fdr_cutoff)) updateNumericInput(session, "tools_2dgofcs_fdr_cutoff", value = p$fdr_cutoff)
@@ -638,7 +668,8 @@ page_tools_server <- function(input, output, session, app_state) {
           if (!is.null(x_label)) updateTextInput(session, "tools_2dgofcs_x_label", value = x_label)
           if (!is.null(y_label)) updateTextInput(session, "tools_2dgofcs_y_label", value = y_label)
         })
-      }, once = TRUE)
+        o$destroy()
+      })
     }
   }, ignoreInit = TRUE)
 
@@ -681,6 +712,7 @@ page_tools_server <- function(input, output, session, app_state) {
   tools_pathway_fcs_server(input, output, session, app_state, rv_pathway_fcs, defs_pathway_fcs)
   tools_terpbase_server(input, output, session, app_state, rv_terpbase)
   tools_id_reconcile_server(input, output, session, app_state, rv_reconcile)
+  tools_venn_server(input, output, session, app_state, rv_venn)
 
   # Store current_tool in session$userData for child modules to access
   session$userData$tools_current_tool <- current_tool

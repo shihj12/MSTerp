@@ -588,8 +588,7 @@ tools_goora_server <- function(input, output, session, app_state, rv, defs_goora
 
   parse_gene_input <- function(text) {
     if (is.null(text) || !nzchar(text)) return(character(0))
-    lines <- unlist(strsplit(text, "\\r?\\n"))
-    parts <- unlist(strsplit(lines, "[,;]"))
+    parts <- unlist(strsplit(text, "[\n\r\t,;]+"))
     parts <- trimws(parts)
     parts <- parts[nzchar(parts)]
     unique(parts)
