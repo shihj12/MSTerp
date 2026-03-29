@@ -3077,7 +3077,17 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           choice_labels = c("Export preview", "Interactive")
         ),
         msterp_schema_field("ontology_filter", "choice", "Ontology",
-                            default = "BP", choices = c("BP", "MF", "CC"))
+                            default = "BP", choices = c("BP", "MF", "CC")),
+        msterp_schema_field(
+          "flip_x", "bool", "Flip X axis direction",
+          default = FALSE,
+          help = "Negate X-axis scores to swap enrichment direction (GroupA/GroupB becomes GroupB/GroupA)"
+        ),
+        msterp_schema_field(
+          "flip_y", "bool", "Flip Y axis direction",
+          default = FALSE,
+          help = "Negate Y-axis scores to swap enrichment direction (GroupA/GroupB becomes GroupB/GroupA)"
+        )
       ),
       outputs = list(
         figures = c("2dgofcs_plot"),

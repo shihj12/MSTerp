@@ -170,7 +170,7 @@ get_style_section <- function(field_name) {
     # CV plot mode
     "cv_plot_mode", "x_axis_mode",
     # Axis/direction flip selectors
-    "flip_axis", "flip_fc", "swap_axes"
+    "flip_axis", "flip_fc", "flip_x", "flip_y", "swap_axes"
   )
   if (field_name %in% selector_fields) return(NULL)
 

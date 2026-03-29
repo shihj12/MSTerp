@@ -156,6 +156,13 @@ tb_format_sig <- function(x, digits = 2) {
   }, character(1))
 }
 
+# Flip a comparison label: "log2(A/B)" -> "log2(B/A)", "A/B" -> "B/A"
+# No-op for labels without "/" comparison (e.g., "PC1", "Score")
+tb_flip_comparison_label <- function(label) {
+  if (is.null(label) || !nzchar(label) || !grepl("/", label, fixed = TRUE)) return(label)
+  sub("([^/()]+)/([^/()]+)", "\\2/\\1", label)
+}
+
 # -----------------------------------------------------------------------------
 # Protein Complex Enrichment Support
 # -----------------------------------------------------------------------------
@@ -5759,9 +5766,9 @@ tb_render_1dgofcs <- function(results, style, meta) {
       analysis <- analyses[[comp_name]]
       comp_label <- analysis$score_label %||% {
         parts <- unlist(strsplit(comp_name, "_vs_", fixed = TRUE))
-        if (length(parts) == 2 && isTRUE(style$flip_fc)) parts <- rev(parts)
         paste0("log2(", paste(parts, collapse = "/"), ")")
       }
+      if (isTRUE(style$flip_fc)) comp_label <- tb_flip_comparison_label(comp_label)
       df <- analysis$terms
 
       if (!is.null(df) && is.data.frame(df) && nrow(df) > 0) {
@@ -5786,6 +5793,9 @@ tb_render_1dgofcs <- function(results, style, meta) {
 
   # FIX: Extract score_label for dynamic axis labeling (e.g., "PC1" or "log2(BafA1/Control)")
   score_label <- data_obj$score_label %||% results$params$score_label %||% NULL
+  if (isTRUE(style$flip_fc) && !is.null(score_label)) {
+    score_label <- tb_flip_comparison_label(score_label)
+  }
 
   # Detect which tabs are present (BP, MF, CC, or complex sources) in explicit structure
   for (tab in c("BP", "MF", "CC", "CORUM", "ComplexPortal")) {
@@ -5936,6 +5946,10 @@ tb_render_2dgofcs <- function(results, style, meta) {
       x_label <- sub("\\s*Top\\s*\\d+\\s*$", "", x_label, ignore.case = TRUE)
       y_label <- sub("\\s*Top\\s*\\d+\\s*$", "", y_label, ignore.case = TRUE)
 
+      # Flip axis labels (score negation handled in scatter_xy)
+      if (isTRUE(style$flip_x)) x_label <- tb_flip_comparison_label(x_label)
+      if (isTRUE(style$flip_y)) y_label <- tb_flip_comparison_label(y_label)
+
       rendered <- tb_render_2dgofcs_scatter_xy(df, style, meta, x_label, y_label, plot_key = analysis_name)
 
       if (!is.null(rendered$plot)) {
@@ -5961,6 +5975,10 @@ tb_render_2dgofcs <- function(results, style, meta) {
   if (!is.null(y_score_label)) y_score_label <- sub("\\s*Top\\s*\\d+\\s*$", "", y_score_label, ignore.case = TRUE)  # "PC2 Top 50" -> "PC2"
   default_x_label <- if (!is.null(x_score_label) && nzchar(x_score_label)) x_score_label else "Score X"
   default_y_label <- if (!is.null(y_score_label) && nzchar(y_score_label)) y_score_label else "Score Y"
+
+  # Flip axis labels for non-analysis paths
+  if (isTRUE(style$flip_x)) default_x_label <- tb_flip_comparison_label(default_x_label)
+  if (isTRUE(style$flip_y)) default_y_label <- tb_flip_comparison_label(default_y_label)
 
   # Fallback: check for BP/MF/CC or complex source tabs (older format)
   available_tabs <- character()
@@ -6051,6 +6069,10 @@ tb_render_2dgofcs_scatter_xy <- function(df, style, meta, x_label, y_label, plot
   if (!"score_y" %in% names(df)) {
     df$score_y <- 0
   }
+
+  # Flip axis scores (negate values to reverse enrichment direction)
+  if (isTRUE(style$flip_x)) df$score_x <- -df$score_x
+  if (isTRUE(style$flip_y)) df$score_y <- -df$score_y
 
   # Filter by ontology (BP/CC/MF toggle) - apply to both table and plot
   ontology_filter <- style$ontology_filter %||% "all"
@@ -6756,9 +6778,9 @@ tb_render_pathway_fcs <- function(results, style, meta) {
       analysis <- analyses[[comp_name]]
       comp_label <- analysis$score_label %||% {
         parts <- unlist(strsplit(comp_name, "_vs_", fixed = TRUE))
-        if (length(parts) == 2 && isTRUE(style$flip_fc)) parts <- rev(parts)
         paste0("log2(", paste(parts, collapse = "/"), ")")
       }
+      if (isTRUE(style$flip_fc)) comp_label <- tb_flip_comparison_label(comp_label)
       comp_results <- list(
         engine_id = "pathway_fcs",
         params = results$params,
