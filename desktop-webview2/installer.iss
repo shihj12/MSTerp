@@ -3,7 +3,7 @@
 ; portable R, R packages, and the Shiny app.
 
 #define MyAppName "MSTerp"
-#define MyAppVersion "1.1.08"
+#define MyAppVersion "1.2"
 #define MyAppPublisher "MSTerp"
 #define MyAppURL "https://github.com/shihj12/MSTerp"
 #define MyAppExeName "MSTerp.exe"
@@ -63,30 +63,42 @@ Root: HKLM; Subkey: "Software\Classes\.terpbase"; ValueType: string; ValueName: 
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpBase"; ValueType: string; ValueName: ""; ValueData: "TerpBase Database"; Flags: uninsdeletekey; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpBase\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\file-base.ico"; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpBase\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.terpbase\OpenWithProgids"; ValueType: none; ValueName: "MSTerp.TerpBase"; Flags: uninsdeletevalue; Tasks: fileassoc
 
 ; File associations — .complexbase
 Root: HKLM; Subkey: "Software\Classes\.complexbase"; ValueType: string; ValueName: ""; ValueData: "MSTerp.ComplexBase"; Flags: uninsdeletevalue; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.ComplexBase"; ValueType: string; ValueName: ""; ValueData: "ComplexBase Database"; Flags: uninsdeletekey; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.ComplexBase\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\file-base.ico"; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.ComplexBase\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.complexbase\OpenWithProgids"; ValueType: none; ValueName: "MSTerp.ComplexBase"; Flags: uninsdeletevalue; Tasks: fileassoc
 
 ; File associations — .metabobase
 Root: HKLM; Subkey: "Software\Classes\.metabobase"; ValueType: string; ValueName: ""; ValueData: "MSTerp.MetaboBase"; Flags: uninsdeletevalue; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.MetaboBase"; ValueType: string; ValueName: ""; ValueData: "MetaboBase Database"; Flags: uninsdeletekey; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.MetaboBase\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\file-base.ico"; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.MetaboBase\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.metabobase\OpenWithProgids"; ValueType: none; ValueName: "MSTerp.MetaboBase"; Flags: uninsdeletevalue; Tasks: fileassoc
 
 ; File associations — .terpbook
 Root: HKLM; Subkey: "Software\Classes\.terpbook"; ValueType: string; ValueName: ""; ValueData: "MSTerp.TerpBook"; Flags: uninsdeletevalue; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpBook"; ValueType: string; ValueName: ""; ValueData: "TerpBook Report"; Flags: uninsdeletekey; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpBook\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\file-book.ico"; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpBook\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.terpbook\OpenWithProgids"; ValueType: none; ValueName: "MSTerp.TerpBook"; Flags: uninsdeletevalue; Tasks: fileassoc
 
 ; File associations — .terpflow
 Root: HKLM; Subkey: "Software\Classes\.terpflow"; ValueType: string; ValueName: ""; ValueData: "MSTerp.TerpFlow"; Flags: uninsdeletevalue; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpFlow"; ValueType: string; ValueName: ""; ValueData: "TerpFlow Network"; Flags: uninsdeletekey; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpFlow\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\file-flow.ico"; Tasks: fileassoc
 Root: HKLM; Subkey: "Software\Classes\MSTerp.TerpFlow\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.terpflow\OpenWithProgids"; ValueType: none; ValueName: "MSTerp.TerpFlow"; Flags: uninsdeletevalue; Tasks: fileassoc
+
+; Clean stale Electron-era OpenWithProgids values (display names used as ProgIDs)
+Root: HKLM; Subkey: "Software\Classes\.terpbase\OpenWithProgids"; ValueType: none; ValueName: "TerpBase Database"; Flags: deletevalue; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.complexbase\OpenWithProgids"; ValueType: none; ValueName: "ComplexBase Database"; Flags: deletevalue; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.metabobase\OpenWithProgids"; ValueType: none; ValueName: "MetaboBase Database"; Flags: deletevalue; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.terpbook\OpenWithProgids"; ValueType: none; ValueName: "TerpBook Report"; Flags: deletevalue; Tasks: fileassoc
+Root: HKLM; Subkey: "Software\Classes\.terpflow\OpenWithProgids"; ValueType: none; ValueName: "TerpFlow Network"; Flags: deletevalue; Tasks: fileassoc
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
@@ -122,18 +134,28 @@ begin
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.metabobase');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpbook');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.terpflow');
+
+  // Remove stale HKLM display-name ProgID keys from Electron-era installer.
+  // These have DefaultIcon paths pointing to the old resources/ directory.
+  RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\TerpBase Database');
+  RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\ComplexBase Database');
+  RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\MetaboBase Database');
+  RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\TerpBook Report');
+  RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\TerpFlow Network');
 end;
+
+procedure SHChangeNotify(wEventId, uFlags, dwItem1, dwItem2: Integer);
+  external 'SHChangeNotify@shell32.dll stdcall';
 
 procedure RefreshIconCache;
 var
   ResultCode: Integer;
 begin
-  // Delete icon cache files
-  Exec('cmd.exe', '/c del /f /q "' + ExpandConstant('{localappdata}') + '\IconCache.db" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('cmd.exe', '/c del /f /q "' + ExpandConstant('{localappdata}') + '\Microsoft\Windows\Explorer\iconcache_*.db" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('cmd.exe', '/c del /f /q "' + ExpandConstant('{localappdata}') + '\Microsoft\Windows\Explorer\thumbcache_*.db" 2>nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Notify the shell that file associations changed — canonical API for
+  // forcing Windows to re-read ProgID / DefaultIcon entries.
+  SHChangeNotify($08000000, $0000, 0, 0);  // SHCNE_ASSOCCHANGED, SHCNF_IDLIST
 
-  // Force Explorer to rebuild icons from registry (Windows 10/11)
+  // Supplementary: ie4uinit refreshes shortcut and notification-area icons
   Exec('ie4uinit.exe', '-show', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
