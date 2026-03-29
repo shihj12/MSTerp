@@ -185,6 +185,8 @@ get_style_section <- function(field_name) {
     "show_row_labels", "show_labels", "venn_show_percentage",
     "show_pearson", "show_spearman", "show_kendall",
     "show_pathway_id", "show_go_id", "show_confidence",
+    "show_group_labels", "group_label_size", "group_label_alpha",
+    "group_label_color_mode", "group_label_flat_color", "group_label_bg",
     # Text sizes (font sizes for various text elements)
     "rho_text_size", "font_size", "label_font_size", "row_font_size",
     "value_label_size", "count_labels_size", "count_label_size",
@@ -1210,10 +1212,31 @@ res_wrap_conditionals <- function(node_id, field, ui) {
     cond <- sprintf("typeof input['%s'] === 'undefined' || input['%s'] == 'upset'", ctrl_plot, ctrl_plot)
   }
 
+  # PCA: Group label child fields only visible when show_group_labels is on
+  if (fname %in% c("group_label_size", "group_label_color_mode", "group_label_flat_color",
+                    "group_label_alpha", "group_label_bg")) {
+    ctrl <- res_field_input_id(node_id, "show_group_labels")
+    cond <- sprintf("input['%s'] == true", ctrl)
+  }
+
+  # PCA: Flat color picker only visible when label color mode is "flat"
+  if (fname == "group_label_flat_color") {
+    ctrl_show <- res_field_input_id(node_id, "show_group_labels")
+    ctrl_mode <- res_field_input_id(node_id, "group_label_color_mode")
+    cond <- sprintf("input['%s'] == true && input['%s'] == 'flat'", ctrl_show, ctrl_mode)
+  }
+
   # PCA: Scores-only controls (visible when NOT showing scree)
-  pca_scores_fields <- c("point_size", "point_alpha", "show_ellipse", "ellipse_alpha")
+  pca_scores_fields <- c("point_size", "point_alpha", "show_ellipse", "ellipse_alpha",
+                          "show_group_labels", "group_label_size", "group_label_color_mode",
+                          "group_label_flat_color", "group_label_alpha", "group_label_bg")
   if (fname %in% pca_scores_fields && is.null(cond)) {
     cond <- "input['res_pca_is_scree'] != true"
+  }
+  # PCA: Scores-only + scree-hidden compound condition for group label children
+  if (fname %in% c("group_label_size", "group_label_color_mode", "group_label_flat_color",
+                    "group_label_alpha", "group_label_bg") && !is.null(cond)) {
+    cond <- sprintf("(%s) && input['res_pca_is_scree'] != true", cond)
   }
 
   # PCA: Scree-only controls (visible when showing scree)
