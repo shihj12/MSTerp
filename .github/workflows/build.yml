@@ -42,6 +42,13 @@ jobs:
         shell: pwsh
         run: choco install innosetup -y --no-progress
 
+      - name: Inject version from tag into installer
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          (Get-Content desktop-webview2\installer.iss) -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$version`"" | Set-Content desktop-webview2\installer.iss
+          Write-Host "Installer version set to: $version"
+
       - name: Build installer
         shell: pwsh
         run: |
