@@ -176,7 +176,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         "idquant_cv_bar",
         "idquant_overlap",
         "idquant_overlap_detected",
-        "idquant_overlap_quantified"
+        "idquant_overlap_quantified",
+        "peptide_region"
       ),
       # Auto-appended, non-removable final substep within this container:
       forced_final_substep_engine_id = "peptide_aggregate_to_protein",
@@ -206,7 +207,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       supports_sequential = FALSE,
       accepted_input_levels = c("peptide"),
       locked_parent = TRUE,
-      allowed_child_engines = c("dataprocessor", "half_life"),
+      allowed_child_engines = c("dataprocessor", "half_life", "peptide_region"),
       forced_final_substep_engine_id = "peptide_aggregate_to_protein",
       forced_final_substep_params = list(method = "harmonic_mean"),
       exit_level = "protein",
@@ -2518,6 +2519,102 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       outputs = list(figures = c("gene_barchart"), tables = character(0), interactive = FALSE),
       render_spec = list(plots = c("gene_barchart"), tables = character(0), tabs = NULL)
+    ),
+
+    # ----------------------------
+    # Peptide Region
+    # ----------------------------
+    peptide_region = list(
+      engine_id = "peptide_region",
+      label = "Peptide Region",
+      category = "comparison",
+      supported_data_types = c("proteomics"),
+      description = "Scores proteins by peptide heterogeneity and FC disparity; detail view maps peptides to UniProt sequence with domain annotations.",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("peptide"),
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("peptide")
+      ),
+      params_schema = list(
+        msterp_schema_field(
+          "target_proteins", "string", "Target proteins",
+          default = "",
+          help = "Optional. Comma or newline separated UniProt IDs or gene symbols to highlight. If empty, all proteins are scored."
+        ),
+        msterp_schema_field(
+          "control_only", "bool", "Only compare against control",
+          default = TRUE,
+          help = "When a control group is defined, only generate comparisons against control. If no control group is defined, this is ignored."
+        ),
+        msterp_schema_field(
+          "aggregation_method", "choice", "Aggregation method",
+          default = "harmonic_mean",
+          choices = c("harmonic_mean", "arithmetic_mean", "median", "sum"),
+          choice_labels = c("Harmonic mean", "Arithmetic mean", "Median", "Sum"),
+          help = "How overlapping peptides are combined at each residue position in detail view."
+        ),
+        msterp_schema_field(
+          "min_peptides", "int", "Min peptides per protein",
+          default = 3L, min = 1L, max = 50L,
+          help = "Minimum number of peptide rows required to include a protein in scoring."
+        )
+      ),
+      style_schema = list(
+        msterp_schema_field(
+          "ctrl_color", "string", "Control track color",
+          default = "#2166AC"
+        ),
+        msterp_schema_field(
+          "treatment_color", "string", "Treatment track color",
+          default = "#B2182B"
+        ),
+        msterp_schema_field(
+          "fc_color", "string", "Fold-change track color",
+          default = "#7B2D8E"
+        ),
+        msterp_schema_field(
+          "show_peptide_markers", "bool", "Show peptide markers",
+          default = TRUE,
+          help = "Show tick marks where peptides map on the coverage tracks (detail view)."
+        ),
+        msterp_schema_field(
+          "track_alpha", "num", "Track fill opacity",
+          default = 0.85, min = 0.1, max = 1,
+          advanced = TRUE
+        ),
+        msterp_schema_field(
+          "title_text_size", "int", "Title size",
+          default = 16, min = 8, max = 32
+        ),
+        msterp_schema_field(
+          "axis_text_size", "int", "Axis text size",
+          default = 14, min = 6, max = 24,
+          advanced = TRUE
+        ),
+        msterp_schema_field(
+          "width", "num", "Plot width (in)",
+          default = 14, min = 4, max = 30,
+          advanced = TRUE
+        ),
+        msterp_schema_field(
+          "height", "num", "Plot height (in)",
+          default = 8, min = 3, max = 24,
+          advanced = TRUE
+        )
+      ),
+      viewer_schema = list(
+        msterp_schema_field(
+          "selected_protein", "choice", "Select protein",
+          default = "",
+          choices = c(""),
+          help = "Browse between target proteins (detail view only)."
+        )
+      ),
+      outputs = list(figures = c("peptide_region"), tables = c("protein_scores", "peptide_stats"), interactive = FALSE),
+      render_spec = list(plots = c("peptide_region"), tables = c("peptide_stats"), tabs = NULL)
     ),
 
     # ----------------------------

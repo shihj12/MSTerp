@@ -2014,7 +2014,8 @@ nr_engine_ids <- function() {
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
     "idquant_overlap", "idquant_overlap_detected", "idquant_overlap_quantified",
     "ppi_network", "multi_scatter", "multi_correlation", "multi_cross_correlation",
-    "msea", "pathway_fcs", "gene_barchart", "replicate_clustering")
+    "msea", "pathway_fcs", "gene_barchart", "replicate_clustering",
+    "peptide_region")
 }
 
 #' Get list of fully implemented engines (not stubs)
@@ -2034,7 +2035,8 @@ nr_implemented_engines <- function() {
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
     "idquant_overlap", "idquant_overlap_detected", "idquant_overlap_quantified",
     "ppi_network", "multi_scatter", "multi_correlation", "multi_cross_correlation",
-    "msea", "pathway_fcs", "gene_barchart", "replicate_clustering")
+    "msea", "pathway_fcs", "gene_barchart", "replicate_clustering",
+    "peptide_region")
 }
 
 #' Check if an engine is implemented (not a stub)
@@ -2199,6 +2201,7 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "msea"             = stats_msea_run(payload, payload$params, context),
     "pathway_fcs"      = stats_pathway_fcs_run(payload, payload$params, context),
     "replicate_clustering" = stats_replicate_clustering_run(payload, payload$params, context),
+    "peptide_region" = stats_peptide_region_run(payload, payload$params, context),
     # "class_enrichment" = stats_class_enrichment_run(payload, payload$params, context),
     # Unknown engine
     nr_engine_error_result(engine_id, sprintf("Engine '%s' not implemented", engine_id))

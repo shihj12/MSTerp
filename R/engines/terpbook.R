@@ -10361,6 +10361,467 @@ tb_render_replicate_clustering <- function(results, style, meta) {
   )
 }
 
+# ---- Peptide Region ----------------------------------------------------------
+
+tb_render_peptide_region <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
+
+  data <- results$data
+  if (is.null(data)) stop("peptide_region: results$data is missing")
+
+  mode <- data$mode %||% "overview"
+
+  if (identical(mode, "detail")) {
+    return(.pr_render_detail(data, style))
+  }
+
+  # ---- OVERVIEW MODE ----
+  scores <- data$protein_scores
+  if (is.null(scores) || !is.data.frame(scores) || nrow(scores) == 0) {
+    p_msg <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = "No proteins scored (check min_peptides threshold)",
+                        size = 5, color = "grey50") +
+      ggplot2::theme_void()
+    return(list(plots = list(peptide_region = p_msg), tables = list(), tabs = NULL))
+  }
+
+  n_groups <- data$n_groups %||% 1
+
+  display <- data.frame(
+    Gene            = scores$gene_symbol,
+    Protein         = scores$protein_id,
+    Peptides        = scores$n_peptides,
+    `Unique Peptides` = scores$n_unique_peptides,
+    `Peptide CV`    = round(scores$peptide_cv, 3),
+    `Replicate CV`  = round(scores$mean_replicate_cv, 3),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  if (n_groups >= 2) {
+    display[["Best FC Disparity"]] <- round(scores$best_fc_disparity, 3)
+    display[["Max Log2 FC"]]       <- round(scores$max_log2fc, 3)
+  }
+
+  display[["Score"]] <- round(scores$composite_score, 3)
+
+  if ("is_target" %in% names(scores)) {
+    display[["Target"]] <- ifelse(scores$is_target, "\u2605", "")
+  }
+
+  top_n <- min(20, nrow(scores))
+  top <- scores[seq_len(top_n), ]
+
+  p_summary <- ggplot2::ggplot(
+    top,
+    ggplot2::aes(
+      x = stats::reorder(.data$gene_symbol, .data$composite_score),
+      y = .data$composite_score
+    )
+  ) +
+    ggplot2::geom_col(fill = "#4E79A7", alpha = 0.85, width = 0.7) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(
+      title = sprintf("Top %d Proteins by Composite Score", top_n),
+      x = NULL, y = "Composite Score"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      plot.title         = ggplot2::element_text(face = "bold", size = 14),
+      panel.grid.major.y = ggplot2::element_blank(),
+      panel.grid.minor   = ggplot2::element_blank(),
+      axis.text.y        = ggplot2::element_text(size = 10)
+    )
+
+  list(
+    plots  = list(peptide_region = p_summary),
+    tables = list(protein_scores = display),
+    tabs   = NULL
+  )
+}
+
+# ---- Peptide Region: Detail Mode ----
+.pr_render_detail <- function(data, style) {
+  tb_require_pkg("patchwork")
+
+  prot <- data$protein
+  if (is.null(prot)) stop("peptide_region detail: protein data missing")
+
+  ctrl_color      <- as.character(style$ctrl_color %||% "#2166AC")[1]
+  treatment_color <- as.character(style$treatment_color %||% "#B2182B")[1]
+  fc_color        <- as.character(style$fc_color %||% "#7B2D8E")[1]
+  title_text_size <- tb_num(style$title_text_size, 16)
+  axis_text_size  <- tb_num(style$axis_text_size, 14)
+  track_alpha     <- tb_num(style$track_alpha, 0.85)
+  show_markers    <- isTRUE(style$show_peptide_markers %||% TRUE)
+
+  n_groups       <- data$n_groups %||% 1
+  gene_symbol    <- prot$gene_symbol %||% prot$uniprot_id
+  uniprot_id     <- prot$uniprot_id
+  protein_length <- prot$seq_length
+  comparisons    <- data$comparisons %||% list()
+
+  if (!isTRUE(prot$has_coverage) || length(comparisons) == 0) {
+    p_msg <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = paste0("No peptides mapped for ", gene_symbol,
+                                       " (", uniprot_id, ")"),
+                        size = 6, color = "grey50") +
+      ggplot2::theme_void()
+    return(list(plots = list(peptide_region = p_msg), tables = list(), tabs = NULL))
+  }
+
+  # Peptide marker data
+  marker_df <- NULL
+  if (show_markers && !is.null(prot$peptide_positions) && nrow(prot$peptide_positions) > 0) {
+    marker_df <- data.frame(
+      xmin = prot$peptide_positions$prot_start - 0.5,
+      xmax = prot$peptide_positions$prot_end + 0.5,
+      stringsAsFactors = FALSE
+    )
+    marker_df <- unique(marker_df)
+  }
+
+  # Build one composite plot per comparison
+  plots_out  <- list()
+  tables_out <- list()
+
+  for (comp_key in names(comparisons)) {
+    comp <- comparisons[[comp_key]]
+    coverage <- comp$coverage
+    ctrl_grp <- comp$ctrl_group
+    treat_grp <- comp$treatment_group
+
+    # Coverage %
+    first_col <- if ("ctrl_mean" %in% names(coverage)) "ctrl_mean" else names(coverage)[2]
+    n_covered <- sum(!is.na(coverage[[first_col]]))
+    cov_pct <- round(100 * n_covered / protein_length, 1)
+
+    # Protein feature bar (multi-layer)
+    p_bar <- .pr_build_protein_bar(
+      prot$features, protein_length, gene_symbol, uniprot_id,
+      title_text_size, cov_pct
+    )
+
+    if (n_groups >= 2 && !is.null(treat_grp)) {
+      p_ctrl <- .pr_build_track(
+        coverage, "ctrl_mean", ctrl_color, ctrl_grp,
+        protein_length, axis_text_size, alpha = track_alpha,
+        marker_df = marker_df
+      )
+      p_treat <- .pr_build_track(
+        coverage, "treatment_mean", treatment_color, treat_grp,
+        protein_length, axis_text_size, alpha = track_alpha,
+        marker_df = marker_df
+      )
+      p_fc <- .pr_build_track(
+        coverage, "fc", fc_color,
+        expression(Log[2]~FC),
+        protein_length, axis_text_size, show_x_axis = TRUE,
+        alpha = track_alpha, is_fc = TRUE,
+        ctrl_group = ctrl_grp, treatment_group = treat_grp
+      )
+      composed <- (p_bar / p_ctrl / p_treat / p_fc) +
+        patchwork::plot_layout(heights = c(1.2, 1.3, 1.3, 1.3))
+    } else {
+      # Single-group
+      p_val <- .pr_build_track(
+        coverage, "ctrl_mean", ctrl_color, ctrl_grp,
+        protein_length, axis_text_size, alpha = track_alpha,
+        marker_df = marker_df
+      )
+      cv_col <- if ("ctrl_cv" %in% names(coverage)) "ctrl_cv" else NULL
+      p_cv <- if (!is.null(cv_col)) {
+        .pr_build_track(
+          coverage, cv_col, "#E69F00", "CV",
+          protein_length, axis_text_size, alpha = 0.75,
+          marker_df = marker_df
+        )
+      } else {
+        ggplot2::ggplot() +
+          ggplot2::annotate("text", x = 0.5, y = 0.5,
+                            label = "CV requires > 1 replicate",
+                            size = 4, color = "grey60") +
+          ggplot2::theme_void()
+      }
+      p_depth <- .pr_build_track(
+        coverage, "depth", "#999999", "Depth",
+        protein_length, axis_text_size, show_x_axis = TRUE, alpha = 0.7
+      )
+      composed <- (p_bar / p_val / p_cv / p_depth) +
+        patchwork::plot_layout(heights = c(1.2, 1.3, 1.3, 1.3))
+    }
+
+    composed <- composed &
+      ggplot2::theme(plot.margin = ggplot2::margin(1, 10, 1, 10))
+
+    plots_out[[comp_key]] <- composed
+
+    if (!is.null(comp$peptide_stats)) {
+      tables_out[[paste0("peptide_stats_", comp_key)]] <- comp$peptide_stats
+    }
+  }
+
+  # If single comparison, use simple key
+  if (length(plots_out) == 1) {
+    names(plots_out) <- "peptide_region"
+    names(tables_out) <- "peptide_stats"
+  }
+
+  list(plots = plots_out, tables = tables_out, tabs = NULL)
+}
+
+# ---- Peptide Region: Multi-layer Protein Feature Bar ----
+.pr_build_protein_bar <- function(features_df, protein_length, gene_symbol,
+                                   uniprot_id, title_size = 16,
+                                   coverage_pct = NULL) {
+  # Feature category definitions: type → (category, color, y_min, y_max)
+  category_map <- list(
+    # Domains: full height, semi-transparent
+    "Domain"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.0,  ymax = 1.0, alpha = 0.35),
+    "Repeat"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.0,  ymax = 1.0, alpha = 0.35),
+    "Region"           = list(cat = "Domains",      color = "#76B7B2", ymin = 0.0,  ymax = 1.0, alpha = 0.25),
+    "Motif"            = list(cat = "Domains",      color = "#59A14F", ymin = 0.0,  ymax = 1.0, alpha = 0.25),
+    "Coiled coil"      = list(cat = "Domains",      color = "#EDC948", ymin = 0.0,  ymax = 1.0, alpha = 0.25),
+    # Topology
+    "Transmembrane"    = list(cat = "Topology",     color = "#E15759", ymin = 0.76, ymax = 0.94, alpha = 0.85),
+    "Topological domain" = list(cat = "Topology",   color = "#F28E2B", ymin = 0.76, ymax = 0.94, alpha = 0.55),
+    "Intramembrane"    = list(cat = "Topology",     color = "#B07AA1", ymin = 0.76, ymax = 0.94, alpha = 0.85),
+    # Processing
+    "Signal"           = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.56, ymax = 0.72, alpha = 0.80),
+    "Transit peptide"  = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.56, ymax = 0.72, alpha = 0.80),
+    "Propeptide"       = list(cat = "Processing",   color = "#FFBE7D", ymin = 0.56, ymax = 0.72, alpha = 0.80),
+    "Chain"            = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.56, ymax = 0.72, alpha = 0.50),
+    "Peptide"          = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.56, ymax = 0.72, alpha = 0.80),
+    "Initiator methionine" = list(cat = "Processing", color = "#FF9DA7", ymin = 0.56, ymax = 0.72, alpha = 0.80),
+    # Binding / Sites
+    "Active site"      = list(cat = "Binding",      color = "#E15759", ymin = 0.36, ymax = 0.52, alpha = 0.90),
+    "Binding site"     = list(cat = "Binding",      color = "#F28E2B", ymin = 0.36, ymax = 0.52, alpha = 0.85),
+    "Site"             = list(cat = "Binding",      color = "#86BCB6", ymin = 0.36, ymax = 0.52, alpha = 0.80),
+    "DNA binding"      = list(cat = "Binding",      color = "#499894", ymin = 0.36, ymax = 0.52, alpha = 0.85),
+    "Nucleotide binding" = list(cat = "Binding",    color = "#59A14F", ymin = 0.36, ymax = 0.52, alpha = 0.85),
+    "Metal binding"    = list(cat = "Binding",      color = "#B6992D", ymin = 0.36, ymax = 0.52, alpha = 0.85),
+    "Calcium binding"  = list(cat = "Binding",      color = "#B6992D", ymin = 0.36, ymax = 0.52, alpha = 0.85),
+    "Zinc finger"      = list(cat = "Binding",      color = "#B6992D", ymin = 0.36, ymax = 0.52, alpha = 0.85),
+    # Modifications
+    "Modified residue" = list(cat = "Modification", color = "#B07AA1", ymin = 0.16, ymax = 0.32, alpha = 0.80),
+    "Disulfide bond"   = list(cat = "Modification", color = "#E15759", ymin = 0.16, ymax = 0.32, alpha = 0.80),
+    "Glycosylation"    = list(cat = "Modification", color = "#59A14F", ymin = 0.16, ymax = 0.32, alpha = 0.80),
+    "Lipidation"       = list(cat = "Modification", color = "#EDC948", ymin = 0.16, ymax = 0.32, alpha = 0.80),
+    "Cross-link"       = list(cat = "Modification", color = "#FF9DA7", ymin = 0.16, ymax = 0.32, alpha = 0.80)
+  )
+
+  # Category label colors for right-side annotations
+  cat_colors <- c(
+    Domains = "#4E79A7", Topology = "#E15759", Processing = "#FF9DA7",
+    Binding = "#F28E2B", Modification = "#B07AA1"
+  )
+  cat_y <- c(Domains = 0.5, Topology = 0.85, Processing = 0.64,
+             Binding = 0.44, Modification = 0.24)
+
+  p <- ggplot2::ggplot() +
+    # Background bar
+    ggplot2::geom_rect(ggplot2::aes(xmin = 0.5, xmax = protein_length + 0.5,
+                                     ymin = 0, ymax = 1),
+                       fill = "grey92", color = "grey50", linewidth = 0.3)
+
+  site_width <- max(2, protein_length * 0.006)
+  cats_present <- character(0)
+
+  for (i in seq_len(nrow(features_df))) {
+    ft_type <- features_df$type[i]
+    mapping <- category_map[[ft_type]]
+    if (is.null(mapping)) next
+
+    s <- features_df$start[i]
+    e <- features_df$end[i]
+    if (is.na(s) || is.na(e)) next
+
+    xmin <- if (s == e) s - site_width else s - 0.5
+    xmax <- if (s == e) e + site_width else e + 0.5
+
+    p <- p +
+      ggplot2::annotate("rect", xmin = xmin, xmax = xmax,
+                        ymin = mapping$ymin, ymax = mapping$ymax,
+                        fill = mapping$color, alpha = mapping$alpha,
+                        color = NA)
+
+    cats_present <- union(cats_present, mapping$cat)
+
+    # Domain labels (full-height features only, if wide enough)
+    if (identical(mapping$cat, "Domains") && mapping$ymax == 1.0) {
+      seg_w <- xmax - xmin
+      if (seg_w > protein_length * 0.07) {
+        label <- features_df$description[i]
+        if (nzchar(label)) {
+          p <- p +
+            ggplot2::annotate("text", x = (xmin + xmax) / 2, y = 0.5,
+                              label = label, size = 2.2, color = "grey20",
+                              fontface = "bold")
+        }
+      }
+    }
+  }
+
+  # Category labels on right edge
+  for (cat_name in cats_present) {
+    p <- p +
+      ggplot2::annotate("text",
+                        x = protein_length * 1.03 + 0.5,
+                        y = cat_y[[cat_name]] %||% 0.5,
+                        label = cat_name, size = 2, color = cat_colors[[cat_name]] %||% "grey40",
+                        hjust = 0, fontface = "plain")
+  }
+
+  # N/C terminals
+  p <- p +
+    ggplot2::annotate("text", x = -protein_length * 0.02, y = 0.5,
+                      label = "N", fontface = "bold.italic", size = 3,
+                      hjust = 1, color = "grey30") +
+    ggplot2::annotate("text", x = protein_length * 1.02 + 0.5, y = 0.5,
+                      label = "C", fontface = "bold.italic", size = 3,
+                      hjust = 1, color = "grey30")
+
+  # Title + subtitle
+  title_text <- paste0(gene_symbol, "  (", uniprot_id, ")")
+  sub_parts <- paste0(protein_length, " aa")
+  if (!is.null(coverage_pct)) sub_parts <- paste0(sub_parts, "  \u2022  ", coverage_pct, "% covered")
+
+  p <- p +
+    ggplot2::labs(title = title_text, subtitle = sub_parts) +
+    ggplot2::scale_x_continuous(
+      limits = c(-protein_length * 0.03, protein_length * 1.12),
+      expand = c(0, 0)
+    ) +
+    ggplot2::coord_cartesian(ylim = c(-0.02, 1.02), clip = "off") +
+    ggplot2::theme_void(base_size = 11) +
+    ggplot2::theme(
+      plot.title    = ggplot2::element_text(face = "bold", hjust = 0.5,
+                                             size = title_size,
+                                             margin = ggplot2::margin(b = 1)),
+      plot.subtitle = ggplot2::element_text(hjust = 0.5, size = title_size - 4,
+                                             color = "grey45",
+                                             margin = ggplot2::margin(b = 3)),
+      plot.margin   = ggplot2::margin(4, 10, 0, 10)
+    )
+
+  p
+}
+
+# ---- Peptide Region: Coverage track ----
+.pr_build_track <- function(coverage, col_name, fill_color, y_label,
+                             protein_length, axis_text_size = 14,
+                             show_x_axis = FALSE, alpha = 0.85,
+                             is_fc = FALSE, marker_df = NULL,
+                             ctrl_group = "Ctrl", treatment_group = "Treatment") {
+  vals <- coverage[[col_name]]
+  if (is.null(vals)) {
+    return(ggplot2::ggplot() +
+             ggplot2::annotate("text", x = 0.5, y = 0.5,
+                               label = paste("No data for", col_name),
+                               size = 4, color = "grey60") +
+             ggplot2::theme_void())
+  }
+
+  covered <- coverage[!is.na(vals), , drop = FALSE]
+  covered$val <- vals[!is.na(vals)]
+
+  if (nrow(covered) == 0) {
+    return(ggplot2::ggplot() +
+             ggplot2::annotate("text", x = 0.5, y = 0.5,
+                               label = paste("No data for", col_name),
+                               size = 4, color = "grey60") +
+             ggplot2::theme_void())
+  }
+
+  if (is_fc) {
+    covered$val <- log2(covered$val)
+    covered$val[!is.finite(covered$val)] <- NA_real_
+    covered <- covered[!is.na(covered$val), , drop = FALSE]
+    if (nrow(covered) == 0) {
+      return(ggplot2::ggplot() +
+               ggplot2::annotate("text", x = 0.5, y = 0.5,
+                                 label = "No finite fold-change values",
+                                 size = 4, color = "grey60") +
+               ggplot2::theme_void())
+    }
+    y_max <- max(abs(covered$val), na.rm = TRUE) * 1.2
+    y_min <- -y_max
+    y_label <- expression(Log[2]~FC)
+  } else {
+    y_max <- max(covered$val, na.rm = TRUE) * 1.15
+    y_min <- 0
+  }
+
+  ats <- tb_num(axis_text_size, 14)
+
+  p <- ggplot2::ggplot(covered, ggplot2::aes(x = .data$residue, y = .data$val))
+
+  # Peptide markers (subtle background)
+  if (!is.null(marker_df) && nrow(marker_df) > 0) {
+    p <- p +
+      ggplot2::geom_rect(
+        data = marker_df,
+        ggplot2::aes(xmin = .data$xmin, xmax = .data$xmax, ymin = -Inf, ymax = Inf),
+        inherit.aes = FALSE, fill = "#000000", alpha = 0.03
+      )
+  }
+
+  p <- p +
+    ggplot2::geom_col(width = 1, fill = fill_color, color = NA, alpha = alpha)
+
+  if (is_fc) {
+    if (y_max > 1) {
+      p <- p + ggplot2::annotate("rect", xmin = -Inf, xmax = Inf, ymin = -1, ymax = 1,
+                                  fill = "grey90", alpha = 0.25)
+    }
+    p <- p + ggplot2::geom_hline(yintercept = 0, linewidth = 0.35, color = "grey30")
+  }
+
+  p <- p +
+    ggplot2::labs(y = y_label) +
+    ggplot2::scale_x_continuous(
+      limits = c(-protein_length * 0.03, protein_length * 1.03 + 0.5),
+      expand = c(0, 0)
+    ) +
+    ggplot2::scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) +
+    ggplot2::coord_cartesian(ylim = c(y_min, y_max)) +
+    ggplot2::theme_classic(base_size = 10) +
+    ggplot2::theme(
+      panel.grid.major.y = ggplot2::element_line(color = "grey93", linetype = "dashed",
+                                                  linewidth = 0.25),
+      panel.grid.major.x = ggplot2::element_blank(),
+      axis.line          = ggplot2::element_line(color = "grey40", linewidth = 0.25),
+      axis.ticks         = ggplot2::element_line(color = "grey40", linewidth = 0.25),
+      axis.title.x       = ggplot2::element_blank(),
+      axis.text.x        = ggplot2::element_blank(),
+      axis.ticks.x       = ggplot2::element_blank(),
+      axis.title.y       = ggplot2::element_text(size = ats - 3, color = "grey30"),
+      axis.text.y        = ggplot2::element_text(size = ats - 5, color = "grey40"),
+      plot.margin        = ggplot2::margin(1, 10, 1, 10)
+    )
+
+  if (show_x_axis) {
+    p <- p +
+      ggplot2::scale_x_continuous(
+        name = "Residue",
+        limits = c(-protein_length * 0.03, protein_length * 1.03 + 0.5),
+        expand = c(0, 0),
+        breaks = scales::breaks_pretty(n = 6)
+      ) +
+      ggplot2::theme(
+        axis.text.x  = ggplot2::element_text(size = ats - 5, color = "grey40"),
+        axis.ticks.x = ggplot2::element_line(color = "grey40", linewidth = 0.25),
+        axis.title.x = ggplot2::element_text(size = ats - 3, color = "grey30",
+                                              margin = ggplot2::margin(t = 3)),
+        plot.margin  = ggplot2::margin(1, 10, 4, 10)
+      )
+  }
+
+  p
+}
+
 # ---- Dispatcher --------------------------------------------------------------
 
 terpbook_render_node <- function(engine_id, results, effective_state, registry = NULL, node_meta = NULL) {
@@ -10445,6 +10906,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "multi_scatter" = tb_render_multi_scatter(results, style, meta),
     "multi_correlation" = tb_render_multi_correlation(results, style, meta),
     "replicate_clustering" = tb_render_replicate_clustering(results, style, meta),
+    "peptide_region" = tb_render_peptide_region(results, style, meta),
     {
       # Fallback for unknown engines
       plots <- list()

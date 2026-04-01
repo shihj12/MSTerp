@@ -1,6 +1,7 @@
 # R/ui_shell.R
 msterp_theme_head <- function() {
   tags$head(
+    tags$link(rel = "icon", type = "image/png", href = "img/MSTerpLogo.png"),
     tags$link(
       rel = "preload",
       href = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap",

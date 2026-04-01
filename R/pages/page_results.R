@@ -1039,6 +1039,11 @@ res_field_ui_core <- function(node_id, field, value_override = NULL, dynamic_cho
     return(selectInput(id, label, choices = dynamic_choices, selected = val %||% dynamic_choices[[1]]))
   }
 
+  # Special handling for selected_protein: use dynamic choices from peptide_region results data
+  if (identical(nm, "selected_protein") && !is.null(dynamic_choices) && length(dynamic_choices) > 0) {
+    return(selectInput(id, label, choices = dynamic_choices, selected = val %||% dynamic_choices[[1]]))
+  }
+
   if (identical(type, "bool")) {
     return(checkboxInput(id, label, value = isTRUE(val)))
   }
@@ -5081,6 +5086,17 @@ page_results_server <- function(input, output, session) {
       }
     }
 
+    # Protein selector for peptide_region engine (detail mode only)
+    # In overview mode, just strip selected_protein from schema to prevent accordion crash
+    protein_selector_ui <- NULL
+    if (eng_lower == "peptide_region") {
+      # Always remove selected_protein from schema to prevent empty-choice crash
+      sp_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "selected_protein"), logical(1)))
+      if (length(sp_idx) > 0) {
+        schema <- schema[-sp_idx[[1]]]
+      }
+    }
+
     # Cluster selector for PPI Network engine
     # IMPORTANT: Always extract selected_cluster from schema first to prevent
     # "subscript out of bounds" when it falls through to generic choice renderer
@@ -5363,6 +5379,40 @@ page_results_server <- function(input, output, session) {
       }
     }
 
+    # Build peptide region detail panel for overview mode
+    peptide_region_detail_panel_ui <- NULL
+    if (eng_lower == "peptide_region") {
+      res <- isolate(active_results())
+      if (!is.null(res) && identical(res$data$mode, "overview") &&
+          !is.null(res$data$protein_scores) && nrow(res$data$protein_scores) > 0) {
+        n_proteins <- nrow(res$data$protein_scores)
+        peptide_region_detail_panel_ui <- div(
+          style = "margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-light);",
+          tags$h6(
+            style = "font-weight: 600; margin-bottom: 10px; color: var(--text-primary);",
+            "Protein Detail View"
+          ),
+          tags$small(
+            class = "text-muted d-block mb-2",
+            sprintf("%d proteins scored. Select proteins from the table, then create detail views.", n_proteins)
+          ),
+          textAreaInput(
+            "res_peptide_region_protein_ids",
+            "UniProt IDs or gene symbols",
+            value = "",
+            rows = 3,
+            placeholder = "P07602, PSAP\nTMEM106B"
+          ),
+          actionButton(
+            "res_peptide_region_view_detail",
+            "Create Detail Views",
+            class = "btn btn-outline-primary btn-sm",
+            style = "width: 100%; margin-top: 4px;"
+          )
+        )
+      }
+    }
+
     # Build rankplot GO-ORA panel (for sending highlighted genes to GO-ORA)
     # Uses uiOutput for dynamic gene count updates as style changes
     rankplot_goora_panel_ui <- NULL
@@ -5450,12 +5500,14 @@ page_results_server <- function(input, output, session) {
       mode_controls,
       selected_group_ui,  # Group selector at top for hor_dis/vert_dis/rankplot
       gene_selector_ui,   # Gene selector for gene_barchart
+      protein_selector_ui,  # Protein selector for peptide_region
       cluster_selector_ui,  # Cluster selector for PPI network
       selectors_ui,       # Selector fields (always visible, not in accordions)
       accordions_ui,      # Accordion panels for grouped fields
       table_filter_ui,    # Table filters for GO engines
       cluster_panel_ui,   # Cluster analysis for heatmap engines
       gene_barchart_panel_ui,  # Gene bar chart creation for heatmap engines
+      peptide_region_detail_panel_ui,  # Protein detail view creation for peptide_region
       rankplot_label_input_ui,  # Gene labels for rankplot
       rankplot_goora_panel_ui   # GO-ORA for rankplot highlighted genes
       # Apply button and reset override removed - updates happen automatically
@@ -10398,6 +10450,123 @@ page_results_server <- function(input, output, session) {
     }
 
     rv$pending_gene_barchart <- NULL
+  }, ignoreInit = TRUE)
+
+  # ---- Peptide Region: Create Detail Views ----
+  observeEvent(input$res_peptide_region_view_detail, {
+    res <- isolate(active_results())
+    if (is.null(res) || !identical(res$data$mode, "overview")) {
+      showNotification("No overview results available.", type = "warning")
+      return()
+    }
+
+    # Parse protein IDs / gene symbols from text input
+    raw_input <- input$res_peptide_region_protein_ids %||% ""
+    input_ids <- trimws(unlist(strsplit(raw_input, "[,;\n\r]+")))
+    input_ids <- input_ids[nzchar(input_ids)]
+    input_ids <- unique(input_ids)
+
+    if (length(input_ids) == 0) {
+      showNotification("Please enter at least one UniProt ID or gene symbol.", type = "warning")
+      return()
+    }
+
+    # Resolve gene symbols → protein IDs using the gene_to_prot map
+    scored_ids <- res$data$protein_scores$protein_id
+    gene_to_prot <- res$data$gene_to_prot %||% list()
+    valid_ids <- character(0)
+    invalid_ids <- character(0)
+
+    for (entry in input_ids) {
+      if (entry %in% scored_ids) {
+        valid_ids <- c(valid_ids, entry)
+      } else if (entry %in% names(gene_to_prot)) {
+        resolved <- intersect(gene_to_prot[[entry]], scored_ids)
+        if (length(resolved) > 0) {
+          valid_ids <- c(valid_ids, resolved)
+        } else {
+          invalid_ids <- c(invalid_ids, entry)
+        }
+      } else {
+        invalid_ids <- c(invalid_ids, entry)
+      }
+    }
+    valid_ids <- unique(valid_ids)
+
+    if (length(invalid_ids) > 0) {
+      showNotification(
+        sprintf("Skipping %d unrecognized ID(s): %s",
+                length(invalid_ids), paste(head(invalid_ids, 5), collapse = ", ")),
+        type = "warning", duration = 6
+      )
+    }
+    if (length(valid_ids) == 0) {
+      showNotification("None of the entered IDs/symbols match scored proteins.", type = "error")
+      return()
+    }
+
+    node <- isolate(rv$nodes_df[rv$nodes_df$node_id == rv$active_node_id, ])
+    if (nrow(node) == 0) return()
+    node_dir <- node$node_dir[[1]]
+
+    n_created <- 0
+    withProgress(message = "Creating detail views...", value = 0, {
+      for (i in seq_along(valid_ids)) {
+        pid <- valid_ids[i]
+        incProgress(1 / length(valid_ids), detail = pid)
+
+        detail_results <- tryCatch(
+          pr_compute_detail(pid, res$data),
+          error = function(e) {
+            showNotification(sprintf("Error for %s: %s", pid, e$message), type = "warning")
+            NULL
+          }
+        )
+        if (is.null(detail_results)) next
+
+        # Gene symbol for label
+        gene_sym <- detail_results$data$protein$gene_symbol %||% pid
+
+        views_dir <- file.path(node_dir, "views")
+        existing <- if (dir.exists(views_dir)) list.files(views_dir, pattern = "peptide_region_detail") else character(0)
+        view_num <- length(existing) + 1
+        view_id <- sprintf("peptide_region_detail_%s_%d", gsub("[^A-Za-z0-9]", "", pid), view_num)
+        label <- sprintf("Peptide Region: %s (%s)", gene_sym, pid)
+
+        view_dir <- tryCatch(
+          tb_create_child_view(
+            parent_dir = node_dir,
+            view_id = view_id,
+            engine_id = "peptide_region",
+            label = label,
+            params = list(mode = "detail", detail_protein = pid),
+            style = list(feature_type = "Domain")
+          ),
+          error = function(e) {
+            showNotification(sprintf("Error creating view for %s: %s", pid, e$message), type = "warning")
+            NULL
+          }
+        )
+
+        if (!is.null(view_dir)) {
+          tryCatch({
+            tb_save_child_results(view_dir, detail_results)
+            n_created <- n_created + 1
+          }, error = function(e) {
+            showNotification(sprintf("Error saving %s: %s", pid, e$message), type = "warning")
+          })
+        }
+      }
+    })
+
+    if (n_created > 0) {
+      showNotification(
+        sprintf("Created %d detail view%s", n_created, if (n_created != 1) "s" else ""),
+        type = "message"
+      )
+      rv$nodes_df <- tb_nodes_df(rv$run_root, rv$manifest, registry = res_registry())
+      tb_cache_clear()
+    }
   }, ignoreInit = TRUE)
 
   # ---- Manage features in existing gene_barchart ----
