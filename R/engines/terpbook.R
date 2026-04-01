@@ -10675,17 +10675,28 @@ tb_render_peptide_region <- function(results, style, meta) {
 
     cats_present <- union(cats_present, mapping$cat)
 
-    # Domain labels (full-height features only, if wide enough)
-    if (identical(mapping$cat, "Domains") && mapping$ymax == 1.0) {
-      seg_w <- xmax - xmin
-      if (seg_w > protein_length * 0.07) {
-        label <- features_df$description[i]
-        if (nzchar(label)) {
-          p <- p +
-            ggplot2::annotate("text", x = (xmin + xmax) / 2, y = 0.5,
-                              label = label, size = 2.2, color = "grey20",
-                              fontface = "bold")
-        }
+    # Text labels inside features (if wide enough to fit)
+    seg_w <- xmax - xmin
+    label_y <- (mapping$ymin + mapping$ymax) / 2
+    # Full-height domains: larger threshold, centered text
+    # Thin strips: smaller threshold, smaller text
+    is_full <- (mapping$ymax - mapping$ymin) > 0.5
+    min_w <- if (is_full) protein_length * 0.07 else protein_length * 0.05
+    label_size <- if (is_full) 2.2 else 1.8
+    label_color <- if (is_full) "grey20" else "white"
+
+    if (seg_w > min_w) {
+      label <- features_df$description[i]
+      # For site-like features with empty description, use the type name
+      if (!nzchar(label)) label <- ft_type
+      if (nzchar(label)) {
+        # Truncate long labels to fit
+        max_chars <- max(3L, as.integer(seg_w / (protein_length * 0.012)))
+        if (nchar(label) > max_chars) label <- paste0(substr(label, 1, max_chars - 1), "\u2026")
+        p <- p +
+          ggplot2::annotate("text", x = (xmin + xmax) / 2, y = label_y,
+                            label = label, size = label_size, color = label_color,
+                            fontface = "bold")
       }
     }
   }
