@@ -2581,6 +2581,41 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           help = "Show Control/Treatment instead of Treatment/Control on the FC track."
         ),
         msterp_schema_field(
+          "value_transform", "choice", "Value track transform",
+          default = "none",
+          choices = c("none", "log2", "log10"),
+          choice_labels = c("None", "Log2", "Log10"),
+          help = "Apply log transform to control and treatment value tracks."
+        ),
+        msterp_schema_field(
+          "value_y_range", "choice", "Value track Y range",
+          default = "auto",
+          choices = c("auto", "manual"),
+          choice_labels = c("Auto", "Manual"),
+          help = "Auto scales to data; Manual lets you set a fixed max."
+        ),
+        msterp_schema_field(
+          "value_y_max", "num", "Value Y max",
+          default = 10,
+          min = 0, max = 10000,
+          advanced = TRUE,
+          help = "Maximum Y value for control and treatment tracks (when Manual)."
+        ),
+        msterp_schema_field(
+          "fc_y_range", "choice", "FC track Y range",
+          default = "auto",
+          choices = c("auto", "manual"),
+          choice_labels = c("Auto", "Manual"),
+          help = "Auto scales to data; Manual lets you set a symmetric range."
+        ),
+        msterp_schema_field(
+          "fc_y_abs", "num", "FC Y absolute max",
+          default = 3,
+          min = 0.1, max = 20,
+          advanced = TRUE,
+          help = "Symmetric Y range for FC track: -val to +val (when Manual)."
+        ),
+        msterp_schema_field(
           "show_peptide_markers", "bool", "Show peptide markers",
           default = TRUE,
           help = "Show tick marks where peptides map on the coverage tracks (detail view)."

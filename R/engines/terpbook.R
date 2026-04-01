@@ -10483,6 +10483,11 @@ tb_render_peptide_region <- function(results, style, meta) {
   show_markers      <- isTRUE(style$show_peptide_markers %||% TRUE)
   feature_text_size <- tb_num(style$feature_text_size, 2)
   flip_fc           <- isTRUE(style$flip_fc %||% FALSE)
+  value_transform   <- as.character(style$value_transform %||% "none")[1]
+  value_y_range     <- as.character(style$value_y_range %||% "auto")[1]
+  value_y_max       <- tb_num(style$value_y_max, 10)
+  fc_y_range        <- as.character(style$fc_y_range %||% "auto")[1]
+  fc_y_abs          <- tb_num(style$fc_y_abs, 3)
 
   n_groups       <- data$n_groups %||% 1
   gene_symbol    <- prot$gene_symbol %||% prot$uniprot_id
@@ -10536,18 +10541,23 @@ tb_render_peptide_region <- function(results, style, meta) {
       p_ctrl <- .pr_build_track(
         coverage, "ctrl_mean", ctrl_color, ctrl_grp,
         protein_length, axis_text_size, alpha = track_alpha,
-        marker_df = marker_df
+        marker_df = marker_df,
+        log_transform = value_transform,
+        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
       )
       p_treat <- .pr_build_track(
         coverage, "treatment_mean", treatment_color, treat_grp,
         protein_length, axis_text_size, alpha = track_alpha,
-        marker_df = marker_df
+        marker_df = marker_df,
+        log_transform = value_transform,
+        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
       )
       p_fc <- .pr_build_track(
         coverage, "fc", fc_color, NULL,
         protein_length, axis_text_size, show_x_axis = TRUE,
         alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
-        ctrl_group = ctrl_grp, treatment_group = treat_grp
+        ctrl_group = ctrl_grp, treatment_group = treat_grp,
+        manual_y_max = if (identical(fc_y_range, "manual")) fc_y_abs else NULL
       )
       composed <- (p_bar / p_ctrl / p_treat / p_fc) +
         patchwork::plot_layout(heights = c(1.2, 1.3, 1.3, 1.3))
@@ -10556,7 +10566,9 @@ tb_render_peptide_region <- function(results, style, meta) {
       p_val <- .pr_build_track(
         coverage, "ctrl_mean", ctrl_color, ctrl_grp,
         protein_length, axis_text_size, alpha = track_alpha,
-        marker_df = marker_df
+        marker_df = marker_df,
+        log_transform = value_transform,
+        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
       )
       cv_col <- if ("ctrl_cv" %in% names(coverage)) "ctrl_cv" else NULL
       p_cv <- if (!is.null(cv_col)) {
@@ -10734,7 +10746,8 @@ tb_render_peptide_region <- function(results, style, meta) {
                              protein_length, axis_text_size = 14,
                              show_x_axis = FALSE, alpha = 0.85,
                              is_fc = FALSE, flip_fc = FALSE, marker_df = NULL,
-                             ctrl_group = "Ctrl", treatment_group = "Treatment") {
+                             ctrl_group = "Ctrl", treatment_group = "Treatment",
+                             log_transform = "none", manual_y_max = NULL) {
   vals <- coverage[[col_name]]
   if (is.null(vals)) {
     return(ggplot2::ggplot() +
@@ -10767,17 +10780,50 @@ tb_render_peptide_region <- function(results, style, meta) {
                                  size = 4, color = "grey60") +
                ggplot2::theme_void())
     }
-    y_max <- max(abs(covered$val), na.rm = TRUE) * 1.2
+    if (!is.null(manual_y_max)) {
+      y_max <- abs(manual_y_max)
+    } else {
+      y_max <- max(abs(covered$val), na.rm = TRUE) * 1.2
+    }
     y_min <- -y_max
-    # Explicit comparison in label: Log2 (Numerator/Denominator)
     if (flip_fc) {
       y_label <- bquote(Log[2] ~ "(" ~ .(ctrl_group) ~ "/" ~ .(treatment_group) ~ ")")
     } else {
       y_label <- bquote(Log[2] ~ "(" ~ .(treatment_group) ~ "/" ~ .(ctrl_group) ~ ")")
     }
   } else {
-    y_max <- max(covered$val, na.rm = TRUE) * 1.15
-    y_min <- 0
+    # Apply log transform to value tracks
+    log_transform <- log_transform %||% "none"
+    if (identical(log_transform, "log2")) {
+      covered$val <- log2(covered$val)
+      covered$val[!is.finite(covered$val)] <- NA_real_
+      covered <- covered[!is.na(covered$val), , drop = FALSE]
+      if (!is.null(y_label) && is.character(y_label)) {
+        y_label <- paste0("Log2 ", y_label)
+      }
+    } else if (identical(log_transform, "log10")) {
+      covered$val <- log10(covered$val)
+      covered$val[!is.finite(covered$val)] <- NA_real_
+      covered <- covered[!is.na(covered$val), , drop = FALSE]
+      if (!is.null(y_label) && is.character(y_label)) {
+        y_label <- paste0("Log10 ", y_label)
+      }
+    }
+
+    if (nrow(covered) == 0) {
+      return(ggplot2::ggplot() +
+               ggplot2::annotate("text", x = 0.5, y = 0.5,
+                                 label = "No finite values after transform",
+                                 size = 4, color = "grey60") +
+               ggplot2::theme_void())
+    }
+
+    if (!is.null(manual_y_max)) {
+      y_max <- manual_y_max
+    } else {
+      y_max <- max(covered$val, na.rm = TRUE) * 1.15
+    }
+    y_min <- if (any(covered$val < 0, na.rm = TRUE)) min(covered$val, na.rm = TRUE) * 1.15 else 0
   }
 
   ats <- tb_num(axis_text_size, 14)
