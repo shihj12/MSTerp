@@ -10474,13 +10474,15 @@ tb_render_peptide_region <- function(results, style, meta) {
   prot <- data$protein
   if (is.null(prot)) stop("peptide_region detail: protein data missing")
 
-  ctrl_color      <- as.character(style$ctrl_color %||% "#2166AC")[1]
-  treatment_color <- as.character(style$treatment_color %||% "#B2182B")[1]
-  fc_color        <- as.character(style$fc_color %||% "#7B2D8E")[1]
-  title_text_size <- tb_num(style$title_text_size, 16)
-  axis_text_size  <- tb_num(style$axis_text_size, 14)
-  track_alpha     <- tb_num(style$track_alpha, 0.85)
-  show_markers    <- isTRUE(style$show_peptide_markers %||% TRUE)
+  ctrl_color        <- as.character(style$ctrl_color %||% "#2166AC")[1]
+  treatment_color   <- as.character(style$treatment_color %||% "#B2182B")[1]
+  fc_color          <- as.character(style$fc_color %||% "#7B2D8E")[1]
+  title_text_size   <- tb_num(style$title_text_size, 16)
+  axis_text_size    <- tb_num(style$axis_text_size, 14)
+  track_alpha       <- tb_num(style$track_alpha, 0.85)
+  show_markers      <- isTRUE(style$show_peptide_markers %||% TRUE)
+  feature_text_size <- tb_num(style$feature_text_size, 2)
+  flip_fc           <- isTRUE(style$flip_fc %||% FALSE)
 
   n_groups       <- data$n_groups %||% 1
   gene_symbol    <- prot$gene_symbol %||% prot$uniprot_id
@@ -10527,7 +10529,7 @@ tb_render_peptide_region <- function(results, style, meta) {
     # Protein feature bar (multi-layer)
     p_bar <- .pr_build_protein_bar(
       prot$features, protein_length, gene_symbol, uniprot_id,
-      title_text_size, cov_pct
+      title_text_size, cov_pct, feature_text_size
     )
 
     if (n_groups >= 2 && !is.null(treat_grp)) {
@@ -10542,10 +10544,9 @@ tb_render_peptide_region <- function(results, style, meta) {
         marker_df = marker_df
       )
       p_fc <- .pr_build_track(
-        coverage, "fc", fc_color,
-        expression(Log[2]~FC),
+        coverage, "fc", fc_color, NULL,
         protein_length, axis_text_size, show_x_axis = TRUE,
-        alpha = track_alpha, is_fc = TRUE,
+        alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
         ctrl_group = ctrl_grp, treatment_group = treat_grp
       )
       composed <- (p_bar / p_ctrl / p_treat / p_fc) +
@@ -10601,50 +10602,48 @@ tb_render_peptide_region <- function(results, style, meta) {
 # ---- Peptide Region: Multi-layer Protein Feature Bar ----
 .pr_build_protein_bar <- function(features_df, protein_length, gene_symbol,
                                    uniprot_id, title_size = 16,
-                                   coverage_pct = NULL) {
+                                   coverage_pct = NULL, feature_text_size = 2) {
   # Feature category definitions: type → (category, color, y_min, y_max)
+  # Domains get their own track row at the top (0.75–1.0), other categories share
+  # the lower portion as thin strips at different y-heights
   category_map <- list(
-    # Domains: full height, semi-transparent
-    "Domain"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.0,  ymax = 1.0, alpha = 0.35),
-    "Repeat"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.0,  ymax = 1.0, alpha = 0.35),
-    "Region"           = list(cat = "Domains",      color = "#76B7B2", ymin = 0.0,  ymax = 1.0, alpha = 0.25),
-    "Motif"            = list(cat = "Domains",      color = "#59A14F", ymin = 0.0,  ymax = 1.0, alpha = 0.25),
-    "Coiled coil"      = list(cat = "Domains",      color = "#EDC948", ymin = 0.0,  ymax = 1.0, alpha = 0.25),
+    # Domains: own track row at top, light fill
+    "Domain"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.75, ymax = 1.0, alpha = 0.45),
+    "Repeat"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.75, ymax = 1.0, alpha = 0.40),
+    "Region"           = list(cat = "Domains",      color = "#76B7B2", ymin = 0.75, ymax = 1.0, alpha = 0.35),
+    "Motif"            = list(cat = "Domains",      color = "#59A14F", ymin = 0.75, ymax = 1.0, alpha = 0.40),
+    "Coiled coil"      = list(cat = "Domains",      color = "#EDC948", ymin = 0.75, ymax = 1.0, alpha = 0.40),
     # Topology
-    "Transmembrane"    = list(cat = "Topology",     color = "#E15759", ymin = 0.76, ymax = 0.94, alpha = 0.85),
-    "Topological domain" = list(cat = "Topology",   color = "#F28E2B", ymin = 0.76, ymax = 0.94, alpha = 0.55),
-    "Intramembrane"    = list(cat = "Topology",     color = "#B07AA1", ymin = 0.76, ymax = 0.94, alpha = 0.85),
+    "Transmembrane"    = list(cat = "Topology",     color = "#E15759", ymin = 0.56, ymax = 0.72, alpha = 0.85),
+    "Topological domain" = list(cat = "Topology",   color = "#F28E2B", ymin = 0.56, ymax = 0.72, alpha = 0.55),
+    "Intramembrane"    = list(cat = "Topology",     color = "#B07AA1", ymin = 0.56, ymax = 0.72, alpha = 0.85),
     # Processing
-    "Signal"           = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.56, ymax = 0.72, alpha = 0.80),
-    "Transit peptide"  = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.56, ymax = 0.72, alpha = 0.80),
-    "Propeptide"       = list(cat = "Processing",   color = "#FFBE7D", ymin = 0.56, ymax = 0.72, alpha = 0.80),
-    "Chain"            = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.56, ymax = 0.72, alpha = 0.50),
-    "Peptide"          = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.56, ymax = 0.72, alpha = 0.80),
-    "Initiator methionine" = list(cat = "Processing", color = "#FF9DA7", ymin = 0.56, ymax = 0.72, alpha = 0.80),
+    "Signal"           = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Transit peptide"  = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Propeptide"       = list(cat = "Processing",   color = "#FFBE7D", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Chain"            = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.39, ymax = 0.53, alpha = 0.50),
+    "Peptide"          = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Initiator methionine" = list(cat = "Processing", color = "#FF9DA7", ymin = 0.39, ymax = 0.53, alpha = 0.80),
     # Binding / Sites
-    "Active site"      = list(cat = "Binding",      color = "#E15759", ymin = 0.36, ymax = 0.52, alpha = 0.90),
-    "Binding site"     = list(cat = "Binding",      color = "#F28E2B", ymin = 0.36, ymax = 0.52, alpha = 0.85),
-    "Site"             = list(cat = "Binding",      color = "#86BCB6", ymin = 0.36, ymax = 0.52, alpha = 0.80),
-    "DNA binding"      = list(cat = "Binding",      color = "#499894", ymin = 0.36, ymax = 0.52, alpha = 0.85),
-    "Nucleotide binding" = list(cat = "Binding",    color = "#59A14F", ymin = 0.36, ymax = 0.52, alpha = 0.85),
-    "Metal binding"    = list(cat = "Binding",      color = "#B6992D", ymin = 0.36, ymax = 0.52, alpha = 0.85),
-    "Calcium binding"  = list(cat = "Binding",      color = "#B6992D", ymin = 0.36, ymax = 0.52, alpha = 0.85),
-    "Zinc finger"      = list(cat = "Binding",      color = "#B6992D", ymin = 0.36, ymax = 0.52, alpha = 0.85),
+    "Active site"      = list(cat = "Binding",      color = "#E15759", ymin = 0.22, ymax = 0.36, alpha = 0.90),
+    "Binding site"     = list(cat = "Binding",      color = "#F28E2B", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Site"             = list(cat = "Binding",      color = "#86BCB6", ymin = 0.22, ymax = 0.36, alpha = 0.80),
+    "DNA binding"      = list(cat = "Binding",      color = "#499894", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Nucleotide binding" = list(cat = "Binding",    color = "#59A14F", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Metal binding"    = list(cat = "Binding",      color = "#B6992D", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Calcium binding"  = list(cat = "Binding",      color = "#B6992D", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Zinc finger"      = list(cat = "Binding",      color = "#B6992D", ymin = 0.22, ymax = 0.36, alpha = 0.85),
     # Modifications
-    "Modified residue" = list(cat = "Modification", color = "#B07AA1", ymin = 0.16, ymax = 0.32, alpha = 0.80),
-    "Disulfide bond"   = list(cat = "Modification", color = "#E15759", ymin = 0.16, ymax = 0.32, alpha = 0.80),
-    "Glycosylation"    = list(cat = "Modification", color = "#59A14F", ymin = 0.16, ymax = 0.32, alpha = 0.80),
-    "Lipidation"       = list(cat = "Modification", color = "#EDC948", ymin = 0.16, ymax = 0.32, alpha = 0.80),
-    "Cross-link"       = list(cat = "Modification", color = "#FF9DA7", ymin = 0.16, ymax = 0.32, alpha = 0.80)
+    "Modified residue" = list(cat = "Modification", color = "#B07AA1", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Disulfide bond"   = list(cat = "Modification", color = "#E15759", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Glycosylation"    = list(cat = "Modification", color = "#59A14F", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Lipidation"       = list(cat = "Modification", color = "#EDC948", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Cross-link"       = list(cat = "Modification", color = "#FF9DA7", ymin = 0.05, ymax = 0.19, alpha = 0.80)
   )
 
-  # Category label colors for right-side annotations
-  cat_colors <- c(
-    Domains = "#4E79A7", Topology = "#E15759", Processing = "#FF9DA7",
-    Binding = "#F28E2B", Modification = "#B07AA1"
-  )
-  cat_y <- c(Domains = 0.5, Topology = 0.85, Processing = 0.64,
-             Binding = 0.44, Modification = 0.24)
+  # Use same x-limits as coverage tracks so everything aligns
+  x_lo <- -protein_length * 0.03
+  x_hi <- protein_length * 1.03 + 0.5
 
   p <- ggplot2::ggplot() +
     # Background bar
@@ -10653,7 +10652,7 @@ tb_render_peptide_region <- function(results, style, meta) {
                        fill = "grey92", color = "grey50", linewidth = 0.3)
 
   site_width <- max(2, protein_length * 0.006)
-  cats_present <- character(0)
+  fts <- feature_text_size
 
   for (i in seq_len(nrow(features_df))) {
     ft_type <- features_df$type[i]
@@ -10673,52 +10672,36 @@ tb_render_peptide_region <- function(results, style, meta) {
                         fill = mapping$color, alpha = mapping$alpha,
                         color = NA)
 
-    cats_present <- union(cats_present, mapping$cat)
-
     # Text labels inside features (if wide enough to fit)
     seg_w <- xmax - xmin
     label_y <- (mapping$ymin + mapping$ymax) / 2
-    # Full-height domains: larger threshold, centered text
-    # Thin strips: smaller threshold, smaller text
-    is_full <- (mapping$ymax - mapping$ymin) > 0.5
-    min_w <- if (is_full) protein_length * 0.07 else protein_length * 0.05
-    label_size <- if (is_full) 2.2 else 1.8
-    label_color <- if (is_full) "grey20" else "white"
+    min_w <- protein_length * 0.05
 
-    if (seg_w > min_w) {
+    if (seg_w > min_w && fts > 0) {
       label <- features_df$description[i]
-      # For site-like features with empty description, use the type name
       if (!nzchar(label)) label <- ft_type
       if (nzchar(label)) {
-        # Truncate long labels to fit
         max_chars <- max(3L, as.integer(seg_w / (protein_length * 0.012)))
         if (nchar(label) > max_chars) label <- paste0(substr(label, 1, max_chars - 1), "\u2026")
+        # Domain row: dark text on light fill; thin strips: white text
+        is_domain <- identical(mapping$cat, "Domains")
+        lbl_color <- if (is_domain) "grey25" else "white"
         p <- p +
           ggplot2::annotate("text", x = (xmin + xmax) / 2, y = label_y,
-                            label = label, size = label_size, color = label_color,
+                            label = label, size = fts, color = lbl_color,
                             fontface = "bold")
       }
     }
   }
 
-  # Category labels on right edge
-  for (cat_name in cats_present) {
-    p <- p +
-      ggplot2::annotate("text",
-                        x = protein_length * 1.03 + 0.5,
-                        y = cat_y[[cat_name]] %||% 0.5,
-                        label = cat_name, size = 2, color = cat_colors[[cat_name]] %||% "grey40",
-                        hjust = 0, fontface = "plain")
-  }
-
   # N/C terminals
   p <- p +
-    ggplot2::annotate("text", x = -protein_length * 0.02, y = 0.5,
+    ggplot2::annotate("text", x = -protein_length * 0.015, y = 0.5,
                       label = "N", fontface = "bold.italic", size = 3,
                       hjust = 1, color = "grey30") +
-    ggplot2::annotate("text", x = protein_length * 1.02 + 0.5, y = 0.5,
+    ggplot2::annotate("text", x = protein_length + protein_length * 0.015 + 0.5, y = 0.5,
                       label = "C", fontface = "bold.italic", size = 3,
-                      hjust = 1, color = "grey30")
+                      hjust = 0, color = "grey30")
 
   # Title + subtitle
   title_text <- paste0(gene_symbol, "  (", uniprot_id, ")")
@@ -10728,7 +10711,7 @@ tb_render_peptide_region <- function(results, style, meta) {
   p <- p +
     ggplot2::labs(title = title_text, subtitle = sub_parts) +
     ggplot2::scale_x_continuous(
-      limits = c(-protein_length * 0.03, protein_length * 1.12),
+      limits = c(x_lo, x_hi),
       expand = c(0, 0)
     ) +
     ggplot2::coord_cartesian(ylim = c(-0.02, 1.02), clip = "off") +
@@ -10750,7 +10733,7 @@ tb_render_peptide_region <- function(results, style, meta) {
 .pr_build_track <- function(coverage, col_name, fill_color, y_label,
                              protein_length, axis_text_size = 14,
                              show_x_axis = FALSE, alpha = 0.85,
-                             is_fc = FALSE, marker_df = NULL,
+                             is_fc = FALSE, flip_fc = FALSE, marker_df = NULL,
                              ctrl_group = "Ctrl", treatment_group = "Treatment") {
   vals <- coverage[[col_name]]
   if (is.null(vals)) {
@@ -10774,6 +10757,7 @@ tb_render_peptide_region <- function(results, style, meta) {
 
   if (is_fc) {
     covered$val <- log2(covered$val)
+    if (flip_fc) covered$val <- -covered$val
     covered$val[!is.finite(covered$val)] <- NA_real_
     covered <- covered[!is.na(covered$val), , drop = FALSE]
     if (nrow(covered) == 0) {
@@ -10785,7 +10769,12 @@ tb_render_peptide_region <- function(results, style, meta) {
     }
     y_max <- max(abs(covered$val), na.rm = TRUE) * 1.2
     y_min <- -y_max
-    y_label <- expression(Log[2]~FC)
+    # Explicit comparison in label: Log2 (Numerator/Denominator)
+    if (flip_fc) {
+      y_label <- bquote(Log[2] ~ "(" ~ .(ctrl_group) ~ "/" ~ .(treatment_group) ~ ")")
+    } else {
+      y_label <- bquote(Log[2] ~ "(" ~ .(treatment_group) ~ "/" ~ .(ctrl_group) ~ ")")
+    }
   } else {
     y_max <- max(covered$val, na.rm = TRUE) * 1.15
     y_min <- 0

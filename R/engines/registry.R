@@ -2576,9 +2576,20 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = "#7B2D8E"
         ),
         msterp_schema_field(
+          "flip_fc", "bool", "Flip fold-change direction",
+          default = FALSE,
+          help = "Show Control/Treatment instead of Treatment/Control on the FC track."
+        ),
+        msterp_schema_field(
           "show_peptide_markers", "bool", "Show peptide markers",
           default = TRUE,
           help = "Show tick marks where peptides map on the coverage tracks (detail view)."
+        ),
+        msterp_schema_field(
+          "feature_text_size", "num", "Feature label size",
+          default = 2, min = 0.5, max = 5,
+          advanced = TRUE,
+          help = "Text size for labels inside protein feature annotations."
         ),
         msterp_schema_field(
           "track_alpha", "num", "Track fill opacity",
