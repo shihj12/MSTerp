@@ -4750,6 +4750,13 @@ tb_render_hor_dis <- function(results, style, meta) {
           if (length(vals) == 0) return(NA_real_)
           length(vals) / sum(1 / vals)
         }, numeric(1))
+      } else if (mean_type == "median") {
+        series_means <- vapply(current_series, function(s) {
+          vals <- original_values[df$series_id == s]
+          vals <- vals[is.finite(vals)]
+          if (length(vals) == 0) return(NA_real_)
+          median(vals, na.rm = TRUE)
+        }, numeric(1))
       } else {
         # Arithmetic mean per series
         series_means <- vapply(current_series, function(s) {
@@ -4775,7 +4782,7 @@ tb_render_hor_dis <- function(results, style, meta) {
     if (nrow(summary_df) > 0) {
       summary_df$group <- factor(summary_df$group, levels = current_groups)
 
-      # For harmonic mean, recompute from raw data
+      # For harmonic mean or median, recompute from raw data
       if (mean_type == "harmonic") {
         # Compute harmonic mean per group: n / sum(1/x) for positive values
         # Use original_values (before pooling) for mean calculation
@@ -4790,6 +4797,25 @@ tb_render_hor_dis <- function(results, style, meta) {
           mean_val = harmonic_means,
           stringsAsFactors = FALSE
         )
+        mean_vals$group <- factor(mean_vals$group, levels = current_groups)
+      } else if (mean_type == "median") {
+        # Median per group from summary (precomputed) or raw data
+        if ("median" %in% names(summary_df)) {
+          mean_vals <- summary_df[, c("group", "median")]
+          names(mean_vals) <- c("group", "mean_val")
+        } else {
+          median_vals <- vapply(current_groups, function(g) {
+            vals <- original_values[df$group == g]
+            vals <- vals[is.finite(vals)]
+            if (length(vals) == 0) return(NA_real_)
+            median(vals, na.rm = TRUE)
+          }, numeric(1))
+          mean_vals <- data.frame(
+            group = current_groups,
+            mean_val = median_vals,
+            stringsAsFactors = FALSE
+          )
+        }
         mean_vals$group <- factor(mean_vals$group, levels = current_groups)
       } else {
         # Arithmetic mean (default) from summary

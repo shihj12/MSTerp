@@ -2062,6 +2062,13 @@ page_results_ui <- function() {
         .res-table-panel { flex: 0 0 clamp(220px, 30%, 360px); min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
         .res-only-panel  { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
+        .res-edit-terms-btn {
+          align-self: flex-end;
+          margin: 4px 8px;
+          font-size: 12px;
+          z-index: 1;
+        }
+
         @media (max-width: 768px) {
           .res-root { overflow: auto; }
           .res-layout {
@@ -2594,6 +2601,14 @@ page_results_ui <- function() {
           });
         }
 
+        // Notify R when enrichment terms modal is dismissed (Cancel / backdrop / X)
+        if (window.Shiny && !window.__msterp_enrichment_modal_dismiss) {
+          window.__msterp_enrichment_modal_dismiss = true;
+          $(document).on('hidden.bs.modal', '.modal', function() {
+            Shiny.setInputValue('res_enrichment_modal_dismiss', Date.now(), {priority: 'event'});
+          });
+        }
+
         // Handle copy gene list button clicks in GO enrichment tables
         // Prevents copy action when DT cell editing is active (e.g., editing term name)
         // FIX: Also tracks recent cell edits to prevent accidental copy triggers
@@ -2885,6 +2900,13 @@ page_results_server <- function(input, output, session) {
   pending_label_positions <- reactiveVal(list())   # Pending position changes: list(plot_key -> label_id -> {x, y, x_range, y_range})
   pending_term_labels <- reactiveVal(list())       # Pending term label edits: list(original_term -> new_value)
   highlight_groups_state <- reactiveVal(list())    # Temporary state for highlight groups modal
+
+  # Enrichment modal state: deferred visibility/label changes applied on "Apply & Close"
+  rv$enrichment_modal_open <- FALSE
+  rv$modal_pending_hidden <- character()            # hidden_terms accumulated in modal
+  rv$modal_pending_labels <- list()                 # term_labels accumulated in modal
+  rv$modal_node_key <- ""                           # node key when modal opened
+  rv$modal_gen <- 0L                                # counter to ensure unique input IDs per modal open
 
   # ---- DPI observer: sync input$res_preview_dpi -> rv$preview_dpi ------------
   observeEvent(input$res_preview_dpi, {
@@ -6882,22 +6904,23 @@ page_results_server <- function(input, output, session) {
             )
           }
 
-          tab_table_body <- if (length(tab_tables) == 0) {
-            div(class = "res-panel-body", div(class = "res-table-stage", "No tables for this ontology."))
-          } else {
-            div(
-              class = "res-panel-body",
-              div(
-                class = "res-table-stage",
-                uiOutput(paste0("res_table_pub_", tab_normalized))
-              )
+          # Edit Terms button opens modal instead of inline table
+          edit_btn <- if (length(tab_tables) > 0) {
+            tags$button(
+              type = "button",
+              class = "btn btn-xs btn-default res-edit-terms-btn",
+              title = "Edit visible terms",
+              onclick = sprintf(
+                "Shiny.setInputValue('res_open_enrichment_modal', {tab: '%s', ts: Date.now()});",
+                tab_normalized
+              ),
+              icon("pencil"), " Edit Terms"
             )
-          }
+          } else NULL
 
           div(
             class = "res-center-stack",
-            div(class = "res-plot-panel", tab_plot_body),
-            div(class = "res-table-panel", tab_table_body)
+            div(class = "res-only-panel", edit_btn, tab_plot_body)
           )
         })
 
@@ -6944,28 +6967,54 @@ page_results_server <- function(input, output, session) {
            )
         }
 
-        # Build table body for this tab
-        tab_table_body <- if (length(tab_tables) == 0) {
-          div(class = "res-panel-body", div(class = "res-table-stage", "No tables for this tab."))
+        # For enrichment engines, use modal instead of inline table
+        is_enrichment_tab <- tolower(eng %||% "") %in% c("goora", "1dgofcs", "2dgofcs", "msea", "pathway_fcs")
+
+        if (is_enrichment_tab) {
+          edit_btn <- if (length(tab_tables) > 0) {
+            tags$button(
+              type = "button",
+              class = "btn btn-xs btn-default res-edit-terms-btn",
+              title = "Edit visible terms",
+              onclick = sprintf(
+                "Shiny.setInputValue('res_open_enrichment_modal', {tab: '%s', ts: Date.now()});",
+                tab_normalized
+              ),
+              icon("pencil"), " Edit Terms"
+            )
+          } else NULL
+
+          tabPanel(
+            tab_name,
+            div(
+              class = "res-center-stack",
+              div(class = "res-only-panel", edit_btn, tab_plot_body)
+            )
+          )
         } else {
-          div(
-            class = "res-panel-body",
-           div(
-             class = "res-table-stage",
-             uiOutput(paste0("res_table_pub_", tab_normalized))
+          # Build table body for this tab (non-enrichment engines)
+          tab_table_body <- if (length(tab_tables) == 0) {
+            div(class = "res-panel-body", div(class = "res-table-stage", "No tables for this tab."))
+          } else {
+            div(
+              class = "res-panel-body",
+             div(
+               class = "res-table-stage",
+               uiOutput(paste0("res_table_pub_", tab_normalized))
+              )
+            )
+          }
+
+          # Return tab panel with plot + table
+          tabPanel(
+            tab_name,
+            div(
+              class = "res-center-stack",
+              div(class = "res-plot-panel", tab_plot_body),
+              div(class = "res-table-panel", tab_table_body)
             )
           )
         }
-
-        # Return tab panel with plot + table
-        tabPanel(
-          tab_name,
-          div(
-            class = "res-center-stack",
-            div(class = "res-plot-panel", tab_plot_body),
-            div(class = "res-table-panel", tab_table_body)
-          )
-        )
       })
 
       # Determine which tab to select (preserve user selection or default to first)
@@ -7011,6 +7060,28 @@ page_results_server <- function(input, output, session) {
     }
 
     if (plot_and_table) {
+      eng_lower <- tolower(eng %||% "")
+      is_enrichment <- eng_lower %in% c("goora", "1dgofcs", "2dgofcs", "msea", "pathway_fcs")
+
+      if (is_enrichment) {
+        # Enrichment engines: no inline table; Edit Terms button opens modal
+        edit_btn <- tags$button(
+          type = "button",
+          class = "btn btn-xs btn-default res-edit-terms-btn",
+          title = "Edit visible terms",
+          onclick = "Shiny.setInputValue('res_open_enrichment_modal', {tab: null, ts: Date.now()});",
+          icon("pencil"), " Edit Terms"
+        )
+        return(
+          div(
+            class = "res-center-stack",
+            warn_ui,
+            div(class = "res-only-panel", edit_btn, plot_body),
+            bottom_bar
+          )
+        )
+      }
+
       return(
         div(
           class = "res-center-stack",
@@ -8474,6 +8545,270 @@ page_results_server <- function(input, output, session) {
       if (!is.null(selected) && nzchar(selected)) {
         rv$enrichment_tab_selected <- selected
       }
+    }, ignoreInit = TRUE)
+
+    # ---- Enrichment terms modal: open, apply, cancel ----------------------------
+    observeEvent(input$res_open_enrichment_modal, {
+      evt <- input$res_open_enrichment_modal
+      if (is.null(evt)) return()
+
+      eng <- tolower(active_engine_id() %||% "")
+      if (!(eng %in% c("goora", "1dgofcs", "2dgofcs", "msea", "pathway_fcs"))) return()
+
+      rend <- active_rendered()
+      if (is.null(rend) || inherits(rend, "error")) return()
+      tbls <- res_extract_tables(rend)
+      if (length(tbls) == 0) return()
+
+      # Determine which table to show based on active tab and/or plot picker
+      tab_name <- evt$tab  # NULL for non-tabbed, e.g. "bp" for tabbed
+      tbl_names <- names(tbls)
+
+      # Resolve active comparison from plot picker (e.g. "group1_vs_ctrl_plot" -> "group1_vs_ctrl")
+      active_pick <- input$res_plot_pick %||% input$res_table_pick %||% ""
+      active_stem <- sub("_(plot|table)$", "", active_pick)
+
+      which_tbl <- NULL
+
+      if (!is.null(tab_name) && nzchar(tab_name)) {
+        # Tabbed: match tab name (e.g. "bp") within table keys
+        # If there's also a comparison stem, match both (e.g. "group1_vs_ctrl_bp_table")
+        if (nzchar(active_stem)) {
+          combined_pattern <- paste0("(?=.*", active_stem, ")(?=.*", tab_name, ")")
+          matched <- tbl_names[grepl(combined_pattern, tbl_names, ignore.case = TRUE, perl = TRUE)]
+          if (length(matched) > 0) which_tbl <- matched[[1]]
+        }
+        if (is.null(which_tbl)) {
+          tab_pattern <- paste0("(^|_)", tab_name, "(_|$)")
+          matched <- tbl_names[grepl(tab_pattern, tbl_names, ignore.case = TRUE)]
+          if (length(matched) > 0) which_tbl <- matched[[1]]
+        }
+      } else {
+        # Non-tabbed: derive table from plot picker or table picker
+        # Try direct match first
+        pick <- input$res_table_pick %||% input$res_plot_pick %||% ""
+        if (nzchar(pick) && pick %in% tbl_names) {
+          which_tbl <- pick
+        } else if (nzchar(active_stem)) {
+          # Map plot name to table name (e.g. "comp_plot" -> "comp_table")
+          derived <- paste0(active_stem, "_table")
+          if (derived %in% tbl_names) {
+            which_tbl <- derived
+          } else {
+            # Pattern match: find table containing the stem
+            stem_pattern <- paste0("(^|_)", active_stem, "(_|$)")
+            matched <- tbl_names[grepl(stem_pattern, tbl_names, ignore.case = TRUE)]
+            if (length(matched) > 0) which_tbl <- matched[[1]]
+          }
+        }
+      }
+
+      # Fallback to first table
+      if (is.null(which_tbl) || !nzchar(which_tbl) || !(which_tbl %in% tbl_names)) {
+        which_tbl <- tbl_names[[1]]
+      }
+
+      tbl_df_raw <- as.data.frame(tbls[[which_tbl]])
+      if (nrow(tbl_df_raw) == 0) return()
+
+      # Normalize metabolomics column names
+      if ("pathway_id" %in% names(tbl_df_raw) && !("term_id" %in% names(tbl_df_raw))) {
+        tbl_df_raw$term_id <- tbl_df_raw$pathway_id
+      }
+      if ("pathway_name" %in% names(tbl_df_raw) && !("term_name" %in% names(tbl_df_raw))) {
+        tbl_df_raw$term_name <- tbl_df_raw$pathway_name
+      }
+      if (!("term_id" %in% names(tbl_df_raw))) return()
+      term_col <- intersect(c("term", "term_name"), names(tbl_df_raw))[1]
+      if (is.na(term_col) || !nzchar(term_col)) return()
+
+      # Sort by plot ordering metric BEFORE formatting (values may already be strings)
+      sort_col <- if (eng %in% c("1dgofcs", "pathway_fcs")) {
+        if ("score" %in% names(tbl_df_raw)) "score" else NULL
+      } else if (eng == "2dgofcs") {
+        if ("fdr" %in% names(tbl_df_raw)) "fdr" else NULL
+      } else {
+        x_metric <- active_effective_state()$style$x_axis_metric %||% "fold_enrichment"
+        if (x_metric == "neglog10_fdr" && "fdr" %in% names(tbl_df_raw)) "fdr"
+        else if ("fold_enrichment" %in% names(tbl_df_raw)) "fold_enrichment"
+        else NULL
+      }
+      if (!is.null(sort_col)) {
+        vals <- suppressWarnings(as.numeric(tbl_df_raw[[sort_col]]))
+        if (!all(is.na(vals))) {
+          if (sort_col == "fdr") {
+            tbl_df_raw <- tbl_df_raw[order(vals, na.last = TRUE), , drop = FALSE]
+          } else {
+            tbl_df_raw <- tbl_df_raw[order(abs(vals), decreasing = TRUE, na.last = TRUE), , drop = FALSE]
+          }
+        }
+      }
+
+      # Prepare editable table
+      term_ids <- as.character(tbl_df_raw$term_id %||% character())
+      term_origs <- as.character(tbl_df_raw[[term_col]] %||% character())
+      term_orig_by_id <- stats::setNames(term_origs, term_ids)
+
+      eff_state <- active_effective_state()
+      hidden_terms <- eff_state$visibility$hidden_terms %||% character()
+      term_labels <- eff_state$visibility$term_labels %||% list()
+
+      hidden_term_ids <- unique(term_ids[term_origs %in% hidden_terms])
+
+      term_labels_by_id <- list()
+      if (length(term_labels) > 0) {
+        for (i in seq_along(term_ids)) {
+          tid <- term_ids[[i]]
+          orig <- term_origs[[i]]
+          if (!nzchar(tid) || !nzchar(orig)) next
+          lbl <- term_labels[[orig]] %||% NULL
+          if (!is.null(lbl) && nzchar(as.character(lbl))) term_labels_by_id[[tid]] <- as.character(lbl)
+        }
+      }
+
+      df_edit <- tbl_df_raw
+      if (identical(term_col, "term")) {
+        df_edit$term_name <- df_edit$term
+        df_edit$term <- NULL
+      }
+
+      # Extract gene/metabolite column data for Search button
+      gene_col_data <- NULL
+      is_msea <- eng %in% c("msea", "pathway_fcs")
+      search_type <- if (is_msea) "metabolite" else "gene"
+      search_cols <- if (is_msea) {
+        c("metabolite_names", "metabolite_ids")
+      } else {
+        c("protein_ids", "genes", "gene_ids", "geneID", "Genes")
+      }
+      for (gcol in search_cols) {
+        if (gcol %in% names(df_edit)) {
+          gene_col_data <- as.character(df_edit[[gcol]])
+          break
+        }
+      }
+
+      # Remove hidden columns
+      hide_cols <- res_go_hidden_cols(eng)
+      df_edit <- df_edit[, setdiff(names(df_edit), hide_cols), drop = FALSE]
+
+      # Initialize modal pending state from current visibility
+      key <- as.character(rv$active_node_id %||% "")
+      rv$enrichment_modal_open <- TRUE
+      rv$modal_node_key <- key
+      rv$modal_pending_hidden <- hidden_terms
+      rv$modal_pending_labels <- term_labels
+
+      # Unique id_prefix per modal open so Shiny doesn't restore stale input values
+      rv$modal_gen <- (rv$modal_gen %||% 0L) + 1L
+      id_prefix <- paste0("res_modal_tbl_", rv$modal_gen)
+      res_bind_editable_go_table(
+        id_prefix = id_prefix,
+        df = df_edit,
+        term_id_col = "term_id",
+        input = input,
+        session = session,
+        on_term_name_change = function(term_id, new_value) {
+          if (!isTRUE(rv$enrichment_modal_open)) return()
+          orig <- as.character(term_orig_by_id[[term_id]] %||% "")
+          if (!nzchar(orig)) return()
+
+          labels <- rv$modal_pending_labels
+          new_value <- as.character(new_value %||% "")
+          if (nzchar(new_value) && new_value != orig) {
+            labels[[orig]] <- new_value
+          } else {
+            labels[[orig]] <- NULL
+          }
+          rv$modal_pending_labels <- labels
+        },
+        on_visibility_change = function(term_id, is_visible) {
+          if (!isTRUE(rv$enrichment_modal_open)) return()
+          orig <- as.character(term_orig_by_id[[term_id]] %||% "")
+          if (!nzchar(orig)) return()
+
+          hidden <- rv$modal_pending_hidden
+          if (isTRUE(is_visible)) {
+            hidden <- setdiff(hidden, orig)
+          } else {
+            hidden <- unique(c(hidden, orig))
+          }
+          rv$modal_pending_hidden <- hidden
+        }
+      )
+
+      table_ui <- res_editable_go_table_ui(
+        id_prefix = id_prefix,
+        df = df_edit,
+        term_id_col = "term_id",
+        term_name_col = "term_name",
+        hidden_term_ids = hidden_term_ids,
+        term_labels_by_id = term_labels_by_id,
+        gene_col_data = gene_col_data,
+        search_type = search_type
+      )
+
+      # Build descriptive title from resolved table key
+      modal_label <- sub("_(table|plot)$", "", which_tbl)
+      modal_label <- gsub("_", " ", modal_label)
+      modal_label <- paste0(toupper(substring(modal_label, 1, 1)), substring(modal_label, 2))
+      modal_title <- paste("Edit Enrichment Terms \u2014", modal_label)
+
+      showModal(modalDialog(
+        title = modal_title,
+        size = "l",
+        easyClose = TRUE,
+        div(
+          style = "max-height: 70vh; overflow-y: auto;",
+          table_ui
+        ),
+        footer = tagList(
+          actionButton("res_enrichment_modal_apply", "Apply & Close",
+                       class = "btn-primary", icon = icon("check")),
+          modalButton("Cancel")
+        )
+      ))
+    }, ignoreInit = TRUE)
+
+    # Apply & Close: commit deferred changes from modal
+    observeEvent(input$res_enrichment_modal_apply, {
+      if (!isTRUE(rv$enrichment_modal_open)) return()
+
+      key <- rv$modal_node_key
+      if (!nzchar(key)) {
+        rv$enrichment_modal_open <- FALSE
+        removeModal()
+        return()
+      }
+
+      vis <- rv$cache_vis_by_node[[key]] %||% list()
+      vis$hidden_terms <- rv$modal_pending_hidden
+      vis$term_labels <- rv$modal_pending_labels
+      rv$cache_vis_by_node[[key]] <- vis
+
+      nd <- active_node_dir()
+      if (!is.null(nd)) {
+        .commit_style_debounced$call(node_dir = nd, payload = list(visibility = vis))
+      }
+
+      rv$has_unsaved_changes <- TRUE
+      rv$save_status <- "dirty"
+      rv$enrichment_modal_open <- FALSE
+      rv$modal_pending_hidden <- character()
+      rv$modal_pending_labels <- list()
+      rv$modal_node_key <- ""
+      style_rev(isolate(style_rev()) + 1L)
+      removeModal()
+    }, ignoreInit = TRUE)
+
+    # Modal dismissed (Cancel / backdrop click / X button)
+    # Guard: only clean up if enrichment modal was actually open AND not replaced by another modal
+    observeEvent(input$res_enrichment_modal_dismiss, {
+      if (!isTRUE(rv$enrichment_modal_open)) return()
+      rv$enrichment_modal_open <- FALSE
+      rv$modal_pending_hidden <- character()
+      rv$modal_pending_labels <- list()
+      rv$modal_node_key <- ""
     }, ignoreInit = TRUE)
 
     res_show_uniprot_summary <- function(gene_id, term_name = NULL, acc = NULL) {

@@ -3,7 +3,7 @@
 ; portable R, R packages, and the Shiny app.
 
 #define MyAppName "MSTerp"
-#define MyAppVersion "1.2"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "MSTerp"
 #define MyAppURL "https://github.com/shihj12/MSTerp"
 #define MyAppExeName "MSTerp.exe"

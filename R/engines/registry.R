@@ -1374,8 +1374,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field("show_mean", "bool", "Show mean line", default = TRUE, advanced = TRUE),
         # Mean type: only visible when show_mean is true (conditional UI in page_results.R)
         msterp_schema_field("mean_type", "choice", "Mean type", default = "arithmetic",
-                            choices = c("arithmetic", "harmonic"),
-                            choice_labels = c("Arithmetic", "Harmonic"), advanced = TRUE),
+                            choices = c("arithmetic", "harmonic", "median"),
+                            choice_labels = c("Arithmetic", "Harmonic", "Median"), advanced = TRUE),
         msterp_schema_field("show_mean_value", "bool", "Show mean value", default = TRUE, advanced = TRUE),
         msterp_schema_field("mean_line_size", "num", "Mean line thickness", default = 1, min = 0.2, max = 5, advanced = TRUE),
         msterp_schema_field("mean_text_size", "int", "Mean text size", default = 17, min = 6, max = 24, advanced = TRUE),
