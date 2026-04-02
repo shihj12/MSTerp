@@ -5117,6 +5117,21 @@ page_results_server <- function(input, output, session) {
       if (length(sp_idx) > 0) {
         schema <- schema[-sp_idx[[1]]]
       }
+
+      # Hide comparison-only style fields for single-sample experiments
+      pr_res <- isolate(active_results())
+      pr_n_groups <- pr_res$data$n_groups %||% 1
+      if (pr_n_groups < 2) {
+        comp_only <- c("treatment_color", "fc_color", "flip_fc", "fc_y_range", "fc_y_abs")
+        schema <- Filter(function(f) !as.character(f$name %||% "") %in% comp_only, schema)
+        # Relabel "Control track color" -> "Track color" (no comparison distinction)
+        for (i in seq_along(schema)) {
+          if (identical(as.character(schema[[i]]$name %||% ""), "ctrl_color")) {
+            schema[[i]]$label <- "Track color"
+            break
+          }
+        }
+      }
     }
 
     # Cluster selector for PPI Network engine

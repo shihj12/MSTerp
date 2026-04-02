@@ -2622,7 +2622,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         ),
         msterp_schema_field(
           "feature_text_size", "num", "Feature label size",
-          default = 2, min = 0.5, max = 5,
+          default = 3, min = 0.5, max = 5,
           advanced = TRUE,
           help = "Text size for labels inside protein feature annotations."
         ),
@@ -2642,12 +2642,12 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         ),
         msterp_schema_field(
           "width", "num", "Plot width (in)",
-          default = 14, min = 4, max = 30,
+          default = 8, min = 4, max = 30,
           advanced = TRUE
         ),
         msterp_schema_field(
           "height", "num", "Plot height (in)",
-          default = 8, min = 3, max = 24,
+          default = 5, min = 3, max = 24,
           advanced = TRUE
         )
       ),
