@@ -10492,13 +10492,21 @@ tb_render_peptide_region <- function(results, style, meta) {
   fc_y_range        <- as.character(style$fc_y_range %||% "auto")[1]
   fc_y_abs          <- tb_num(style$fc_y_abs, 3)
 
-  n_groups       <- data$n_groups %||% 1
-  gene_symbol    <- prot$gene_symbol %||% prot$uniprot_id
-  uniprot_id     <- prot$uniprot_id
-  protein_length <- prot$seq_length
-  comparisons    <- data$comparisons %||% list()
+  n_groups         <- data$n_groups %||% 1
+  gene_symbol      <- prot$gene_symbol %||% prot$uniprot_id
+  uniprot_id       <- prot$uniprot_id
+  protein_length   <- prot$seq_length
+  group_coverages  <- data$group_coverages %||% list()
+  pairwise         <- data$pairwise %||% list()
+  all_group_names  <- data$group_names %||% names(group_coverages)
 
-  if (!isTRUE(prot$has_coverage) || length(comparisons) == 0) {
+  # Backward compat: old data stored as comparisons
+  comparisons <- data$comparisons %||% list()
+
+  has_new_format <- length(group_coverages) > 0
+
+  if (!isTRUE(prot$has_coverage) ||
+      (length(group_coverages) == 0 && length(comparisons) == 0)) {
     p_msg <- ggplot2::ggplot() +
       ggplot2::annotate("text", x = 0.5, y = 0.5,
                         label = paste0("No peptides mapped for ", gene_symbol,
@@ -10524,28 +10532,32 @@ tb_render_peptide_region <- function(results, style, meta) {
 
   plots_out  <- list()
   tables_out <- list()
-  comp_keys  <- names(comparisons)
 
-  if (n_groups >= 2 && length(comp_keys) > 0 &&
-      !is.null(comparisons[[comp_keys[1]]]$treatment_group)) {
-    # ---- Multi-group: unified track layout ----
-    show_ctrl_track       <- isTRUE(style$show_ctrl_track %||% TRUE)
-    show_treatment_tracks <- isTRUE(style$show_treatment_tracks %||% TRUE)
-    show_fc_tracks        <- isTRUE(style$show_fc_tracks %||% TRUE)
+  if (has_new_format) {
+    # ---- New per-group data model ----
+    show_fc_tracks <- isTRUE(style$show_fc_tracks %||% TRUE)
 
-    # Color palettes for multiple comparisons
-    treatment_palette <- c(treatment_color, "#D6604D", "#F4A582", "#FDDBC7")
-    fc_palette        <- c(fc_color, "#9E6AB8", "#C2A5D0", "#DEC9E4")
+    # Determine which groups to show (from style$visible_groups)
+    visible_raw <- style$visible_groups
+    visible_groups <- if (!is.null(visible_raw) && is.character(visible_raw) && any(nzchar(visible_raw))) {
+      intersect(visible_raw, all_group_names)
+    } else {
+      all_group_names
+    }
+    if (length(visible_groups) == 0) visible_groups <- all_group_names
 
-    first_comp <- comparisons[[comp_keys[1]]]
+    # Color palette for groups (up to 8 distinct colors)
+    group_palette <- c("#2166AC", "#B2182B", "#4DAF4A", "#FF7F00",
+                       "#984EA3", "#E41A1C", "#377EB8", "#A65628")
 
-    # Coverage %
-    first_col <- if ("ctrl_mean" %in% names(first_comp$coverage)) "ctrl_mean"
-                 else names(first_comp$coverage)[2]
-    n_covered <- sum(!is.na(first_comp$coverage[[first_col]]))
+    # Coverage % from first visible group
+    first_gc <- group_coverages[[visible_groups[1]]]
+    first_col <- if ("group_mean" %in% names(first_gc$coverage)) "group_mean"
+                 else names(first_gc$coverage)[2]
+    n_covered <- sum(!is.na(first_gc$coverage[[first_col]]))
     cov_pct   <- round(100 * n_covered / protein_length, 1)
 
-    # Protein feature bar (once)
+    # Protein feature bar
     p_bar <- .pr_build_protein_bar(
       prot$features, protein_length, gene_symbol, uniprot_id,
       title_text_size, cov_pct, feature_text_size
@@ -10555,16 +10567,19 @@ tb_render_peptide_region <- function(results, style, meta) {
     track_heights <- 1.2
 
     # Determine which track type is last (for x-axis)
-    last_type <- if (show_fc_tracks) "fc"
-                 else if (show_treatment_tracks) "treat"
-                 else if (show_ctrl_track) "ctrl"
-                 else "bar"
+    has_visible_fc <- show_fc_tracks && length(pairwise) > 0 && length(visible_groups) >= 2
+    last_type <- if (has_visible_fc) "fc" else "group"
 
-    # Control track (once, from first comparison)
-    if (show_ctrl_track) {
-      is_last <- identical(last_type, "ctrl")
-      tracks$ctrl <- .pr_build_track(
-        first_comp$coverage, "ctrl_mean", ctrl_color, first_comp$ctrl_group,
+    # Group value tracks (one per visible group)
+    for (gi in seq_along(visible_groups)) {
+      grp <- visible_groups[gi]
+      gc  <- group_coverages[[grp]]
+      if (is.null(gc)) next
+      color_idx <- match(grp, all_group_names)
+      gc_color  <- group_palette[((color_idx - 1L) %% length(group_palette)) + 1L]
+      is_last   <- identical(last_type, "group") && gi == length(visible_groups)
+      tracks[[paste0("grp_", gi)]] <- .pr_build_track(
+        gc$coverage, "group_mean", gc_color, grp,
         protein_length, axis_text_size, show_x_axis = is_last,
         alpha = track_alpha, marker_df = marker_df,
         log_transform = value_transform,
@@ -10573,36 +10588,25 @@ tb_render_peptide_region <- function(results, style, meta) {
       track_heights <- c(track_heights, 1.3)
     }
 
-    # Treatment tracks (one per comparison)
-    if (show_treatment_tracks) {
-      for (ci in seq_along(comp_keys)) {
-        comp <- comparisons[[comp_keys[ci]]]
-        tc   <- treatment_palette[min(ci, length(treatment_palette))]
-        is_last <- identical(last_type, "treat") && ci == length(comp_keys)
-        tracks[[paste0("treat_", ci)]] <- .pr_build_track(
-          comp$coverage, "treatment_mean", tc, comp$treatment_group,
-          protein_length, axis_text_size, show_x_axis = is_last,
-          alpha = track_alpha, marker_df = marker_df,
-          log_transform = value_transform,
-          manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
-        )
-        track_heights <- c(track_heights, 1.3)
-      }
-    }
-
-    # FC tracks (one per comparison)
-    if (show_fc_tracks) {
-      for (ci in seq_along(comp_keys)) {
-        comp <- comparisons[[comp_keys[ci]]]
-        fcc  <- fc_palette[min(ci, length(fc_palette))]
-        is_last <- identical(last_type, "fc") && ci == length(comp_keys)
-        tracks[[paste0("fc_", ci)]] <- .pr_build_track(
-          comp$coverage, "fc", fcc, NULL,
+    # FC tracks (pairwise, filtered to visible groups)
+    if (has_visible_fc) {
+      fc_palette <- c(fc_color, "#9E6AB8", "#C2A5D0", "#DEC9E4",
+                      "#7B2D8E", "#B87BD0", "#D4A0E8", "#E8C4F4")
+      fc_idx <- 0
+      pw_keys <- names(pairwise)
+      for (pk in pw_keys) {
+        pw <- pairwise[[pk]]
+        if (!(pw$group_a %in% visible_groups && pw$group_b %in% visible_groups)) next
+        fc_idx <- fc_idx + 1
+        fcc <- fc_palette[((fc_idx - 1L) %% length(fc_palette)) + 1L]
+        is_last <- identical(last_type, "fc") && pk == pw_keys[length(pw_keys)]
+        tracks[[paste0("fc_", fc_idx)]] <- .pr_build_track(
+          pw$fc_coverage, "fc", fcc, NULL,
           protein_length, axis_text_size, show_x_axis = is_last,
           alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
-          ctrl_group = comp$ctrl_group, treatment_group = comp$treatment_group,
+          ctrl_group = pw$group_a, treatment_group = pw$group_b,
           manual_y_max = if (identical(fc_y_range, "manual")) fc_y_abs else NULL,
-          show_significance = show_significance && isTRUE(comp$has_statistics),
+          show_significance = show_significance && isTRUE(pw$has_statistics),
           sig_display = sig_display, sig_threshold = sig_threshold
         )
         track_heights <- c(track_heights, 1.3)
@@ -10610,7 +10614,6 @@ tb_render_peptide_region <- function(results, style, meta) {
     }
 
     if (length(tracks) <= 1) {
-      # All data tracks hidden
       composed <- p_bar +
         ggplot2::labs(subtitle = "All data tracks hidden") +
         ggplot2::theme(plot.subtitle = ggplot2::element_text(
@@ -10624,26 +10627,85 @@ tb_render_peptide_region <- function(results, style, meta) {
       ggplot2::theme(plot.margin = ggplot2::margin(1, 10, 1, 10))
     plots_out[["peptide_region"]] <- composed
 
-    # Merge peptide_stats tables with comparison column
+    # Merge peptide_stats tables with group column
     all_stats <- list()
-    for (ci in seq_along(comp_keys)) {
-      ps <- comparisons[[comp_keys[ci]]]$peptide_stats
+    for (grp in visible_groups) {
+      gc <- group_coverages[[grp]]
+      ps <- gc$peptide_stats
       if (!is.null(ps) && nrow(ps) > 0) {
-        ps$comparison <- comp_keys[ci]
-        all_stats[[ci]] <- ps
+        ps$group <- grp
+        all_stats[[grp]] <- ps
       }
     }
     if (length(all_stats) > 0) {
       tables_out[["peptide_stats"]] <- do.call(rbind, all_stats)
     }
-  } else {
-    # ---- Single-group ----
-    comp <- comparisons[[comp_keys[1]]]
-    coverage <- comp$coverage
-    ctrl_grp <- comp$ctrl_group
+  } else if (n_groups >= 2 && length(comparisons) > 0 &&
+             !is.null(comparisons[[1]]$treatment_group)) {
+    # ---- Legacy pairwise format (backward compat) ----
+    comp_keys <- names(comparisons)
+    first_comp <- comparisons[[comp_keys[1]]]
+    first_col <- if ("ctrl_mean" %in% names(first_comp$coverage)) "ctrl_mean"
+                 else names(first_comp$coverage)[2]
+    n_covered <- sum(!is.na(first_comp$coverage[[first_col]]))
+    cov_pct   <- round(100 * n_covered / protein_length, 1)
 
-    first_col <- if ("ctrl_mean" %in% names(coverage)) "ctrl_mean" else names(coverage)[2]
-    n_covered <- sum(!is.na(coverage[[first_col]]))
+    p_bar <- .pr_build_protein_bar(
+      prot$features, protein_length, gene_symbol, uniprot_id,
+      title_text_size, cov_pct, feature_text_size
+    )
+
+    tracks <- list(bar = p_bar)
+    track_heights <- 1.2
+    tracks$ctrl <- .pr_build_track(
+      first_comp$coverage, "ctrl_mean", ctrl_color, first_comp$ctrl_group,
+      protein_length, axis_text_size, alpha = track_alpha, marker_df = marker_df,
+      log_transform = value_transform,
+      manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
+    )
+    track_heights <- c(track_heights, 1.3)
+
+    treatment_palette <- c(treatment_color, "#D6604D", "#F4A582", "#FDDBC7")
+    fc_palette <- c(fc_color, "#9E6AB8", "#C2A5D0", "#DEC9E4")
+    for (ci in seq_along(comp_keys)) {
+      comp <- comparisons[[comp_keys[ci]]]
+      tc <- treatment_palette[min(ci, length(treatment_palette))]
+      tracks[[paste0("treat_", ci)]] <- .pr_build_track(
+        comp$coverage, "treatment_mean", tc, comp$treatment_group,
+        protein_length, axis_text_size, alpha = track_alpha, marker_df = marker_df,
+        log_transform = value_transform,
+        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
+      )
+      track_heights <- c(track_heights, 1.3)
+      fcc <- fc_palette[min(ci, length(fc_palette))]
+      is_last <- ci == length(comp_keys)
+      tracks[[paste0("fc_", ci)]] <- .pr_build_track(
+        comp$coverage, "fc", fcc, NULL,
+        protein_length, axis_text_size, show_x_axis = is_last,
+        alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
+        ctrl_group = comp$ctrl_group, treatment_group = comp$treatment_group,
+        manual_y_max = if (identical(fc_y_range, "manual")) fc_y_abs else NULL
+      )
+      track_heights <- c(track_heights, 1.3)
+    }
+
+    composed <- Reduce("/", tracks) +
+      patchwork::plot_layout(heights = track_heights)
+    composed <- composed &
+      ggplot2::theme(plot.margin = ggplot2::margin(1, 10, 1, 10))
+    plots_out[["peptide_region"]] <- composed
+    tables_out[["peptide_stats"]] <- first_comp$peptide_stats
+  } else {
+    # ---- Single-group (from new or old format) ----
+    gc <- if (has_new_format) group_coverages[[1]]
+          else comparisons[[1]]
+    coverage <- gc$coverage
+    grp_name <- gc$group_name %||% gc$ctrl_group %||% "Value"
+
+    mean_col <- if ("group_mean" %in% names(coverage)) "group_mean"
+                else if ("ctrl_mean" %in% names(coverage)) "ctrl_mean"
+                else names(coverage)[2]
+    n_covered <- sum(!is.na(coverage[[mean_col]]))
     cov_pct   <- round(100 * n_covered / protein_length, 1)
 
     p_bar <- .pr_build_protein_bar(
@@ -10652,13 +10714,15 @@ tb_render_peptide_region <- function(results, style, meta) {
     )
 
     p_val <- .pr_build_track(
-      coverage, "ctrl_mean", ctrl_color, ctrl_grp,
+      coverage, mean_col, ctrl_color, grp_name,
       protein_length, axis_text_size, alpha = track_alpha,
       marker_df = marker_df,
       log_transform = value_transform,
       manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
     )
-    cv_col <- if ("ctrl_cv" %in% names(coverage)) "ctrl_cv" else NULL
+    cv_col <- if ("group_cv" %in% names(coverage)) "group_cv"
+              else if ("ctrl_cv" %in% names(coverage)) "ctrl_cv"
+              else NULL
     p_cv <- if (!is.null(cv_col)) {
       .pr_build_track(
         coverage, cv_col, "#E69F00", "CV",
@@ -10683,8 +10747,8 @@ tb_render_peptide_region <- function(results, style, meta) {
       ggplot2::theme(plot.margin = ggplot2::margin(1, 10, 1, 10))
     plots_out[["peptide_region"]] <- composed
 
-    if (!is.null(comp$peptide_stats)) {
-      tables_out[["peptide_stats"]] <- comp$peptide_stats
+    if (!is.null(gc$peptide_stats)) {
+      tables_out[["peptide_stats"]] <- gc$peptide_stats
     }
   }
 

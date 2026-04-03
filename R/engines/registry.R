@@ -2564,32 +2564,16 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       style_schema = list(
         msterp_schema_field(
-          "ctrl_color", "string", "Control track color",
-          default = "#2166AC"
-        ),
-        msterp_schema_field(
-          "treatment_color", "string", "Treatment track color",
-          default = "#B2182B"
-        ),
-        msterp_schema_field(
           "fc_color", "string", "Fold-change track color",
           default = "#7B2D8E"
         ),
         msterp_schema_field(
           "flip_fc", "bool", "Flip fold-change direction",
           default = FALSE,
-          help = "Show Control/Treatment instead of Treatment/Control on the FC track."
+          help = "Swap numerator/denominator on FC tracks."
         ),
         msterp_schema_field(
-          "show_ctrl_track", "bool", "Show control track",
-          default = TRUE
-        ),
-        msterp_schema_field(
-          "show_treatment_tracks", "bool", "Show treatment track(s)",
-          default = TRUE
-        ),
-        msterp_schema_field(
-          "show_fc_tracks", "bool", "Show fold-change track(s)",
+          "show_fc_tracks", "bool", "Show fold-change tracks",
           default = TRUE
         ),
         msterp_schema_field(
@@ -2687,6 +2671,11 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = "",
           choices = c(""),
           help = "Browse between target proteins (detail view only)."
+        ),
+        msterp_schema_field(
+          "visible_groups", "string", "Visible groups",
+          default = "",
+          help = "Comma-separated group names to display. Empty = all groups."
         )
       ),
       outputs = list(figures = c("peptide_region"), tables = c("protein_scores", "peptide_stats"), interactive = FALSE),

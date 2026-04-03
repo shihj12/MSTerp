@@ -561,102 +561,109 @@ pr_compute_detail <- function(protein_id, parent_data) {
     ifelse(c_term_is_kr | n_term_is_kr, "semi_tryptic", "non_tryptic")
   )
 
-  # Build coverage per comparison
-  coverages <- list()
+  # ---- Build per-group coverage ----
+  groups <- unique(samples$group_name)
+  group_coverages <- list()
 
-  if (length(comparisons_info) > 0) {
+  for (grp in groups) {
+    grp_samples <- samples$sample_col[samples$group_name == grp]
+    pep_stats <- pep_stats_base
+
+    grp_mat_sub <- mat[rows[valid_idx], grp_samples, drop = FALSE]
+    pep_stats$group_mean <- rowMeans(grp_mat_sub, na.rm = TRUE)
+    pep_stats$group_mean[is.nan(pep_stats$group_mean)] <- NA_real_
+
+    # Per-replicate lists for CV
+    n_samp <- length(grp_samples)
+    rep_lists <- lapply(seq_len(nrow(grp_mat_sub)), function(i) {
+      x <- as.numeric(grp_mat_sub[i, ]); x[!is.na(x)]
+    })
+
+    keep <- !is.na(pep_stats$group_mean)
+    pep_stats <- pep_stats[keep, , drop = FALSE]
+    rep_lists <- rep_lists[keep]
+
+    cov <- pr_build_coverage(
+      pep_stats, uniprot$seq_length, aggregation_method,
+      value_cols = "group_mean",
+      compute_cv = (n_samp >= 2L),
+      replicate_lists = if (n_samp >= 2L) list(group = rep_lists) else NULL
+    )
+
+    group_coverages[[grp]] <- list(
+      coverage      = cov,
+      peptide_stats = pep_stats,
+      group_name    = grp,
+      n_samples     = n_samp
+    )
+  }
+
+  # ---- Build pairwise stats (FC + t-test) for multi-group ----
+  pairwise <- list()
+
+  if (n_groups >= 2L && length(comparisons_info) > 0) {
     for (comp_key in names(comparisons_info)) {
       comp <- comparisons_info[[comp_key]]
-      pep_stats <- pep_stats_base
+      grp_a <- comp$ctrl_group
+      grp_b <- comp$treatment_group
 
-      ctrl_mat_sub  <- mat[rows[valid_idx], comp$ctrl_samples, drop = FALSE]
-      treat_mat_sub <- mat[rows[valid_idx], comp$treatment_samples, drop = FALSE]
+      cov_a <- group_coverages[[grp_a]]$coverage
+      cov_b <- group_coverages[[grp_b]]$coverage
 
-      pep_stats$ctrl_mean      <- rowMeans(ctrl_mat_sub, na.rm = TRUE)
-      pep_stats$treatment_mean <- rowMeans(treat_mat_sub, na.rm = TRUE)
-      pep_stats$ctrl_mean[is.nan(pep_stats$ctrl_mean)]           <- NA_real_
-      pep_stats$treatment_mean[is.nan(pep_stats$treatment_mean)] <- NA_real_
+      # Residue-level FC: group_b / group_a
+      fc_cov <- data.frame(
+        residue = cov_a$residue,
+        fc      = cov_b$group_mean / cov_a$group_mean,
+        stringsAsFactors = FALSE
+      )
 
       # Per-peptide t-test
-      n_ctrl  <- length(comp$ctrl_samples)
-      n_treat <- length(comp$treatment_samples)
-      has_stats <- n_ctrl >= 2L && n_treat >= 2L
+      n_a <- length(comp$ctrl_samples)
+      n_b <- length(comp$treatment_samples)
+      has_stats <- n_a >= 2L && n_b >= 2L
 
       if (has_stats) {
-        pep_pvals <- numeric(nrow(ctrl_mat_sub))
-        for (pi in seq_len(nrow(ctrl_mat_sub))) {
-          vc <- as.numeric(ctrl_mat_sub[pi, ])
-          vt <- as.numeric(treat_mat_sub[pi, ])
-          vc <- vc[!is.na(vc) & is.finite(vc)]
-          vt <- vt[!is.na(vt) & is.finite(vt)]
-          if (length(vc) >= 2L && length(vt) >= 2L) {
-            tt <- tryCatch(stats::t.test(vc, vt, var.equal = FALSE), error = function(e) NULL)
+        mat_a <- mat[rows[valid_idx], comp$ctrl_samples, drop = FALSE]
+        mat_b <- mat[rows[valid_idx], comp$treatment_samples, drop = FALSE]
+        pep_pvals <- numeric(nrow(mat_a))
+        for (pi in seq_len(nrow(mat_a))) {
+          va <- as.numeric(mat_a[pi, ])
+          vb <- as.numeric(mat_b[pi, ])
+          va <- va[!is.na(va) & is.finite(va)]
+          vb <- vb[!is.na(vb) & is.finite(vb)]
+          if (length(va) >= 2L && length(vb) >= 2L) {
+            tt <- tryCatch(stats::t.test(va, vb, var.equal = FALSE), error = function(e) NULL)
             pep_pvals[pi] <- if (!is.null(tt)) tt$p.value else NA_real_
           } else {
             pep_pvals[pi] <- NA_real_
           }
         }
-        pep_stats$pvalue <- pep_pvals
-        pep_stats$padj   <- stats::p.adjust(pep_pvals, method = "BH")
-        pep_stats$log2fc <- ifelse(
-          pep_stats$ctrl_mean > 0 & pep_stats$treatment_mean > 0,
-          log2(pep_stats$treatment_mean / pep_stats$ctrl_mean),
-          NA_real_
-        )
-      } else {
-        pep_stats$pvalue <- NA_real_
-        pep_stats$padj   <- NA_real_
-        pep_stats$log2fc <- NA_real_
+        padj <- stats::p.adjust(pep_pvals, method = "BH")
+
+        # Propagate min padj to residues
+        ps_tmp <- pep_stats_base[, c("prot_start", "prot_end"), drop = FALSE]
+        ps_tmp$padj <- padj
+        pval_per_res <- vector("list", uniprot$seq_length)
+        for (i in seq_len(nrow(ps_tmp))) {
+          pv <- ps_tmp$padj[i]
+          if (!is.na(pv)) {
+            for (pos in ps_tmp$prot_start[i]:ps_tmp$prot_end[i]) {
+              pval_per_res[[pos]] <- c(pval_per_res[[pos]], pv)
+            }
+          }
+        }
+        fc_cov$min_pvalue <- vapply(pval_per_res, function(x) {
+          if (length(x) == 0) NA_real_ else min(x, na.rm = TRUE)
+        }, numeric(1))
       }
 
-      keep <- !(is.na(pep_stats$ctrl_mean) & is.na(pep_stats$treatment_mean))
-      pep_stats <- pep_stats[keep, , drop = FALSE]
-
-      cov <- pr_build_coverage(
-        pep_stats, uniprot$seq_length, aggregation_method,
-        value_cols = c("ctrl_mean", "treatment_mean"),
-        pvalue_col = if (has_stats) "padj" else NULL
-      )
-
-      coverages[[comp_key]] <- list(
-        coverage        = cov,
-        peptide_stats   = pep_stats,
-        ctrl_group      = comp$ctrl_group,
-        treatment_group = comp$treatment_group,
-        has_statistics  = has_stats
+      pairwise[[comp_key]] <- list(
+        fc_coverage    = fc_cov,
+        group_a        = grp_a,
+        group_b        = grp_b,
+        has_statistics = has_stats
       )
     }
-  } else {
-    # Single-group mode
-    first_group <- unique(samples$group_name)[1]
-    first_samples <- samples$sample_col[samples$group_name == first_group]
-    pep_stats <- pep_stats_base
-
-    ctrl_mat_sub <- mat[rows[valid_idx], first_samples, drop = FALSE]
-    pep_stats$ctrl_mean <- rowMeans(ctrl_mat_sub, na.rm = TRUE)
-    pep_stats$ctrl_mean[is.nan(pep_stats$ctrl_mean)] <- NA_real_
-
-    ctrl_rep_lists <- lapply(seq_len(nrow(ctrl_mat_sub)), function(i) {
-      x <- as.numeric(ctrl_mat_sub[i, ]); x[!is.na(x)]
-    })
-
-    keep <- !is.na(pep_stats$ctrl_mean)
-    pep_stats <- pep_stats[keep, , drop = FALSE]
-    ctrl_rep_lists <- ctrl_rep_lists[keep]
-
-    cov <- pr_build_coverage(
-      pep_stats, uniprot$seq_length, aggregation_method,
-      value_cols = "ctrl_mean",
-      compute_cv = TRUE,
-      replicate_lists = list(ctrl = ctrl_rep_lists)
-    )
-
-    coverages[[first_group]] <- list(
-      coverage      = cov,
-      peptide_stats = pep_stats,
-      ctrl_group    = first_group,
-      treatment_group = NULL
-    )
   }
 
   list(
@@ -673,8 +680,11 @@ pr_compute_detail <- function(protein_id, parent_data) {
         peptide_positions = pep_stats_base[, c("prot_start", "prot_end", "c_term_residue", "tryptic_class")],
         has_coverage  = TRUE
       ),
-      comparisons        = coverages,
+      group_coverages    = group_coverages,
+      pairwise           = pairwise,
+      comparisons        = list(),
       n_groups           = n_groups,
+      group_names        = groups,
       aggregation_method = aggregation_method
     )
   )

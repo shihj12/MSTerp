@@ -172,7 +172,7 @@ get_style_section <- function(field_name) {
     # Axis/direction flip selectors
     "flip_axis", "flip_fc", "flip_x", "flip_y", "swap_axes",
     # Peptide region track visibility
-    "show_ctrl_track", "show_treatment_tracks", "show_fc_tracks",
+    "show_fc_tracks", "visible_groups",
     # Significance display mode
     "show_significance", "sig_display"
   )
@@ -5115,6 +5115,7 @@ page_results_server <- function(input, output, session) {
     # Protein selector for peptide_region engine (detail mode only)
     # In overview mode, just strip selected_protein from schema to prevent accordion crash
     protein_selector_ui <- NULL
+    pr_group_selector_ui <- NULL
     if (eng_lower == "peptide_region") {
       # Always remove selected_protein from schema to prevent empty-choice crash
       sp_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "selected_protein"), logical(1)))
@@ -5122,20 +5123,45 @@ page_results_server <- function(input, output, session) {
         schema <- schema[-sp_idx[[1]]]
       }
 
+      # Remove visible_groups from schema (handled as custom UI below)
+      vg_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "visible_groups"), logical(1)))
+      if (length(vg_idx) > 0) {
+        schema <- schema[-vg_idx[[1]]]
+      }
+
       # Hide comparison-only style fields for single-sample experiments
       pr_res <- isolate(active_results())
       pr_n_groups <- pr_res$data$n_groups %||% 1
       if (pr_n_groups < 2) {
-        comp_only <- c("treatment_color", "fc_color", "flip_fc", "fc_y_range", "fc_y_abs",
-                       "show_ctrl_track", "show_treatment_tracks", "show_fc_tracks",
-                       "show_significance", "sig_display", "sig_threshold")
+        comp_only <- c("fc_color", "flip_fc", "fc_y_range", "fc_y_abs",
+                       "show_fc_tracks",
+                       "show_significance", "sig_display", "sig_threshold",
+                       "visible_groups")
         schema <- Filter(function(f) !as.character(f$name %||% "") %in% comp_only, schema)
-        # Relabel "Control track color" -> "Track color" (no comparison distinction)
-        for (i in seq_along(schema)) {
-          if (identical(as.character(schema[[i]]$name %||% ""), "ctrl_color")) {
-            schema[[i]]$label <- "Track color"
-            break
+      } else if (!is.null(pr_res)) {
+        # Build group selector for multi-group experiments
+        grp_names <- pr_res$data$group_names %||% names(pr_res$data$group_coverages) %||% character()
+        if (length(grp_names) > 0) {
+          current_visible <- eff$style$visible_groups
+          if (is.null(current_visible) || !is.character(current_visible) || !any(nzchar(current_visible))) {
+            current_visible <- grp_names
           }
+          nid <- rv$active_node_id
+          pr_group_selector_ui <- div(
+            style = "margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border-light);",
+            checkboxGroupInput(
+              res_field_input_id(nid, "visible_groups"),
+              "Visible groups",
+              choices = stats::setNames(grp_names, grp_names),
+              selected = intersect(current_visible, grp_names),
+              inline = TRUE
+            ),
+            tags$small(
+              class = "text-muted d-block",
+              style = "margin-top: 4px;",
+              sprintf("%d group%s available", length(grp_names), if (length(grp_names) != 1) "s" else "")
+            )
+          )
         }
       }
     }
@@ -5544,6 +5570,7 @@ page_results_server <- function(input, output, session) {
       selected_group_ui,  # Group selector at top for hor_dis/vert_dis/rankplot
       gene_selector_ui,   # Gene selector for gene_barchart
       protein_selector_ui,  # Protein selector for peptide_region
+      pr_group_selector_ui, # Group visibility selector for peptide_region
       cluster_selector_ui,  # Cluster selector for PPI network
       selectors_ui,       # Selector fields (always visible, not in accordions)
       accordions_ui,      # Accordion panels for grouped fields
