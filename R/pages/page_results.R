@@ -170,7 +170,11 @@ get_style_section <- function(field_name) {
     # CV plot mode
     "cv_plot_mode", "x_axis_mode",
     # Axis/direction flip selectors
-    "flip_axis", "flip_fc", "flip_x", "flip_y", "swap_axes"
+    "flip_axis", "flip_fc", "flip_x", "flip_y", "swap_axes",
+    # Peptide region track visibility
+    "show_ctrl_track", "show_treatment_tracks", "show_fc_tracks",
+    # Significance display mode
+    "show_significance", "sig_display"
   )
   if (field_name %in% selector_fields) return(NULL)
 
@@ -5122,7 +5126,9 @@ page_results_server <- function(input, output, session) {
       pr_res <- isolate(active_results())
       pr_n_groups <- pr_res$data$n_groups %||% 1
       if (pr_n_groups < 2) {
-        comp_only <- c("treatment_color", "fc_color", "flip_fc", "fc_y_range", "fc_y_abs")
+        comp_only <- c("treatment_color", "fc_color", "flip_fc", "fc_y_range", "fc_y_abs",
+                       "show_ctrl_track", "show_treatment_tracks", "show_fc_tracks",
+                       "show_significance", "sig_display", "sig_threshold")
         schema <- Filter(function(f) !as.character(f$name %||% "") %in% comp_only, schema)
         # Relabel "Control track color" -> "Track color" (no comparison distinction)
         for (i in seq_along(schema)) {

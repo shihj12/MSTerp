@@ -10483,6 +10483,9 @@ tb_render_peptide_region <- function(results, style, meta) {
   show_markers      <- isTRUE(style$show_peptide_markers %||% TRUE)
   feature_text_size <- tb_num(style$feature_text_size, 2)
   flip_fc           <- isTRUE(style$flip_fc %||% FALSE)
+  show_significance <- isTRUE(style$show_significance %||% TRUE)
+  sig_display       <- as.character(style$sig_display %||% "stars")[1]
+  sig_threshold     <- tb_num(style$sig_threshold, 0.05)
   value_transform   <- as.character(style$value_transform %||% "none")[1]
   value_y_range     <- as.character(style$value_y_range %||% "auto")[1]
   value_y_max       <- tb_num(style$value_y_max, 10)
@@ -10505,107 +10508,184 @@ tb_render_peptide_region <- function(results, style, meta) {
     return(list(plots = list(peptide_region = p_msg), tables = list(), tabs = NULL))
   }
 
-  # Peptide marker data
+  # Peptide marker data (with tryptic classification)
   marker_df <- NULL
   if (show_markers && !is.null(prot$peptide_positions) && nrow(prot$peptide_positions) > 0) {
     marker_df <- data.frame(
       xmin = prot$peptide_positions$prot_start - 0.5,
       xmax = prot$peptide_positions$prot_end + 0.5,
+      tryptic_class = if (!is.null(prot$peptide_positions$tryptic_class))
+                        prot$peptide_positions$tryptic_class
+                      else "fully_tryptic",
       stringsAsFactors = FALSE
     )
     marker_df <- unique(marker_df)
   }
 
-  # Build one composite plot per comparison
   plots_out  <- list()
   tables_out <- list()
+  comp_keys  <- names(comparisons)
 
-  for (comp_key in names(comparisons)) {
-    comp <- comparisons[[comp_key]]
-    coverage <- comp$coverage
-    ctrl_grp <- comp$ctrl_group
-    treat_grp <- comp$treatment_group
+  if (n_groups >= 2 && length(comp_keys) > 0 &&
+      !is.null(comparisons[[comp_keys[1]]]$treatment_group)) {
+    # ---- Multi-group: unified track layout ----
+    show_ctrl_track       <- isTRUE(style$show_ctrl_track %||% TRUE)
+    show_treatment_tracks <- isTRUE(style$show_treatment_tracks %||% TRUE)
+    show_fc_tracks        <- isTRUE(style$show_fc_tracks %||% TRUE)
+
+    # Color palettes for multiple comparisons
+    treatment_palette <- c(treatment_color, "#D6604D", "#F4A582", "#FDDBC7")
+    fc_palette        <- c(fc_color, "#9E6AB8", "#C2A5D0", "#DEC9E4")
+
+    first_comp <- comparisons[[comp_keys[1]]]
 
     # Coverage %
-    first_col <- if ("ctrl_mean" %in% names(coverage)) "ctrl_mean" else names(coverage)[2]
-    n_covered <- sum(!is.na(coverage[[first_col]]))
-    cov_pct <- round(100 * n_covered / protein_length, 1)
+    first_col <- if ("ctrl_mean" %in% names(first_comp$coverage)) "ctrl_mean"
+                 else names(first_comp$coverage)[2]
+    n_covered <- sum(!is.na(first_comp$coverage[[first_col]]))
+    cov_pct   <- round(100 * n_covered / protein_length, 1)
 
-    # Protein feature bar (multi-layer)
+    # Protein feature bar (once)
     p_bar <- .pr_build_protein_bar(
       prot$features, protein_length, gene_symbol, uniprot_id,
       title_text_size, cov_pct, feature_text_size
     )
 
-    if (n_groups >= 2 && !is.null(treat_grp)) {
-      p_ctrl <- .pr_build_track(
-        coverage, "ctrl_mean", ctrl_color, ctrl_grp,
-        protein_length, axis_text_size, alpha = track_alpha,
-        marker_df = marker_df,
+    tracks <- list(bar = p_bar)
+    track_heights <- 1.2
+
+    # Determine which track type is last (for x-axis)
+    last_type <- if (show_fc_tracks) "fc"
+                 else if (show_treatment_tracks) "treat"
+                 else if (show_ctrl_track) "ctrl"
+                 else "bar"
+
+    # Control track (once, from first comparison)
+    if (show_ctrl_track) {
+      is_last <- identical(last_type, "ctrl")
+      tracks$ctrl <- .pr_build_track(
+        first_comp$coverage, "ctrl_mean", ctrl_color, first_comp$ctrl_group,
+        protein_length, axis_text_size, show_x_axis = is_last,
+        alpha = track_alpha, marker_df = marker_df,
         log_transform = value_transform,
         manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
       )
-      p_treat <- .pr_build_track(
-        coverage, "treatment_mean", treatment_color, treat_grp,
-        protein_length, axis_text_size, alpha = track_alpha,
-        marker_df = marker_df,
-        log_transform = value_transform,
-        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
-      )
-      p_fc <- .pr_build_track(
-        coverage, "fc", fc_color, NULL,
-        protein_length, axis_text_size, show_x_axis = TRUE,
-        alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
-        ctrl_group = ctrl_grp, treatment_group = treat_grp,
-        manual_y_max = if (identical(fc_y_range, "manual")) fc_y_abs else NULL
-      )
-      composed <- (p_bar / p_ctrl / p_treat / p_fc) +
-        patchwork::plot_layout(heights = c(1.2, 1.3, 1.3, 1.3))
-    } else {
-      # Single-group
-      p_val <- .pr_build_track(
-        coverage, "ctrl_mean", ctrl_color, ctrl_grp,
-        protein_length, axis_text_size, alpha = track_alpha,
-        marker_df = marker_df,
-        log_transform = value_transform,
-        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
-      )
-      cv_col <- if ("ctrl_cv" %in% names(coverage)) "ctrl_cv" else NULL
-      p_cv <- if (!is.null(cv_col)) {
-        .pr_build_track(
-          coverage, cv_col, "#E69F00", "CV",
-          protein_length, axis_text_size, alpha = 0.75,
-          marker_df = marker_df
+      track_heights <- c(track_heights, 1.3)
+    }
+
+    # Treatment tracks (one per comparison)
+    if (show_treatment_tracks) {
+      for (ci in seq_along(comp_keys)) {
+        comp <- comparisons[[comp_keys[ci]]]
+        tc   <- treatment_palette[min(ci, length(treatment_palette))]
+        is_last <- identical(last_type, "treat") && ci == length(comp_keys)
+        tracks[[paste0("treat_", ci)]] <- .pr_build_track(
+          comp$coverage, "treatment_mean", tc, comp$treatment_group,
+          protein_length, axis_text_size, show_x_axis = is_last,
+          alpha = track_alpha, marker_df = marker_df,
+          log_transform = value_transform,
+          manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
         )
-      } else {
-        ggplot2::ggplot() +
-          ggplot2::annotate("text", x = 0.5, y = 0.5,
-                            label = "CV requires > 1 replicate",
-                            size = 4, color = "grey60") +
-          ggplot2::theme_void()
+        track_heights <- c(track_heights, 1.3)
       }
-      p_depth <- .pr_build_track(
-        coverage, "depth", "#999999", "Depth",
-        protein_length, axis_text_size, show_x_axis = TRUE, alpha = 0.7
-      )
-      composed <- (p_bar / p_val / p_cv / p_depth) +
-        patchwork::plot_layout(heights = c(1.2, 1.3, 1.3, 1.3))
+    }
+
+    # FC tracks (one per comparison)
+    if (show_fc_tracks) {
+      for (ci in seq_along(comp_keys)) {
+        comp <- comparisons[[comp_keys[ci]]]
+        fcc  <- fc_palette[min(ci, length(fc_palette))]
+        is_last <- identical(last_type, "fc") && ci == length(comp_keys)
+        tracks[[paste0("fc_", ci)]] <- .pr_build_track(
+          comp$coverage, "fc", fcc, NULL,
+          protein_length, axis_text_size, show_x_axis = is_last,
+          alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
+          ctrl_group = comp$ctrl_group, treatment_group = comp$treatment_group,
+          manual_y_max = if (identical(fc_y_range, "manual")) fc_y_abs else NULL,
+          show_significance = show_significance && isTRUE(comp$has_statistics),
+          sig_display = sig_display, sig_threshold = sig_threshold
+        )
+        track_heights <- c(track_heights, 1.3)
+      }
+    }
+
+    if (length(tracks) <= 1) {
+      # All data tracks hidden
+      composed <- p_bar +
+        ggplot2::labs(subtitle = "All data tracks hidden") +
+        ggplot2::theme(plot.subtitle = ggplot2::element_text(
+          color = "grey50", hjust = 0.5, size = 10))
+    } else {
+      composed <- Reduce("/", tracks) +
+        patchwork::plot_layout(heights = track_heights)
     }
 
     composed <- composed &
       ggplot2::theme(plot.margin = ggplot2::margin(1, 10, 1, 10))
+    plots_out[["peptide_region"]] <- composed
 
-    plots_out[[comp_key]] <- composed
+    # Merge peptide_stats tables with comparison column
+    all_stats <- list()
+    for (ci in seq_along(comp_keys)) {
+      ps <- comparisons[[comp_keys[ci]]]$peptide_stats
+      if (!is.null(ps) && nrow(ps) > 0) {
+        ps$comparison <- comp_keys[ci]
+        all_stats[[ci]] <- ps
+      }
+    }
+    if (length(all_stats) > 0) {
+      tables_out[["peptide_stats"]] <- do.call(rbind, all_stats)
+    }
+  } else {
+    # ---- Single-group ----
+    comp <- comparisons[[comp_keys[1]]]
+    coverage <- comp$coverage
+    ctrl_grp <- comp$ctrl_group
+
+    first_col <- if ("ctrl_mean" %in% names(coverage)) "ctrl_mean" else names(coverage)[2]
+    n_covered <- sum(!is.na(coverage[[first_col]]))
+    cov_pct   <- round(100 * n_covered / protein_length, 1)
+
+    p_bar <- .pr_build_protein_bar(
+      prot$features, protein_length, gene_symbol, uniprot_id,
+      title_text_size, cov_pct, feature_text_size
+    )
+
+    p_val <- .pr_build_track(
+      coverage, "ctrl_mean", ctrl_color, ctrl_grp,
+      protein_length, axis_text_size, alpha = track_alpha,
+      marker_df = marker_df,
+      log_transform = value_transform,
+      manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
+    )
+    cv_col <- if ("ctrl_cv" %in% names(coverage)) "ctrl_cv" else NULL
+    p_cv <- if (!is.null(cv_col)) {
+      .pr_build_track(
+        coverage, cv_col, "#E69F00", "CV",
+        protein_length, axis_text_size, alpha = 0.75,
+        marker_df = marker_df
+      )
+    } else {
+      ggplot2::ggplot() +
+        ggplot2::annotate("text", x = 0.5, y = 0.5,
+                          label = "CV requires > 1 replicate",
+                          size = 4, color = "grey60") +
+        ggplot2::theme_void()
+    }
+    p_depth <- .pr_build_track(
+      coverage, "depth", "#999999", "Depth",
+      protein_length, axis_text_size, show_x_axis = TRUE, alpha = 0.7
+    )
+
+    composed <- (p_bar / p_val / p_cv / p_depth) +
+      patchwork::plot_layout(heights = c(1.2, 1.3, 1.3, 1.3))
+    composed <- composed &
+      ggplot2::theme(plot.margin = ggplot2::margin(1, 10, 1, 10))
+    plots_out[["peptide_region"]] <- composed
 
     if (!is.null(comp$peptide_stats)) {
-      tables_out[[paste0("peptide_stats_", comp_key)]] <- comp$peptide_stats
+      tables_out[["peptide_stats"]] <- comp$peptide_stats
     }
-  }
-
-  # If single comparison, use simple key
-  if (length(plots_out) == 1) {
-    names(plots_out) <- "peptide_region"
-    names(tables_out) <- "peptide_stats"
   }
 
   list(plots = plots_out, tables = tables_out, tabs = NULL)
@@ -10747,7 +10827,9 @@ tb_render_peptide_region <- function(results, style, meta) {
                              show_x_axis = FALSE, alpha = 0.85,
                              is_fc = FALSE, flip_fc = FALSE, marker_df = NULL,
                              ctrl_group = "Ctrl", treatment_group = "Treatment",
-                             log_transform = "none", manual_y_max = NULL) {
+                             log_transform = "none", manual_y_max = NULL,
+                             show_significance = FALSE, sig_display = "stars",
+                             sig_threshold = 0.05) {
   vals <- coverage[[col_name]]
   if (is.null(vals)) {
     return(ggplot2::ggplot() +
@@ -10830,14 +10912,26 @@ tb_render_peptide_region <- function(results, style, meta) {
 
   p <- ggplot2::ggplot(covered, ggplot2::aes(x = .data$residue, y = .data$val))
 
-  # Peptide markers (subtle background)
+  # Peptide markers (tryptic-class-dependent styling)
   if (!is.null(marker_df) && nrow(marker_df) > 0) {
-    p <- p +
-      ggplot2::geom_rect(
-        data = marker_df,
-        ggplot2::aes(xmin = .data$xmin, xmax = .data$xmax, ymin = -Inf, ymax = Inf),
-        inherit.aes = FALSE, fill = "#000000", alpha = 0.03
-      )
+    if (!"tryptic_class" %in% names(marker_df)) {
+      marker_df$tryptic_class <- "fully_tryptic"
+    }
+    tc_styles <- list(
+      fully_tryptic = list(fill = "#000000", alpha = 0.03),
+      semi_tryptic  = list(fill = "#E69F00", alpha = 0.08),
+      non_tryptic   = list(fill = "#D55E00", alpha = 0.14)
+    )
+    for (tc in unique(marker_df$tryptic_class)) {
+      sub_df <- marker_df[marker_df$tryptic_class == tc, , drop = FALSE]
+      sty <- tc_styles[[tc]] %||% tc_styles$fully_tryptic
+      p <- p +
+        ggplot2::geom_rect(
+          data = sub_df,
+          ggplot2::aes(xmin = .data$xmin, xmax = .data$xmax, ymin = -Inf, ymax = Inf),
+          inherit.aes = FALSE, fill = sty$fill, alpha = sty$alpha
+        )
+    }
   }
 
   p <- p +
@@ -10849,6 +10943,40 @@ tb_render_peptide_region <- function(results, style, meta) {
                                   fill = "grey90", alpha = 0.25)
     }
     p <- p + ggplot2::geom_hline(yintercept = 0, linewidth = 0.35, color = "grey30")
+
+    # Significance annotations on FC track
+    if (show_significance && "min_pvalue" %in% names(coverage)) {
+      sig_vals <- coverage$min_pvalue
+      sig_pos  <- which(!is.na(sig_vals) & sig_vals < sig_threshold)
+      if (length(sig_pos) > 0) {
+        # Group into contiguous runs
+        breaks <- which(diff(sig_pos) > 1)
+        run_starts <- sig_pos[c(1, breaks + 1)]
+        run_ends   <- sig_pos[c(breaks, length(sig_pos))]
+
+        sig_annot <- data.frame(
+          x = (run_starts + run_ends) / 2,
+          stringsAsFactors = FALSE
+        )
+        run_min_p <- vapply(seq_along(run_starts), function(ri) {
+          min(sig_vals[run_starts[ri]:run_ends[ri]], na.rm = TRUE)
+        }, numeric(1))
+
+        if (identical(sig_display, "pvalue")) {
+          sig_annot$label <- format(signif(run_min_p, 2), scientific = TRUE)
+        } else {
+          sig_annot$label <- ifelse(run_min_p < 0.001, "***",
+                             ifelse(run_min_p < 0.01, "**", "*"))
+        }
+
+        p <- p +
+          ggplot2::geom_text(
+            data = sig_annot,
+            ggplot2::aes(x = .data$x, y = y_max * 0.85, label = .data$label),
+            inherit.aes = FALSE, size = 3, color = "grey20", fontface = "bold"
+          )
+      }
+    }
   }
 
   p <- p +

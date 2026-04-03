@@ -114,7 +114,8 @@ pr_agg_fn <- function(method) {
 #' Build per-residue coverage from peptide stats
 pr_build_coverage <- function(pep_stats, protein_length, method = "harmonic_mean",
                               value_cols = c("ctrl_mean", "treatment_mean"),
-                              compute_cv = FALSE, replicate_lists = NULL) {
+                              compute_cv = FALSE, replicate_lists = NULL,
+                              pvalue_col = NULL) {
   agg <- pr_agg_fn(method)
 
   per_res <- lapply(value_cols, function(col) vector("list", protein_length))
@@ -124,6 +125,11 @@ pr_build_coverage <- function(pep_stats, protein_length, method = "harmonic_mean
     rep_per_res <- lapply(names(replicate_lists), function(nm) vector("list", protein_length))
     names(rep_per_res) <- names(replicate_lists)
   }
+
+  # Per-residue p-value accumulation
+  pval_per_res <- if (!is.null(pvalue_col) && pvalue_col %in% names(pep_stats))
+                    vector("list", protein_length)
+                  else NULL
 
   for (i in seq_len(nrow(pep_stats))) {
     s <- pep_stats$prot_start[i]
@@ -138,6 +144,10 @@ pr_build_coverage <- function(pep_stats, protein_length, method = "harmonic_mean
           reps <- replicate_lists[[nm]][[i]]
           if (length(reps) > 0) rep_per_res[[nm]][[pos]] <- c(rep_per_res[[nm]][[pos]], reps)
         }
+      }
+      if (!is.null(pval_per_res)) {
+        pv <- pep_stats[[pvalue_col]][i]
+        if (!is.na(pv)) pval_per_res[[pos]] <- c(pval_per_res[[pos]], pv)
       }
     }
   }
@@ -161,6 +171,13 @@ pr_build_coverage <- function(pep_stats, protein_length, method = "harmonic_mean
         m <- mean(x); if (m == 0) NA_real_ else stats::sd(x) / abs(m)
       }, numeric(1))
     }
+  }
+
+  # Min-p per residue (most significant overlapping peptide)
+  if (!is.null(pval_per_res)) {
+    out$min_pvalue <- vapply(pval_per_res, function(x) {
+      if (length(x) == 0) NA_real_ else min(x, na.rm = TRUE)
+    }, numeric(1))
   }
 
   out
@@ -520,6 +537,30 @@ pr_compute_detail <- function(protein_id, parent_data) {
     stringsAsFactors = FALSE
   )
 
+  # Tryptic classification (K/R terminal residues)
+  pep_stats_base$c_term_residue <- substr(
+    pep_stats_base$clean_seq,
+    nchar(pep_stats_base$clean_seq),
+    nchar(pep_stats_base$clean_seq)
+  )
+  c_term_is_kr <- pep_stats_base$c_term_residue %in% c("K", "R")
+
+  # N-terminal: residue before prot_start in protein sequence
+  # prot_start == 1 means protein N-terminus → always tryptic at that end
+  n_term_preceding <- ifelse(
+    pep_stats_base$prot_start > 1L,
+    substr(uniprot$sequence,
+           pep_stats_base$prot_start - 1L,
+           pep_stats_base$prot_start - 1L),
+    "-"
+  )
+  n_term_is_kr <- n_term_preceding %in% c("K", "R", "-")
+
+  pep_stats_base$tryptic_class <- ifelse(
+    c_term_is_kr & n_term_is_kr, "fully_tryptic",
+    ifelse(c_term_is_kr | n_term_is_kr, "semi_tryptic", "non_tryptic")
+  )
+
   # Build coverage per comparison
   coverages <- list()
 
@@ -536,19 +577,53 @@ pr_compute_detail <- function(protein_id, parent_data) {
       pep_stats$ctrl_mean[is.nan(pep_stats$ctrl_mean)]           <- NA_real_
       pep_stats$treatment_mean[is.nan(pep_stats$treatment_mean)] <- NA_real_
 
+      # Per-peptide t-test
+      n_ctrl  <- length(comp$ctrl_samples)
+      n_treat <- length(comp$treatment_samples)
+      has_stats <- n_ctrl >= 2L && n_treat >= 2L
+
+      if (has_stats) {
+        pep_pvals <- numeric(nrow(ctrl_mat_sub))
+        for (pi in seq_len(nrow(ctrl_mat_sub))) {
+          vc <- as.numeric(ctrl_mat_sub[pi, ])
+          vt <- as.numeric(treat_mat_sub[pi, ])
+          vc <- vc[!is.na(vc) & is.finite(vc)]
+          vt <- vt[!is.na(vt) & is.finite(vt)]
+          if (length(vc) >= 2L && length(vt) >= 2L) {
+            tt <- tryCatch(stats::t.test(vc, vt, var.equal = FALSE), error = function(e) NULL)
+            pep_pvals[pi] <- if (!is.null(tt)) tt$p.value else NA_real_
+          } else {
+            pep_pvals[pi] <- NA_real_
+          }
+        }
+        pep_stats$pvalue <- pep_pvals
+        pep_stats$padj   <- stats::p.adjust(pep_pvals, method = "BH")
+        pep_stats$log2fc <- ifelse(
+          pep_stats$ctrl_mean > 0 & pep_stats$treatment_mean > 0,
+          log2(pep_stats$treatment_mean / pep_stats$ctrl_mean),
+          NA_real_
+        )
+      } else {
+        pep_stats$pvalue <- NA_real_
+        pep_stats$padj   <- NA_real_
+        pep_stats$log2fc <- NA_real_
+      }
+
       keep <- !(is.na(pep_stats$ctrl_mean) & is.na(pep_stats$treatment_mean))
       pep_stats <- pep_stats[keep, , drop = FALSE]
 
       cov <- pr_build_coverage(
         pep_stats, uniprot$seq_length, aggregation_method,
-        value_cols = c("ctrl_mean", "treatment_mean")
+        value_cols = c("ctrl_mean", "treatment_mean"),
+        pvalue_col = if (has_stats) "padj" else NULL
       )
 
       coverages[[comp_key]] <- list(
-        coverage      = cov,
-        peptide_stats = pep_stats,
-        ctrl_group    = comp$ctrl_group,
-        treatment_group = comp$treatment_group
+        coverage        = cov,
+        peptide_stats   = pep_stats,
+        ctrl_group      = comp$ctrl_group,
+        treatment_group = comp$treatment_group,
+        has_statistics  = has_stats
       )
     }
   } else {
@@ -595,7 +670,7 @@ pr_compute_detail <- function(protein_id, parent_data) {
         sequence      = uniprot$sequence,
         seq_length    = uniprot$seq_length,
         features      = uniprot$features,
-        peptide_positions = pep_stats_base[, c("prot_start", "prot_end")],
+        peptide_positions = pep_stats_base[, c("prot_start", "prot_end", "c_term_residue", "tryptic_class")],
         has_coverage  = TRUE
       ),
       comparisons        = coverages,

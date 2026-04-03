@@ -2581,6 +2581,18 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           help = "Show Control/Treatment instead of Treatment/Control on the FC track."
         ),
         msterp_schema_field(
+          "show_ctrl_track", "bool", "Show control track",
+          default = TRUE
+        ),
+        msterp_schema_field(
+          "show_treatment_tracks", "bool", "Show treatment track(s)",
+          default = TRUE
+        ),
+        msterp_schema_field(
+          "show_fc_tracks", "bool", "Show fold-change track(s)",
+          default = TRUE
+        ),
+        msterp_schema_field(
           "value_transform", "choice", "Value track transform",
           default = "none",
           choices = c("none", "log2", "log10"),
@@ -2619,6 +2631,24 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           "show_peptide_markers", "bool", "Show peptide markers",
           default = TRUE,
           help = "Show tick marks where peptides map on the coverage tracks (detail view)."
+        ),
+        msterp_schema_field(
+          "show_significance", "bool", "Show significance",
+          default = TRUE,
+          help = "Show significance stars on FC track (comparison mode, requires >= 2 replicates per group)."
+        ),
+        msterp_schema_field(
+          "sig_display", "choice", "Significance display",
+          default = "stars",
+          choices = c("stars", "pvalue"),
+          choice_labels = c("Stars (* / ** / ***)", "P-value"),
+          help = "How to display significance on the FC track."
+        ),
+        msterp_schema_field(
+          "sig_threshold", "num", "Significance threshold",
+          default = 0.05, min = 0.001, max = 0.5,
+          advanced = TRUE,
+          help = "P-value threshold for significance annotations."
         ),
         msterp_schema_field(
           "feature_text_size", "num", "Feature label size",
