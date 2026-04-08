@@ -1302,6 +1302,22 @@ res_wrap_conditionals <- function(node_id, field, ui) {
     cond <- sprintf("input['%s'] == 'hierarchical' || typeof input['%s'] === 'undefined'", ctrl, ctrl)
   }
 
+  # Peptide region: value_y_max only visible when value_y_range == "manual"
+  if (fname == "value_y_max") {
+    ctrl <- res_field_input_id(node_id, "value_y_range")
+    cond <- sprintf("input['%s'] == 'manual'", ctrl)
+  }
+  # Peptide region: fc_y_abs only visible when fc_y_range == "manual"
+  if (fname == "fc_y_abs") {
+    ctrl <- res_field_input_id(node_id, "fc_y_range")
+    cond <- sprintf("input['%s'] == 'manual'", ctrl)
+  }
+  # Peptide region: manual color pickers only visible when color_mode == "manual"
+  if (fname %in% c("manual_value_color", "manual_fc_color")) {
+    ctrl <- res_field_input_id(node_id, "color_mode")
+    cond <- sprintf("input['%s'] == 'manual'", ctrl)
+  }
+
   if (!is.null(cond)) return(conditionalPanel(cond, ui))
   ui
 }
@@ -4406,8 +4422,8 @@ page_results_server <- function(input, output, session) {
       return(isTRUE(res_is_interactive_view(style)))
     }
     if (identical(eng, "peptide_region")) {
-      mode <- results$data$mode %||% "overview"
-      return(identical(mode, "overview"))
+      # Both overview (scatter) and detail (feature bar + tracks) use plotly.
+      return(TRUE)
     }
     FALSE
   }
@@ -7795,8 +7811,12 @@ page_results_server <- function(input, output, session) {
 
     if (is.null(res)) return(NULL)
 
-    # Peptide region overview: render the interactive scatter and return early
+    # Peptide region: dispatch to overview scatter or interactive detail view
     if (identical(eng, "peptide_region")) {
+      pr_mode <- res$data$mode %||% "overview"
+      if (identical(pr_mode, "detail")) {
+        return(tb_peptide_region_detail_plotly(res, style))
+      }
       return(tb_peptide_region_overview_plotly(res, style))
     }
 
@@ -11086,16 +11106,18 @@ page_results_server <- function(input, output, session) {
     schema <- edef$style_schema %||% list()
     fields <- Filter(function(f) {
       m <- f$mode %||% "both"
-      m == "detail"
+      m %in% c("detail", "both")
     }, schema)
     vapply(fields, function(f) as.character(f$name %||% ""), character(1))
   }
 
+  # Fields shown in the detail-style modal: detail-mode + shared (both) fields
+  # so width/height/title sizes are tunable too. Excludes overview-only fields.
   pr_detail_fields <- function() {
     edef <- res_engine_def("peptide_region", res_registry())
     if (is.null(edef)) return(list())
     schema <- edef$style_schema %||% list()
-    Filter(function(f) (f$mode %||% "both") == "detail", schema)
+    Filter(function(f) (f$mode %||% "both") %in% c("detail", "both"), schema)
   }
 
   observeEvent(input$res_peptide_region_configure_detail, {
@@ -11111,12 +11133,15 @@ page_results_server <- function(input, output, session) {
     eff <- isolate(active_effective_state())
     shared <- eff$style$`__pr_detail_shared` %||% list()
 
-    # Build modal inputs using the same per-field UI helper used by the accordion
+    # Build modal inputs using the same per-field UI helper used by the accordion.
+    # `res_field_ui` (vs `res_field_ui_core`) wraps fields in conditionalPanels so
+    # value_y_max/fc_y_abs/manual_*_color hide automatically based on their gating
+    # selectors inside the modal.
     nid <- isolate(rv$active_node_id)
     field_uis <- lapply(fields, function(f) {
       v_eff <- shared[[f$name]] %||% f$default
       tryCatch(
-        res_field_ui_core(nid, f, value_override = v_eff),
+        res_field_ui(nid, f, value_override = v_eff),
         error = function(e) NULL
       )
     })

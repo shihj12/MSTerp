@@ -300,7 +300,9 @@ pr_biology_tag <- function(gene_sym, protein_id, protein_to_go, go_terms,
 
   # Ordered first-match classification
   combined <- tolower(paste(go_names, collapse = " | "))
-  if (grepl("integral component of membrane|transmembrane", combined)) {
+  if (grepl("proteasom", combined)) {
+    result$tag <- "Proteasome"
+  } else if (grepl("integral component of membrane|transmembrane", combined)) {
     result$tag <- "Transmembrane"
   } else if (grepl("lysosom", combined)) {
     result$tag <- "Lysosomal"
@@ -590,6 +592,20 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
                stringsAsFactors = FALSE)
   }
 
+  # ---- Build group_colors map from samples (set by nr_build_samples) ----
+  group_colors <- NULL
+  if ("color" %in% names(samples) && "group_name" %in% names(samples)) {
+    gn <- as.character(samples$group_name)
+    gc <- as.character(samples$color)
+    keep <- !is.na(gn) & nzchar(gn) & !is.na(gc) & nzchar(gc)
+    if (any(keep)) {
+      df_gc <- unique(data.frame(g = gn[keep], c = gc[keep], stringsAsFactors = FALSE))
+      # First color wins for each group name
+      group_colors <- stats::setNames(df_gc$c[!duplicated(df_gc$g)],
+                                      df_gc$g[!duplicated(df_gc$g)])
+    }
+  }
+
   list(
     engine_id = "peptide_region",
     params    = params,
@@ -605,6 +621,7 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
       comp_keys_kept     = comp_keys_kept,
       aggregation_method = aggregation_method,
       gene_to_prot       = gene_to_prot,
+      group_colors       = group_colors,
       mat                = mat,
       ids                = ids,
       samples            = samples,
@@ -818,6 +835,7 @@ pr_compute_detail <- function(protein_id, parent_data) {
       comparisons        = list(),
       n_groups           = n_groups,
       group_names        = groups,
+      group_colors       = parent_data$group_colors %||% NULL,
       aggregation_method = aggregation_method
     )
   )

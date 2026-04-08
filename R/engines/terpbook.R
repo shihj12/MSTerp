@@ -10466,9 +10466,13 @@ tb_render_peptide_region <- function(results, style, meta) {
   # ---- Build static ggplot scatter (used for export / non-interactive view) ----
   p_static <- .pr_build_overview_scatter_static(scores, style, x_col, y_col)
 
+  # Table is hidden by default; user toggles via the overview style panel
+  show_table <- isTRUE(style$show_table %||% FALSE)
+  tables_out <- if (show_table) list(protein_scores = display) else list()
+
   list(
     plots  = list(peptide_region = p_static),
-    tables = list(protein_scores = display),
+    tables = tables_out,
     tabs   = NULL
   )
 }
@@ -10526,8 +10530,6 @@ tb_render_peptide_region <- function(results, style, meta) {
   point_alpha       <- tb_num(style$point_alpha, 0.8)
   point_size_scale  <- tb_num(style$point_size_scale, 1)
   highlight_targets <- isTRUE(style$highlight_targets %||% TRUE)
-  palette_name      <- as.character(style$palette %||% "Set2")[1]
-  color_mode        <- as.character(style$point_color_mode %||% "biology")[1]
   axis_text_size    <- tb_num(style$axis_text_size, 14)
   title_text_size   <- tb_num(style$title_text_size, 16)
 
@@ -10554,55 +10556,24 @@ tb_render_peptide_region <- function(results, style, meta) {
 
   size_range <- c(1.5, 6) * point_size_scale
 
-  if (identical(color_mode, "density") && nrow(df) >= 2) {
-    # Density-based coloring: per-point color via grDevices::densCols + identity scale
-    df$denscol <- grDevices::densCols(df$x, df$y, colramp = tb_fdr_palette)
-
-    p <- ggplot2::ggplot(df, ggplot2::aes(x = .data$x, y = .data$y)) +
-      ggplot2::geom_point(
-        ggplot2::aes(color = .data$denscol, size = .data$n_pep),
-        alpha = point_alpha
-      ) +
-      ggplot2::scale_color_identity() +
-      ggplot2::scale_size(range = size_range, name = "# peptides") +
-      ggplot2::labs(
-        x = .pr_axis_label(x_col),
-        y = .pr_axis_label(y_col)
-      ) +
-      ggplot2::theme_minimal(base_size = 12) +
-      ggplot2::theme(
-        axis.text  = ggplot2::element_text(size = axis_text_size * 0.75),
-        axis.title = ggplot2::element_text(size = axis_text_size * 0.85),
-        plot.title = ggplot2::element_text(face = "bold", size = title_text_size)
-      )
-  } else {
-    # Biology category coloring (default; also fallback when density needs >=2 points)
-    p <- ggplot2::ggplot(df, ggplot2::aes(x = .data$x, y = .data$y)) +
-      ggplot2::geom_point(
-        ggplot2::aes(color = .data$biology, size = .data$n_pep),
-        alpha = point_alpha
-      ) +
-      ggplot2::scale_size(range = size_range, name = "# peptides") +
-      ggplot2::labs(
-        x = .pr_axis_label(x_col),
-        y = .pr_axis_label(y_col),
-        color = "Biology"
-      ) +
-      ggplot2::theme_minimal(base_size = 12) +
-      ggplot2::theme(
-        axis.text  = ggplot2::element_text(size = axis_text_size * 0.75),
-        axis.title = ggplot2::element_text(size = axis_text_size * 0.85),
-        plot.title = ggplot2::element_text(face = "bold", size = title_text_size)
-      )
-
-    # Discrete biology palette
-    pal_ok <- tryCatch({
-      RColorBrewer::brewer.pal.info[palette_name, "category"] == "qual"
-    }, error = function(e) FALSE)
-    if (isTRUE(pal_ok)) {
-      p <- p + ggplot2::scale_color_brewer(palette = palette_name)
-    }
-  }
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = .data$x, y = .data$y)) +
+    ggplot2::geom_point(
+      ggplot2::aes(color = .data$biology, size = .data$n_pep),
+      alpha = point_alpha
+    ) +
+    ggplot2::scale_size(range = size_range, name = "# peptides") +
+    ggplot2::labs(
+      x = .pr_axis_label(x_col),
+      y = .pr_axis_label(y_col),
+      color = "Biology"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text  = ggplot2::element_text(size = axis_text_size * 0.75),
+      axis.title = ggplot2::element_text(size = axis_text_size * 0.85),
+      plot.title = ggplot2::element_text(face = "bold", size = title_text_size)
+    ) +
+    ggplot2::scale_color_brewer(palette = "Set2", na.value = "#888888")
 
   # Highlight targets with a black outline ring
   if (any(df$is_tgt)) {
@@ -10637,8 +10608,6 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   point_alpha       <- tb_num(style$point_alpha, 0.8)
   point_size_scale  <- tb_num(style$point_size_scale, 1)
   highlight_targets <- isTRUE(style$highlight_targets %||% TRUE)
-  palette_name      <- as.character(style$palette %||% "Set2")[1]
-  color_mode        <- as.character(style$point_color_mode %||% "biology")[1]
 
   # Build the data frame, filtering to finite x/y
   df <- data.frame(
@@ -10669,10 +10638,10 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     sizes <- size_min + (pep_sz - rng[1]) / diff(rng) * (size_max - size_min)
   }
 
-  # Discrete palette
+  # Fixed Set2 palette
   bio_levels <- sort(unique(df$biology))
   pal <- tryCatch(
-    RColorBrewer::brewer.pal(max(3, length(bio_levels)), palette_name),
+    RColorBrewer::brewer.pal(max(3, length(bio_levels)), "Set2"),
     error = function(e) NULL
   )
   if (is.null(pal)) {
@@ -10690,51 +10659,24 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     ifelse(nzchar(df$go_short), paste0("GO: ", df$go_short), "")
   )
 
-  use_density <- identical(color_mode, "density") && nrow(df) >= 2
-
-  if (use_density) {
-    # Density-based coloring: precompute per-point hex colors and pass as a
-    # single trace (no biology category split, no legend).
-    df$denscol <- grDevices::densCols(df$x, df$y, colramp = tb_fdr_palette)
-
-    p <- plotly::plot_ly(
-      data    = df,
-      x       = ~x,
-      y       = ~y,
-      type    = "scatter",
-      mode    = "markers",
-      text    = hover_text,
-      hoverinfo = "text",
-      marker  = list(
-        color   = df$denscol,
-        size    = sizes,
-        sizemode = "diameter",
-        opacity = point_alpha,
-        line    = list(width = 0.5, color = "rgba(0,0,0,0.4)")
-      ),
-      showlegend = FALSE,
-      source  = "peptide_region_overview"
-    )
-  } else {
-    p <- plotly::plot_ly(
-      data    = df,
-      x       = ~x,
-      y       = ~y,
-      type    = "scatter",
-      mode    = "markers",
-      color   = ~biology,
-      colors  = pal[seq_along(bio_levels)],
-      text    = hover_text,
-      hoverinfo = "text",
-      marker  = list(
-        size    = sizes,
-        sizemode = "diameter",
-        opacity = point_alpha,
-        line    = list(width = 0.5, color = "rgba(0,0,0,0.4)")
-      ),
-      source  = "peptide_region_overview"
-    )
-  }
+  p <- plotly::plot_ly(
+    data    = df,
+    x       = ~x,
+    y       = ~y,
+    type    = "scatter",
+    mode    = "markers",
+    color   = ~biology,
+    colors  = pal[seq_along(bio_levels)],
+    text    = hover_text,
+    hoverinfo = "text",
+    marker  = list(
+      size    = sizes,
+      sizemode = "diameter",
+      opacity = point_alpha,
+      line    = list(width = 0.5, color = "rgba(0,0,0,0.4)")
+    ),
+    source  = "peptide_region_overview"
+  )
 
   # Target highlight: overlay black-ringed markers
   if (any(df$is_tgt)) {
@@ -10770,6 +10712,284 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "\u2026"), x)
 }
 
+# ---- Peptide Region: Interactive detail view (plotly) ----
+#
+# Builds a stacked plotly figure for one protein:
+#   1. Feature annotation track (rectangles with hover showing category + label)
+#   2. One value track per visible group
+#   3. One FC track per visible pairwise comparison (when applicable)
+#
+# The feature track is the only piece that fundamentally needs plotly (for hover);
+# the value/FC tracks are converted from the existing ggplot helpers via
+# plotly::ggplotly() and stacked with plotly::subplot(). This avoids re-implementing
+# the value/FC track styling for plotly while still giving feature-bar interactivity.
+
+#' Build the interactive feature annotation bar (plotly trace bundle).
+#' Uses the same category color/y-band scheme as `.pr_build_protein_bar` so the
+#' static and interactive views look identical.
+.pr_build_protein_bar_plotly <- function(features_df, protein_length, gene_symbol,
+                                          uniprot_id, coverage_pct = NULL,
+                                          title_size = 16) {
+  tb_require_pkg("plotly")
+
+  category_map <- list(
+    "Domain"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.75, ymax = 1.0, alpha = 0.45),
+    "Repeat"           = list(cat = "Domains",      color = "#4E79A7", ymin = 0.75, ymax = 1.0, alpha = 0.40),
+    "Region"           = list(cat = "Domains",      color = "#76B7B2", ymin = 0.75, ymax = 1.0, alpha = 0.35),
+    "Motif"            = list(cat = "Domains",      color = "#59A14F", ymin = 0.75, ymax = 1.0, alpha = 0.40),
+    "Coiled coil"      = list(cat = "Domains",      color = "#EDC948", ymin = 0.75, ymax = 1.0, alpha = 0.40),
+    "Transmembrane"    = list(cat = "Topology",     color = "#E15759", ymin = 0.56, ymax = 0.72, alpha = 0.85),
+    "Topological domain" = list(cat = "Topology",   color = "#F28E2B", ymin = 0.56, ymax = 0.72, alpha = 0.55),
+    "Intramembrane"    = list(cat = "Topology",     color = "#B07AA1", ymin = 0.56, ymax = 0.72, alpha = 0.85),
+    "Signal"           = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Transit peptide"  = list(cat = "Processing",   color = "#FF9DA7", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Propeptide"       = list(cat = "Processing",   color = "#FFBE7D", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Chain"            = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.39, ymax = 0.53, alpha = 0.50),
+    "Peptide"          = list(cat = "Processing",   color = "#D4A6C8", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Initiator methionine" = list(cat = "Processing", color = "#FF9DA7", ymin = 0.39, ymax = 0.53, alpha = 0.80),
+    "Active site"      = list(cat = "Binding",      color = "#E15759", ymin = 0.22, ymax = 0.36, alpha = 0.90),
+    "Binding site"     = list(cat = "Binding",      color = "#F28E2B", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Site"             = list(cat = "Binding",      color = "#86BCB6", ymin = 0.22, ymax = 0.36, alpha = 0.80),
+    "DNA binding"      = list(cat = "Binding",      color = "#499894", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Nucleotide binding" = list(cat = "Binding",    color = "#59A14F", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Metal binding"    = list(cat = "Binding",      color = "#B6992D", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Calcium binding"  = list(cat = "Binding",      color = "#B6992D", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Zinc finger"      = list(cat = "Binding",      color = "#B6992D", ymin = 0.22, ymax = 0.36, alpha = 0.85),
+    "Modified residue" = list(cat = "Modification", color = "#B07AA1", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Disulfide bond"   = list(cat = "Modification", color = "#E15759", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Glycosylation"    = list(cat = "Modification", color = "#59A14F", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Lipidation"       = list(cat = "Modification", color = "#EDC948", ymin = 0.05, ymax = 0.19, alpha = 0.80),
+    "Cross-link"       = list(cat = "Modification", color = "#FF9DA7", ymin = 0.05, ymax = 0.19, alpha = 0.80)
+  )
+
+  x_lo <- -protein_length * 0.03
+  x_hi <- protein_length * 1.03 + 0.5
+
+  # Background bar as a closed polygon (no hover)
+  bg_x <- c(0.5, protein_length + 0.5, protein_length + 0.5, 0.5, 0.5)
+  bg_y <- c(0,   0,                    1,                    1,   0)
+
+  p <- plotly::plot_ly(source = "peptide_region_detail")
+  p <- plotly::add_polygons(
+    p, x = bg_x, y = bg_y,
+    fillcolor = "#ECECE8",
+    line = list(color = "#888888", width = 1),
+    hoverinfo = "skip",
+    showlegend = FALSE
+  )
+
+  if (!is.null(features_df) && nrow(features_df) > 0) {
+    site_width <- max(2, protein_length * 0.006)
+
+    # Build a per-feature data frame, group by category for legend control
+    rows <- list()
+    for (i in seq_len(nrow(features_df))) {
+      ft_type <- as.character(features_df$type[i])
+      mapping <- category_map[[ft_type]]
+      if (is.null(mapping)) next
+      s <- features_df$start[i]
+      e <- features_df$end[i]
+      if (is.na(s) || is.na(e)) next
+      xmin <- if (s == e) s - site_width else s - 0.5
+      xmax <- if (s == e) e + site_width else e + 0.5
+      desc <- features_df$description[i]
+      if (is.na(desc) || !nzchar(desc)) desc <- ft_type
+      rows[[length(rows) + 1L]] <- data.frame(
+        ftype       = ft_type,
+        category    = mapping$cat,
+        color       = mapping$color,
+        alpha       = mapping$alpha,
+        xmin        = xmin, xmax = xmax,
+        ymin        = mapping$ymin, ymax = mapping$ymax,
+        description = desc,
+        stringsAsFactors = FALSE
+      )
+    }
+
+    if (length(rows) > 0) {
+      ftdf <- do.call(rbind, rows)
+      legend_seen <- character(0)
+
+      # One polygon trace per feature so each gets its own hover. We disable
+      # legendgroup uniqueness on each row but reuse a single legendgroup per
+      # category so the legend collapses to category-level entries.
+      for (i in seq_len(nrow(ftdf))) {
+        cat_name <- ftdf$category[i]
+        first_in_cat <- !(cat_name %in% legend_seen)
+        if (first_in_cat) legend_seen <- c(legend_seen, cat_name)
+
+        x_poly <- c(ftdf$xmin[i], ftdf$xmax[i], ftdf$xmax[i], ftdf$xmin[i], ftdf$xmin[i])
+        y_poly <- c(ftdf$ymin[i], ftdf$ymin[i], ftdf$ymax[i], ftdf$ymax[i], ftdf$ymin[i])
+
+        hover <- sprintf("<b>%s</b><br>Type: %s<br>Position: %d\u2013%d<br>%s",
+                         ftdf$category[i], ftdf$ftype[i],
+                         as.integer(ftdf$xmin[i] + 0.5),
+                         as.integer(ftdf$xmax[i] - 0.5),
+                         ftdf$description[i])
+
+        p <- plotly::add_polygons(
+          p,
+          x = x_poly, y = y_poly,
+          fillcolor = .pr_hex_with_alpha(ftdf$color[i], ftdf$alpha[i]),
+          line = list(color = "rgba(0,0,0,0)", width = 0),
+          hoveron = "fills",
+          hoverinfo = "text",
+          text = hover,
+          name = cat_name,
+          legendgroup = cat_name,
+          showlegend = first_in_cat
+        )
+      }
+    }
+  }
+
+  # N / C terminal labels
+  p <- plotly::add_annotations(
+    p,
+    x = c(-protein_length * 0.015, protein_length + protein_length * 0.015 + 0.5),
+    y = c(0.5, 0.5),
+    text = c("<b><i>N</i></b>", "<b><i>C</i></b>"),
+    showarrow = FALSE,
+    font = list(size = 12, color = "#444444"),
+    xanchor = c("right", "left")
+  )
+
+  title_text <- paste0("<b>", gene_symbol, "</b>  (", uniprot_id, ")")
+  sub_parts <- paste0(protein_length, " aa")
+  if (!is.null(coverage_pct)) sub_parts <- paste0(sub_parts, "  \u2022  ", coverage_pct, "% covered")
+
+  plotly::layout(
+    p,
+    title = list(text = paste0(title_text, "<br><sup>", sub_parts, "</sup>"),
+                 x = 0.5, xanchor = "center", font = list(size = title_size)),
+    xaxis = list(range = c(x_lo, x_hi), showgrid = FALSE, zeroline = FALSE,
+                 visible = FALSE, fixedrange = FALSE),
+    yaxis = list(range = c(-0.05, 1.05), showgrid = FALSE, zeroline = FALSE,
+                 visible = FALSE, fixedrange = TRUE),
+    showlegend = TRUE,
+    legend = list(orientation = "h", x = 0.5, xanchor = "center", y = -0.15),
+    hovermode = "closest",
+    margin = list(l = 40, r = 20, t = 60, b = 20)
+  )
+}
+
+#' Mix a hex color with an alpha channel into an "rgba(...)" string for plotly
+.pr_hex_with_alpha <- function(hex, alpha = 0.85) {
+  hex <- as.character(hex)[1]
+  alpha <- max(0, min(1, as.numeric(alpha)))
+  if (!grepl("^#", hex)) return(sprintf("rgba(0,0,0,%.2f)", alpha))
+  hex <- sub("^#", "", hex)
+  if (nchar(hex) == 3) {
+    hex <- paste0(rep(strsplit(hex, "")[[1]], each = 2), collapse = "")
+  }
+  if (nchar(hex) != 6) return(sprintf("rgba(0,0,0,%.2f)", alpha))
+  r <- strtoi(substr(hex, 1, 2), 16L)
+  g <- strtoi(substr(hex, 3, 4), 16L)
+  b <- strtoi(substr(hex, 5, 6), 16L)
+  sprintf("rgba(%d,%d,%d,%.2f)", r, g, b, alpha)
+}
+
+#' Public entry point: stacked interactive detail view.
+#' Re-renders `.pr_render_detail` to grab the (already-styled) value/FC tracks
+#' and replaces only the top feature bar with the interactive plotly version.
+tb_peptide_region_detail_plotly <- function(results, style) {
+  tb_require_pkg("plotly")
+  tb_require_pkg("patchwork")
+
+  data <- results$data
+  if (is.null(data) || !identical(data$mode %||% "", "detail")) return(NULL)
+
+  # Re-use the static renderer to build the patchwork stack, then strip the bar
+  # plot off the top and convert the remaining tracks to plotly via ggplotly.
+  rendered <- tryCatch(.pr_render_detail(data, style), error = function(e) NULL)
+  if (is.null(rendered)) return(NULL)
+  composed <- rendered$plots$peptide_region
+  if (is.null(composed)) return(NULL)
+
+  prot <- data$protein
+  protein_length <- prot$seq_length
+  gene_symbol    <- prot$gene_symbol %||% prot$uniprot_id
+  uniprot_id     <- prot$uniprot_id
+  title_text_size <- tb_num(style$title_text_size, 16)
+  feature_track_height <- tb_num(style$feature_track_height, 1.2)
+
+  # Coverage percent (mirrors the static renderer)
+  group_coverages <- data$group_coverages %||% list()
+  cov_pct <- NULL
+  if (length(group_coverages) > 0) {
+    first_gc <- group_coverages[[1]]
+    if (!is.null(first_gc$coverage)) {
+      first_col <- if ("group_mean" %in% names(first_gc$coverage)) "group_mean" else names(first_gc$coverage)[2]
+      n_cov <- sum(!is.na(first_gc$coverage[[first_col]]))
+      cov_pct <- round(100 * n_cov / max(1L, protein_length), 1)
+    }
+  }
+
+  # Interactive feature bar
+  p_bar <- .pr_build_protein_bar_plotly(
+    features_df    = prot$features,
+    protein_length = protein_length,
+    gene_symbol    = gene_symbol,
+    uniprot_id     = uniprot_id,
+    coverage_pct   = cov_pct,
+    title_size     = title_text_size
+  )
+
+  # Pull out the value/FC track sub-ggplots from the patchwork object.
+  # patchwork stores wrapped plots in `composed$patches$plots`, with the main
+  # ggplot at `composed` itself.
+  track_ggs <- list()
+  if (inherits(composed, "patchwork")) {
+    # patchwork stacks: first plot is the bar (drop it), rest are tracks
+    sub_plots <- composed$patches$plots %||% list()
+    main_plot <- composed
+    # The "main" plot is appended last in patchwork's storage. To reconstruct
+    # the visual order we need: sub_plots[1..n], then main_plot at the end.
+    track_ggs <- c(sub_plots, list(main_plot))
+    if (length(track_ggs) >= 1) track_ggs <- track_ggs[-1]  # drop bar (top)
+  } else if (inherits(composed, "ggplot")) {
+    # Only one plot was produced (e.g. all-tracks-hidden message). Skip.
+    track_ggs <- list()
+  }
+
+  # Convert each track to a plotly object. Suppress hover by default to keep
+  # interaction snappy and unambiguous (we only want hover on the feature bar).
+  track_plys <- lapply(track_ggs, function(g) {
+    if (!inherits(g, "ggplot")) return(NULL)
+    pl <- tryCatch(
+      suppressWarnings(plotly::ggplotly(g, tooltip = NULL)),
+      error = function(e) NULL
+    )
+    if (is.null(pl)) return(NULL)
+    plotly::layout(pl, hovermode = FALSE,
+                   xaxis = list(showgrid = FALSE),
+                   margin = list(l = 60, r = 20, t = 5, b = 5))
+  })
+  track_plys <- Filter(Negate(is.null), track_plys)
+
+  # Stack: feature bar on top, then tracks. plotly::subplot uses normalized
+  # heights, so feed in feature_track_height + 1.3 per data track.
+  all_plys <- c(list(p_bar), track_plys)
+  if (length(all_plys) <= 1) return(p_bar)
+
+  heights <- c(feature_track_height, rep(1.3, length(track_plys)))
+  heights <- heights / sum(heights)
+
+  out <- plotly::subplot(
+    all_plys,
+    nrows  = length(all_plys),
+    shareX = TRUE,
+    titleY = TRUE,
+    margin = 0.01,
+    heights = heights
+  )
+  plotly::layout(
+    out,
+    showlegend = TRUE,
+    hovermode = "closest"
+  )
+}
+
 # ---- Peptide Region: Detail Mode ----
 .pr_render_detail <- function(data, style) {
   tb_require_pkg("patchwork")
@@ -10777,14 +10997,24 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   prot <- data$protein
   if (is.null(prot)) stop("peptide_region detail: protein data missing")
 
-  ctrl_color        <- as.character(style$ctrl_color %||% "#2166AC")[1]
-  treatment_color   <- as.character(style$treatment_color %||% "#B2182B")[1]
-  fc_color          <- as.character(style$fc_color %||% "#7B2D8E")[1]
+  # ---- Color scheme ----
+  # Two modes: "group" uses input-defined per-group colors, "manual" uses user-set
+  # value/FC track colors. Backwards compat: legacy fields ctrl_color/treatment_color
+  # /fc_color still honored if present.
+  color_mode_pr     <- as.character(style$color_mode %||% "group")[1]
+  manual_value_color <- as.character(style$manual_value_color %||% "#CCCCCC")[1]
+  manual_fc_color    <- as.character(style$manual_fc_color    %||% "#FFCC99")[1]
+  # Legacy color overrides (only used if explicitly set)
+  legacy_ctrl       <- style$ctrl_color
+  legacy_treatment  <- style$treatment_color
+  legacy_fc         <- style$fc_color
+
   title_text_size   <- tb_num(style$title_text_size, 16)
   axis_text_size    <- tb_num(style$axis_text_size, 14)
   track_alpha       <- tb_num(style$track_alpha, 0.85)
   show_markers      <- isTRUE(style$show_peptide_markers %||% TRUE)
   feature_text_size <- tb_num(style$feature_text_size, 2)
+  feature_track_height <- tb_num(style$feature_track_height, 1.2)
   flip_fc           <- isTRUE(style$flip_fc %||% FALSE)
   show_significance <- isTRUE(style$show_significance %||% TRUE)
   sig_display       <- as.character(style$sig_display %||% "stars")[1]
@@ -10802,6 +11032,27 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   group_coverages  <- data$group_coverages %||% list()
   pairwise         <- data$pairwise %||% list()
   all_group_names  <- data$group_names %||% names(group_coverages)
+  group_colors_map <- data$group_colors %||% list()
+
+  # Helper: resolve a value-track fill color for a given group
+  pr_value_color <- function(group_name) {
+    if (identical(color_mode_pr, "manual")) return(manual_value_color)
+    # group mode: try input-defined color, fall back to a stable palette by index
+    gc_color <- group_colors_map[[group_name]]
+    if (!is.null(gc_color) && nzchar(gc_color)) return(gc_color)
+    palette_fallback <- c("#2166AC", "#B2182B", "#4DAF4A", "#FF7F00",
+                          "#984EA3", "#E41A1C", "#377EB8", "#A65628")
+    idx <- match(group_name, all_group_names)
+    if (is.na(idx)) idx <- 1L
+    palette_fallback[((idx - 1L) %% length(palette_fallback)) + 1L]
+  }
+
+  # Helper: FC track color (single color in either mode by design)
+  pr_fc_color <- function(comp_idx = 1L) {
+    if (identical(color_mode_pr, "manual")) return(manual_fc_color)
+    if (!is.null(legacy_fc) && nzchar(as.character(legacy_fc))) return(as.character(legacy_fc)[1])
+    manual_fc_color
+  }
 
   # Backward compat: old data stored as comparisons
   comparisons <- data$comparisons %||% list()
@@ -10849,10 +11100,6 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     }
     if (length(visible_groups) == 0) visible_groups <- all_group_names
 
-    # Color palette for groups (up to 8 distinct colors)
-    group_palette <- c("#2166AC", "#B2182B", "#4DAF4A", "#FF7F00",
-                       "#984EA3", "#E41A1C", "#377EB8", "#A65628")
-
     # Coverage % from first visible group
     first_gc <- group_coverages[[visible_groups[1]]]
     first_col <- if ("group_mean" %in% names(first_gc$coverage)) "group_mean"
@@ -10867,7 +11114,7 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     )
 
     tracks <- list(bar = p_bar)
-    track_heights <- 1.2
+    track_heights <- feature_track_height
 
     # Determine which track type is last (for x-axis)
     has_visible_fc <- show_fc_tracks && length(pairwise) > 0 && length(visible_groups) >= 2
@@ -10878,8 +11125,7 @@ tb_peptide_region_overview_plotly <- function(results, style) {
       grp <- visible_groups[gi]
       gc  <- group_coverages[[grp]]
       if (is.null(gc)) next
-      color_idx <- match(grp, all_group_names)
-      gc_color  <- group_palette[((color_idx - 1L) %% length(group_palette)) + 1L]
+      gc_color  <- pr_value_color(grp)
       is_last   <- identical(last_type, "group") && gi == length(visible_groups)
       tracks[[paste0("grp_", gi)]] <- .pr_build_track(
         gc$coverage, "group_mean", gc_color, grp,
@@ -10893,15 +11139,13 @@ tb_peptide_region_overview_plotly <- function(results, style) {
 
     # FC tracks (pairwise, filtered to visible groups)
     if (has_visible_fc) {
-      fc_palette <- c(fc_color, "#9E6AB8", "#C2A5D0", "#DEC9E4",
-                      "#7B2D8E", "#B87BD0", "#D4A0E8", "#E8C4F4")
       fc_idx <- 0
       pw_keys <- names(pairwise)
       for (pk in pw_keys) {
         pw <- pairwise[[pk]]
         if (!(pw$group_a %in% visible_groups && pw$group_b %in% visible_groups)) next
         fc_idx <- fc_idx + 1
-        fcc <- fc_palette[((fc_idx - 1L) %% length(fc_palette)) + 1L]
+        fcc <- pr_fc_color(fc_idx)
         is_last <- identical(last_type, "fc") && pk == pw_keys[length(pw_keys)]
         tracks[[paste0("fc_", fc_idx)]] <- .pr_build_track(
           pw$fc_coverage, "fc", fcc, NULL,
@@ -10959,31 +11203,31 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     )
 
     tracks <- list(bar = p_bar)
-    track_heights <- 1.2
+    track_heights <- feature_track_height
     tracks$ctrl <- .pr_build_track(
-      first_comp$coverage, "ctrl_mean", ctrl_color, first_comp$ctrl_group,
+      first_comp$coverage, "ctrl_mean",
+      pr_value_color(first_comp$ctrl_group),
+      first_comp$ctrl_group,
       protein_length, axis_text_size, alpha = track_alpha, marker_df = marker_df,
       log_transform = value_transform,
       manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
     )
     track_heights <- c(track_heights, 1.3)
 
-    treatment_palette <- c(treatment_color, "#D6604D", "#F4A582", "#FDDBC7")
-    fc_palette <- c(fc_color, "#9E6AB8", "#C2A5D0", "#DEC9E4")
     for (ci in seq_along(comp_keys)) {
       comp <- comparisons[[comp_keys[ci]]]
-      tc <- treatment_palette[min(ci, length(treatment_palette))]
       tracks[[paste0("treat_", ci)]] <- .pr_build_track(
-        comp$coverage, "treatment_mean", tc, comp$treatment_group,
+        comp$coverage, "treatment_mean",
+        pr_value_color(comp$treatment_group),
+        comp$treatment_group,
         protein_length, axis_text_size, alpha = track_alpha, marker_df = marker_df,
         log_transform = value_transform,
         manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
       )
       track_heights <- c(track_heights, 1.3)
-      fcc <- fc_palette[min(ci, length(fc_palette))]
       is_last <- ci == length(comp_keys)
       tracks[[paste0("fc_", ci)]] <- .pr_build_track(
-        comp$coverage, "fc", fcc, NULL,
+        comp$coverage, "fc", pr_fc_color(ci), NULL,
         protein_length, axis_text_size, show_x_axis = is_last,
         alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
         ctrl_group = comp$ctrl_group, treatment_group = comp$treatment_group,
@@ -11017,7 +11261,7 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     )
 
     p_val <- .pr_build_track(
-      coverage, mean_col, ctrl_color, grp_name,
+      coverage, mean_col, pr_value_color(grp_name), grp_name,
       protein_length, axis_text_size, alpha = track_alpha,
       marker_df = marker_df,
       log_transform = value_transform,
@@ -11045,7 +11289,7 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     )
 
     composed <- (p_bar / p_val / p_cv / p_depth) +
-      patchwork::plot_layout(heights = c(1.2, 1.3, 1.3, 1.3))
+      patchwork::plot_layout(heights = c(feature_track_height, 1.3, 1.3, 1.3))
     composed <- composed &
       ggplot2::theme(plot.margin = ggplot2::margin(1, 10, 1, 10))
     plots_out[["peptide_region"]] <- composed
@@ -11235,10 +11479,11 @@ tb_peptide_region_overview_plotly <- function(results, style) {
       y_max <- max(abs(covered$val), na.rm = TRUE) * 1.2
     }
     y_min <- -y_max
+    # Use plain string label so element_text(angle = 0) keeps it horizontal
     if (flip_fc) {
-      y_label <- bquote(Log[2] ~ "(" ~ .(ctrl_group) ~ "/" ~ .(treatment_group) ~ ")")
+      y_label <- sprintf("log2(%s/%s)", ctrl_group, treatment_group)
     } else {
-      y_label <- bquote(Log[2] ~ "(" ~ .(treatment_group) ~ "/" ~ .(ctrl_group) ~ ")")
+      y_label <- sprintf("log2(%s/%s)", treatment_group, ctrl_group)
     }
   } else {
     # Apply log transform to value tracks
@@ -11364,7 +11609,11 @@ tb_peptide_region_overview_plotly <- function(results, style) {
       axis.title.x       = ggplot2::element_blank(),
       axis.text.x        = ggplot2::element_blank(),
       axis.ticks.x       = ggplot2::element_blank(),
-      axis.title.y       = ggplot2::element_text(size = ats - 3, color = "grey30"),
+      # Horizontal Y axis title (angle = 0) so multi-character group labels stay readable.
+      # vjust = 0.5 keeps it vertically centered against the plot panel.
+      axis.title.y       = ggplot2::element_text(size = ats - 3, color = "grey30",
+                                                  angle = 0, vjust = 0.5,
+                                                  margin = ggplot2::margin(r = 6)),
       axis.text.y        = ggplot2::element_text(size = ats - 5, color = "grey40"),
       plot.margin        = ggplot2::margin(1, 10, 1, 10)
     )

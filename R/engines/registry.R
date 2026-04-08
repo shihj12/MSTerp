@@ -2569,6 +2569,12 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       style_schema = list(
         # ---- Overview-only style fields (scatter plot) ----
         msterp_schema_field(
+          "show_table", "bool", "Show scores table",
+          default = FALSE,
+          mode = "overview",
+          help = "Show the protein scores DataTable below the scatter plot."
+        ),
+        msterp_schema_field(
           "point_size_scale", "num", "Point size scale",
           default = 1, min = 0.2, max = 5,
           mode = "overview",
@@ -2586,37 +2592,34 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           mode = "overview",
           help = "Outline target proteins with a black ring in the scatter."
         ),
-        msterp_schema_field(
-          "palette", "choice", "Biology color palette",
-          default = "Set2",
-          choices = c("Set1", "Set2", "Set3", "Dark2", "Paired"),
-          mode = "overview",
-          help = "Discrete color palette for biology category coloring."
-        ),
-        msterp_schema_field(
-          "point_color_mode", "choice", "Point color mode",
-          default = "biology",
-          choices = c("biology", "density"),
-          choice_labels = c("Biology category", "Point density"),
-          mode = "overview",
-          help = "Color points by GO biology category (discrete) or by local 2D density (continuous). Density is useful for MA-style plots with many proteins."
-        ),
 
         # ---- Detail-only style fields (peptide track plot) ----
+        # Color scheme: choose between input-defined group colors or manual colors
         msterp_schema_field(
-          "fc_color", "string", "Fold-change track color",
-          default = "#7B2D8E",
-          mode = "detail"
+          "color_mode", "choice", "Track color mode",
+          default = "group",
+          choices = c("group", "manual"),
+          choice_labels = c("Use group colors (from input)", "Manual colors"),
+          mode = "detail",
+          help = "Group: use the colors defined per group in the input metadata. Manual: use the colors below."
         ),
         msterp_schema_field(
-          "ctrl_color", "string", "Control track color",
-          default = "#2166AC",
-          mode = "detail"
+          "manual_value_color", "string", "Manual value track color",
+          default = "#CCCCCC",
+          mode = "detail",
+          help = "Fill color for value (group) tracks when color mode is Manual."
         ),
         msterp_schema_field(
-          "treatment_color", "string", "Treatment track color",
-          default = "#B2182B",
-          mode = "detail"
+          "manual_fc_color", "string", "Manual FC track color",
+          default = "#FFCC99",
+          mode = "detail",
+          help = "Fill color for fold-change tracks when color mode is Manual."
+        ),
+        msterp_schema_field(
+          "feature_track_height", "num", "Feature track height",
+          default = 1.2, min = 0.4, max = 4,
+          mode = "detail",
+          help = "Relative height of the protein feature annotation track. Increase if labels overlap."
         ),
         msterp_schema_field(
           "flip_fc", "bool", "Flip fold-change direction",
