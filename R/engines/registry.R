@@ -2628,15 +2628,16 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           help = "Swap numerator/denominator on FC tracks."
         ),
         msterp_schema_field(
-          "show_fc_tracks", "bool", "Show fold-change tracks",
-          default = TRUE,
-          mode = "detail"
+          "visible_tracks", "string", "Visible tracks",
+          default = "__all__",
+          mode = "detail",
+          help = "Select which individual-group and fold-change tracks to show. Empty uses the default track set."
         ),
         msterp_schema_field(
           "value_transform", "choice", "Value track transform",
           default = "none",
           choices = c("none", "log2", "log10"),
-          choice_labels = c("None", "Log2", "Log10"),
+          choice_labels = c("None", "log\u2082", "log\u2081\u2080"),
           mode = "detail",
           help = "Apply log transform to control and treatment value tracks."
         ),
@@ -2741,12 +2742,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           choices = c(""),
           mode = "detail",
           help = "Browse between target proteins (detail view only)."
-        ),
-        msterp_schema_field(
-          "visible_groups", "string", "Visible groups",
-          default = "",
-          mode = "detail",
-          help = "Comma-separated group names to display. Empty = all groups."
         ),
         msterp_schema_field(
           "pr_x_axis", "choice", "Scatter X axis",

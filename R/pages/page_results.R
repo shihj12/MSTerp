@@ -172,7 +172,7 @@ get_style_section <- function(field_name) {
     # Axis/direction flip selectors
     "flip_axis", "flip_fc", "flip_x", "flip_y", "swap_axes",
     # Peptide region track visibility
-    "show_fc_tracks", "visible_groups",
+    "visible_tracks",
     # Significance display mode
     "show_significance", "sig_display"
   )
@@ -2901,6 +2901,7 @@ page_results_server <- function(input, output, session) {
     switching_node = FALSE  # FIX: Flag to prevent false dirty detection during node switch
   )
   style_rev <- reactiveVal(0L)
+  pr_detail_shared_rev <- reactiveVal(0L)
 
   # LRU trim for plotly cache — drop oldest entries when over limit
   trim_plotly_cache <- function() {
@@ -5147,7 +5148,7 @@ page_results_server <- function(input, output, session) {
     # Protein selector for peptide_region engine (detail mode only)
     # In overview mode, just strip selected_protein from schema to prevent accordion crash
     protein_selector_ui <- NULL
-    pr_group_selector_ui <- NULL
+    pr_track_selector_ui <- NULL
     pr_axis_selector_ui  <- NULL
     if (eng_lower == "peptide_region") {
       pr_res <- isolate(active_results())
@@ -5166,10 +5167,12 @@ page_results_server <- function(input, output, session) {
         schema <- schema[-sp_idx[[1]]]
       }
 
-      # Remove visible_groups from schema (handled as custom UI below)
-      vg_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "visible_groups"), logical(1)))
-      if (length(vg_idx) > 0) {
-        schema <- schema[-vg_idx[[1]]]
+      # Remove visible_tracks from schema (handled as custom UI below)
+      vt_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "visible_tracks"), logical(1)))
+      visible_tracks_field <- NULL
+      if (length(vt_idx) > 0) {
+        visible_tracks_field <- schema[[vt_idx[[1]]]]
+        schema <- schema[-vt_idx[[1]]]
       }
 
       # Strip pr_x_axis / pr_y_axis (handled as custom dynamic selectors below)
@@ -5236,35 +5239,18 @@ page_results_server <- function(input, output, session) {
       pr_n_groups <- pr_res$data$n_groups %||% 1
       if (pr_n_groups < 2) {
         comp_only <- c("fc_color", "flip_fc", "fc_y_range", "fc_y_abs",
-                       "show_fc_tracks",
-                       "show_significance", "sig_display", "sig_threshold",
-                       "visible_groups")
+                       "show_significance", "sig_display", "sig_threshold")
         schema <- Filter(function(f) !as.character(f$name %||% "") %in% comp_only, schema)
-      } else if (!is.null(pr_res)) {
-        # Build group selector for multi-group experiments
-        grp_names <- pr_res$data$group_names %||% names(pr_res$data$group_coverages) %||% character()
-        if (length(grp_names) > 0) {
-          current_visible <- eff$style$visible_groups
-          if (is.null(current_visible) || !is.character(current_visible) || !any(nzchar(current_visible))) {
-            current_visible <- grp_names
-          }
-          nid <- rv$active_node_id
-          pr_group_selector_ui <- div(
-            style = "margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border-light);",
-            checkboxGroupInput(
-              res_field_input_id(nid, "visible_groups"),
-              "Visible groups",
-              choices = stats::setNames(grp_names, grp_names),
-              selected = intersect(current_visible, grp_names),
-              inline = TRUE
-            ),
-            tags$small(
-              class = "text-muted d-block",
-              style = "margin-top: 4px;",
-              sprintf("%d group%s available", length(grp_names), if (length(grp_names) != 1) "s" else "")
-            )
-          )
-        }
+      }
+
+      if (pr_is_detail && !is.null(pr_res) && !is.null(visible_tracks_field)) {
+        pr_track_selector_ui <- res_peptide_region_track_field_ui(
+          node_id = rv$active_node_id,
+          results_obj = pr_res,
+          style = eff$style %||% list(),
+          field = visible_tracks_field,
+          include_border = TRUE
+        )
       }
     }
 
@@ -5558,7 +5544,11 @@ page_results_server <- function(input, output, session) {
           !is.null(res$data$protein_scores) && nrow(res$data$protein_scores) > 0) {
         n_proteins <- nrow(res$data$protein_scores)
         # Show "(custom)" label if a shared detail style is set
-        shared_pr <- eff$style$`__pr_detail_shared` %||% list()
+        pr_detail_shared_rev()
+        shared_pr <- res_peptide_region_shared_detail_style(
+          node_id = rv$active_node_id,
+          node_dir = isolate(active_node_dir())
+        )
         config_label <- if (length(shared_pr) > 0) {
           sprintf("Configure Detail Style (%d custom)", length(shared_pr))
         } else {
@@ -5685,7 +5675,7 @@ page_results_server <- function(input, output, session) {
       selected_group_ui,  # Group selector at top for hor_dis/vert_dis/rankplot
       gene_selector_ui,   # Gene selector for gene_barchart
       protein_selector_ui,  # Protein selector for peptide_region
-      pr_group_selector_ui, # Group visibility selector for peptide_region
+      pr_track_selector_ui, # Track visibility selector for peptide_region
       pr_axis_selector_ui,  # Scatter axis selectors for peptide_region overview
       cluster_selector_ui,  # Cluster selector for PPI network
       selectors_ui,       # Selector fields (always visible, not in accordions)
@@ -6841,10 +6831,6 @@ page_results_server <- function(input, output, session) {
       has_table_panel <- FALSE
     }
 
-    # Decide whether this engine is plot-only, plot+table, or table-only
-    table_only    <- identical(tolower(eng %||% ""), "dataprocessor")
-    plot_and_table <- isTRUE(has_table_panel) && !table_only
-
     # Extract content safely
     plots  <- if (!is.null(rend) && !inherits(rend, "error")) res_extract_ggplots(rend)   else list()
     tables <- if (!is.null(rend) && !inherits(rend, "error")) res_extract_tables(rend)    else list()
@@ -6861,6 +6847,10 @@ page_results_server <- function(input, output, session) {
         isTRUE(panel_style$show_table %||% FALSE) && has_named_table("protein_scores")
       }
     }
+
+    # Decide whether this engine is plot-only, plot+table, or table-only
+    table_only     <- identical(tolower(eng %||% ""), "dataprocessor")
+    plot_and_table <- isTRUE(has_table_panel) && !table_only
 
     # Check if tabs are present
     has_tabs <- !is.null(rend$tabs) && length(rend$tabs) > 0
@@ -7301,6 +7291,11 @@ page_results_server <- function(input, output, session) {
     plots <- if (!is.null(rend) && !inherits(rend, "error")) res_extract_ggplots(rend) else list()
     has_plot <- length(plots) > 0
     eng <- tolower(active_engine_id() %||% "")
+    res_obj <- active_results()
+    pr_disable_export <- identical(eng, "peptide_region") &&
+      !is.null(res_obj) &&
+      identical(tolower(as.character(res_obj$data$mode %||% "overview")), "overview")
+    show_plot_export <- has_plot && !isTRUE(pr_disable_export)
 
     is_processing_engine <- eng %in% c("dataprocessor", "peptide_aggregate_to_protein", "half_life")
 
@@ -7328,8 +7323,8 @@ page_results_server <- function(input, output, session) {
     # Default: compact horizontal layout for bottom bar
     div(
       style = "display: flex; gap: 8px; align-items: center;",
-      if (has_plot) actionButton("res_download_plot_modal", "Download", class = "btn-primary btn-sm"),
-      if (has_plot) actionButton("res_copy_plot", "Copy", class = "btn-sm"),
+      if (isTRUE(show_plot_export)) actionButton("res_download_plot_modal", "Download", class = "btn-primary btn-sm"),
+      if (isTRUE(show_plot_export)) actionButton("res_copy_plot", "Copy", class = "btn-sm"),
       if (is_processing_engine) downloadButton("res_dl_dp_processed", "Processed Data (.xlsx)", class = "btn-primary btn-sm"),
       if (identical(eng, "dataprocessor")) uiOutput("res_dp_substep_download_ui"),
       save_btn
@@ -7401,6 +7396,13 @@ page_results_server <- function(input, output, session) {
 
     rend <- active_rendered()
     eng <- tolower(active_engine_id() %||% "")
+    res <- active_results()
+
+    if (identical(eng, "peptide_region") &&
+        !is.null(res) &&
+        identical(tolower(as.character(res$data$mode %||% "overview")), "detail")) {
+      return("res_plot")
+    }
 
     if (!is.null(rend) && !inherits(rend, "error") && !is.null(rend$tabs) && length(rend$tabs) > 0) {
       tab_name <- input$res_enrichment_tabs %||% rend$tabs[[1]]
@@ -7830,6 +7832,10 @@ page_results_server <- function(input, output, session) {
           div(
             class = "res-plot-interact",
             style = "width: 100%; height: 100%; display: flex; flex-direction: column; gap: 8px; overflow: hidden;",
+            div(
+              style = "position: absolute; left: -99999px; top: -99999px; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none;",
+              plotOutput("res_plot", height = "1px", width = "1px")
+            ),
             div(
               style = sprintf("flex: 0 0 %dpx; min-height: %dpx;", dims$header, dims$header),
               plotOutput("res_peptide_region_detail_header",
@@ -11164,8 +11170,10 @@ page_results_server <- function(input, output, session) {
     node_dir <- node$node_dir[[1]]
 
     # Inherit shared detail style from parent (set via the modal)
-    parent_eff <- isolate(active_effective_state())
-    shared_style <- parent_eff$style$`__pr_detail_shared` %||% list()
+    shared_style <- res_peptide_region_shared_detail_style(
+      node_id = rv$active_node_id,
+      node_dir = node_dir
+    )
     base_child_style <- modifyList(list(feature_type = "Domain"), shared_style)
 
     n_created <- 0
@@ -11228,6 +11236,73 @@ page_results_server <- function(input, output, session) {
     }
   }, ignoreInit = TRUE)
 
+  res_peptide_region_shared_detail_style <- function(node_id = rv$active_node_id, node_dir = NULL) {
+    key <- as.character(node_id %||% "")
+    if (nzchar(key) && key %in% names(rv$cache_style_by_node)) {
+      cached_style <- rv$cache_style_by_node[[key]] %||% list()
+      if ("__pr_detail_shared" %in% names(cached_style)) {
+        return(cached_style$`__pr_detail_shared` %||% list())
+      }
+    }
+
+    nd <- node_dir %||% tryCatch(active_node_dir(), error = function(e) NULL)
+    if (is.null(nd) || !dir.exists(nd)) return(list())
+
+    rs <- tryCatch(tb_load_render_state(nd), error = function(e) NULL)
+    rs$style$`__pr_detail_shared` %||% list()
+  }
+
+  res_peptide_region_track_state <- function(results_obj, style = list()) {
+    tryCatch(
+      tb_peptide_region_track_state(results_obj, style %||% list()),
+      error = function(e) list(catalog = list(), selected_ids = character(0), selected_tracks = list())
+    )
+  }
+
+  res_peptide_region_track_field_ui <- function(node_id, results_obj, style = list(),
+                                                field = NULL, include_border = TRUE) {
+    track_state <- res_peptide_region_track_state(results_obj, style)
+    catalog <- track_state$catalog %||% list()
+    if (length(catalog) == 0) return(NULL)
+
+    track_ids <- vapply(catalog, function(x) as.character(x$id %||% ""), character(1))
+    track_labels <- vapply(catalog, function(x) as.character(x$label_unicode %||% x$label_plain %||% x$id %||% ""), character(1))
+    selected_ids <- intersect(track_state$selected_ids %||% character(0), track_ids)
+    type_counts <- table(vapply(catalog, function(x) as.character(x$type %||% "track"), character(1)))
+
+    count_parts <- character(0)
+    if ("group" %in% names(type_counts)) {
+      count_parts <- c(count_parts, sprintf("%d value", as.integer(type_counts[["group"]])))
+    }
+    if ("fc" %in% names(type_counts)) {
+      count_parts <- c(count_parts, sprintf("%d FC", as.integer(type_counts[["fc"]])))
+    }
+    count_label <- if (length(count_parts) > 0) {
+      paste(count_parts, collapse = " + ")
+    } else {
+      sprintf("%d track%s", length(catalog), if (length(catalog) != 1) "s" else "")
+    }
+
+    div(
+      style = paste(
+        "margin-bottom: 12px;",
+        if (isTRUE(include_border)) "padding-bottom: 12px; border-bottom: 1px solid var(--border-light);" else ""
+      ),
+      checkboxGroupInput(
+        res_field_input_id(node_id, "visible_tracks"),
+        (field$label %||% "Visible tracks"),
+        choices = stats::setNames(track_ids, track_labels),
+        selected = selected_ids,
+        inline = FALSE
+      ),
+      tags$small(
+        class = "text-muted d-block",
+        style = "margin-top: 4px;",
+        sprintf("%s track%s available.", count_label, if (length(catalog) != 1) "s" else "")
+      )
+    )
+  }
+
   # ---- Peptide Region: Configure shared detail style modal ----
   # Detail-mode style fields are NOT shown in the parent's style accordion (they
   # are filtered out by mode). Instead, the user clicks "Configure Detail Style"
@@ -11263,18 +11338,31 @@ page_results_server <- function(input, output, session) {
       return()
     }
 
-    eff <- isolate(active_effective_state())
-    shared <- eff$style$`__pr_detail_shared` %||% list()
+    shared <- res_peptide_region_shared_detail_style(
+      node_id = isolate(rv$active_node_id),
+      node_dir = isolate(active_node_dir())
+    )
 
     # Build modal inputs using the same per-field UI helper used by the accordion.
     # `res_field_ui` (vs `res_field_ui_core`) wraps fields in conditionalPanels so
     # value_y_max/fc_y_abs/manual_*_color hide automatically based on their gating
     # selectors inside the modal.
     nid <- isolate(rv$active_node_id)
+    pr_res_modal <- isolate(active_results())
     field_uis <- lapply(fields, function(f) {
       v_eff <- shared[[f$name]] %||% f$default
       tryCatch(
-        res_field_ui(nid, f, value_override = v_eff),
+        if (identical(as.character(f$name %||% ""), "visible_tracks")) {
+          res_peptide_region_track_field_ui(
+            node_id = nid,
+            results_obj = pr_res_modal,
+            style = shared,
+            field = f,
+            include_border = FALSE
+          )
+        } else {
+          res_field_ui(nid, f, value_override = v_eff)
+        },
         error = function(e) NULL
       )
     })
@@ -11340,7 +11428,7 @@ page_results_server <- function(input, output, session) {
 
     rv$has_unsaved_changes <- TRUE
     rv$save_status <- "dirty"
-    style_rev(isolate(style_rev()) + 1L)
+    pr_detail_shared_rev(isolate(pr_detail_shared_rev()) + 1L)
 
     removeModal()
     showNotification(
@@ -11361,7 +11449,7 @@ page_results_server <- function(input, output, session) {
     }
     key <- as.character(nid)
     cur_style <- rv$cache_style_by_node[[key]] %||% list()
-    cur_style$`__pr_detail_shared` <- NULL
+    cur_style$`__pr_detail_shared` <- list()
     rv$cache_style_by_node[[key]] <- cur_style
 
     nd <- active_node_dir()
@@ -11372,7 +11460,7 @@ page_results_server <- function(input, output, session) {
 
     rv$has_unsaved_changes <- TRUE
     rv$save_status <- "dirty"
-    style_rev(isolate(style_rev()) + 1L)
+    pr_detail_shared_rev(isolate(pr_detail_shared_rev()) + 1L)
 
     removeModal()
     showNotification("Detail style reset to defaults.", type = "message")

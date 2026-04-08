@@ -10746,16 +10746,6 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   )
 }
 
-.pr_feature_legend_palette <- function() {
-  c(
-    "Domains" = "#4E79A7",
-    "Topology" = "#E15759",
-    "Processing" = "#FF9DA7",
-    "Binding" = "#F28E2B",
-    "Modification" = "#B07AA1"
-  )
-}
-
 .pr_feature_rectangles <- function(features_df, protein_length) {
   empty <- data.frame(
     type = character(0),
@@ -10823,7 +10813,7 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   )
   rect_df$label_x <- (rect_df$xmin + rect_df$xmax) / 2
   rect_df$label_y <- (rect_df$ymin + rect_df$ymax) / 2
-  rect_df$label_color <- ifelse(rect_df$category == "Domains", "grey25", "white")
+  rect_df$label_color <- ifelse(rect_df$category == "Domains", "black", "white")
   rect_df$label <- rect_df$description
 
   min_w <- protein_length * 0.05
@@ -10842,11 +10832,272 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   rect_df
 }
 
+.pr_group_track_id <- function(group_name) {
+  paste0("group::", as.character(group_name %||% ""))
+}
+
+.pr_fc_track_id <- function(group_a, group_b) {
+  paste0("fc::", as.character(group_a %||% ""), "::", as.character(group_b %||% ""))
+}
+
+.pr_group_track_label <- function(group_name, log_transform = "none",
+                                  format = c("unicode", "expression", "plain")) {
+  format <- match.arg(format)
+  title <- as.character(group_name %||% "Value")
+
+  if (identical(format, "expression")) {
+    if (identical(log_transform, "log10")) {
+      return(as.expression(bquote(log[10](.(title)))))
+    }
+    if (identical(log_transform, "log2")) {
+      return(as.expression(bquote(log[2](.(title)))))
+    }
+    return(title)
+  }
+
+  if (identical(format, "unicode")) {
+    if (identical(log_transform, "log10")) {
+      return(paste0("log\u2081\u2080(", title, ")"))
+    }
+    if (identical(log_transform, "log2")) {
+      return(paste0("log\u2082(", title, ")"))
+    }
+    return(title)
+  }
+
+  if (identical(log_transform, "log10")) return(paste0("log10(", title, ")"))
+  if (identical(log_transform, "log2")) return(paste0("log2(", title, ")"))
+  title
+}
+
+.pr_fc_track_label <- function(group_a, group_b, flip_fc = FALSE,
+                               format = c("unicode", "expression", "plain")) {
+  format <- match.arg(format)
+  denom <- as.character(group_a %||% "Ctrl")
+  numer <- as.character(group_b %||% "Treatment")
+  if (isTRUE(flip_fc)) {
+    tmp <- numer
+    numer <- denom
+    denom <- tmp
+  }
+
+  if (identical(format, "expression")) {
+    as.expression(bquote(log[2](.(numer) / .(denom))))
+  } else if (identical(format, "unicode")) {
+    paste0("log\u2082(", numer, "/", denom, ")")
+  } else {
+    paste0("log2(", numer, "/", denom, ")")
+  }
+}
+
+.pr_track_catalog_from_data <- function(data, style = list()) {
+  if (is.null(data) || !is.list(data)) return(list())
+
+  flip_fc <- isTRUE(style$flip_fc %||% FALSE)
+  value_transform <- as.character(style$value_transform %||% "none")[1]
+  catalog <- list()
+
+  append_track <- function(track) {
+    catalog[[length(catalog) + 1L]] <<- track
+  }
+
+  is_detail <- identical(as.character(data$mode %||% ""), "detail")
+
+  if (is_detail) {
+    group_coverages <- data$group_coverages %||% list()
+    pairwise <- data$pairwise %||% list()
+    comparisons <- data$comparisons %||% list()
+
+    if (length(group_coverages) > 0) {
+      group_names <- data$group_names %||% names(group_coverages)
+      for (grp in group_names) {
+        gc <- group_coverages[[grp]]
+        if (is.null(gc) || is.null(gc$coverage)) next
+        append_track(list(
+          id = .pr_group_track_id(grp),
+          type = "group",
+          group_name = grp,
+          label_plain = .pr_group_track_label(grp, value_transform, format = "plain"),
+          label_unicode = .pr_group_track_label(grp, value_transform, format = "unicode"),
+          label_expression = .pr_group_track_label(grp, value_transform, format = "expression")
+        ))
+      }
+
+      for (pk in names(pairwise)) {
+        pw <- pairwise[[pk]]
+        if (is.null(pw) || is.null(pw$fc_coverage)) next
+        append_track(list(
+          id = .pr_fc_track_id(pw$group_a, pw$group_b),
+          type = "fc",
+          group_a = pw$group_a,
+          group_b = pw$group_b,
+          label_plain = .pr_fc_track_label(pw$group_a, pw$group_b, flip_fc = flip_fc, format = "plain"),
+          label_unicode = .pr_fc_track_label(pw$group_a, pw$group_b, flip_fc = flip_fc, format = "unicode"),
+          label_expression = .pr_fc_track_label(pw$group_a, pw$group_b, flip_fc = flip_fc, format = "expression")
+        ))
+      }
+
+      return(catalog)
+    }
+
+    if (length(comparisons) > 0 && !is.null(comparisons[[1]]$treatment_group)) {
+      first_comp <- comparisons[[1]]
+      ctrl_group <- first_comp$ctrl_group %||% "Ctrl"
+      append_track(list(
+        id = .pr_group_track_id(ctrl_group),
+        type = "group",
+        group_name = ctrl_group,
+        label_plain = .pr_group_track_label(ctrl_group, value_transform, format = "plain"),
+        label_unicode = .pr_group_track_label(ctrl_group, value_transform, format = "unicode"),
+        label_expression = .pr_group_track_label(ctrl_group, value_transform, format = "expression")
+      ))
+
+      seen_groups <- ctrl_group
+      for (comp_key in names(comparisons)) {
+        comp <- comparisons[[comp_key]]
+        if (is.null(comp)) next
+        treat_group <- comp$treatment_group %||% "Treatment"
+        if (!treat_group %in% seen_groups) {
+          seen_groups <- c(seen_groups, treat_group)
+          append_track(list(
+            id = .pr_group_track_id(treat_group),
+            type = "group",
+            group_name = treat_group,
+            label_plain = .pr_group_track_label(treat_group, value_transform, format = "plain"),
+            label_unicode = .pr_group_track_label(treat_group, value_transform, format = "unicode"),
+            label_expression = .pr_group_track_label(treat_group, value_transform, format = "expression")
+          ))
+        }
+
+        append_track(list(
+          id = .pr_fc_track_id(comp$ctrl_group, comp$treatment_group),
+          type = "fc",
+          group_a = comp$ctrl_group,
+          group_b = comp$treatment_group,
+          label_plain = .pr_fc_track_label(comp$ctrl_group, comp$treatment_group, flip_fc = flip_fc, format = "plain"),
+          label_unicode = .pr_fc_track_label(comp$ctrl_group, comp$treatment_group, flip_fc = flip_fc, format = "unicode"),
+          label_expression = .pr_fc_track_label(comp$ctrl_group, comp$treatment_group, flip_fc = flip_fc, format = "expression")
+        ))
+      }
+    }
+
+    return(catalog)
+  }
+
+  groups <- unique(as.character(data$samples$group_name %||% character(0)))
+  groups <- groups[nzchar(groups)]
+  if (length(groups) == 0) {
+    groups <- names(data$group_colors %||% list())
+  }
+
+  for (grp in groups) {
+    append_track(list(
+      id = .pr_group_track_id(grp),
+      type = "group",
+      group_name = grp,
+      label_plain = .pr_group_track_label(grp, value_transform, format = "plain"),
+      label_unicode = .pr_group_track_label(grp, value_transform, format = "unicode"),
+      label_expression = .pr_group_track_label(grp, value_transform, format = "expression")
+    ))
+  }
+
+  comparisons_info <- data$comparisons_info %||% list()
+  for (comp_key in names(comparisons_info)) {
+    comp <- comparisons_info[[comp_key]]
+    if (is.null(comp)) next
+    append_track(list(
+      id = .pr_fc_track_id(comp$ctrl_group, comp$treatment_group),
+      type = "fc",
+      group_a = comp$ctrl_group,
+      group_b = comp$treatment_group,
+      label_plain = .pr_fc_track_label(comp$ctrl_group, comp$treatment_group, flip_fc = flip_fc, format = "plain"),
+      label_unicode = .pr_fc_track_label(comp$ctrl_group, comp$treatment_group, flip_fc = flip_fc, format = "unicode"),
+      label_expression = .pr_fc_track_label(comp$ctrl_group, comp$treatment_group, flip_fc = flip_fc, format = "expression")
+    ))
+  }
+
+  catalog
+}
+
+.pr_resolve_selected_track_ids <- function(track_catalog, style = list()) {
+  track_ids <- vapply(track_catalog, function(x) as.character(x$id %||% ""), character(1))
+  if (length(track_ids) == 0) return(character(0))
+
+  if ("visible_tracks" %in% names(style)) {
+    raw <- style$visible_tracks
+    if (is.null(raw)) return(track_ids)
+    raw <- as.character(raw %||% character(0))
+    raw <- raw[!is.na(raw)]
+    if (any(raw == "__all__")) return(track_ids)
+    if (length(raw) == 1 && !nzchar(raw[[1]])) raw <- character(0)
+    return(intersect(raw, track_ids))
+  }
+
+  # Backward compatibility for older saved views that used visible_groups/show_fc_tracks.
+  group_defaults <- vapply(Filter(function(x) identical(as.character(x$type %||% ""), "group"), track_catalog),
+                           function(x) as.character(x$group_name %||% ""), character(1))
+  visible_raw <- style$visible_groups
+  visible_groups <- if (!is.null(visible_raw) && is.character(visible_raw) && any(nzchar(visible_raw))) {
+    visible_raw[nzchar(visible_raw)]
+  } else {
+    group_defaults
+  }
+  show_fc_tracks <- isTRUE(style$show_fc_tracks %||% TRUE)
+
+  keep <- vapply(track_catalog, function(track) {
+    track_type <- as.character(track$type %||% "")
+    if (identical(track_type, "group")) {
+      as.character(track$group_name %||% "") %in% visible_groups
+    } else if (identical(track_type, "fc")) {
+      isTRUE(show_fc_tracks) &&
+        as.character(track$group_a %||% "") %in% visible_groups &&
+        as.character(track$group_b %||% "") %in% visible_groups
+    } else {
+      FALSE
+    }
+  }, logical(1))
+
+  track_ids[keep]
+}
+
+tb_peptide_region_track_state <- function(results, style = list()) {
+  data <- results$data %||% results
+  catalog <- .pr_track_catalog_from_data(data, style)
+  selected_ids <- .pr_resolve_selected_track_ids(catalog, style)
+  selected_tracks <- Filter(function(track) {
+    as.character(track$id %||% "") %in% selected_ids
+  }, catalog)
+
+  list(
+    catalog = catalog,
+    selected_ids = selected_ids,
+    selected_tracks = selected_tracks
+  )
+}
+
+.pr_detail_left_margin <- function(axis_text_size = 14) {
+  ats <- tb_num(axis_text_size, 14)
+  max(64, as.integer(round(40 + ats * 2.2)))
+}
+
+.pr_track_y_breaks <- function(y_min, y_max, is_fc = FALSE) {
+  y_min <- suppressWarnings(as.numeric(y_min))
+  y_max <- suppressWarnings(as.numeric(y_max))
+  if (!all(is.finite(c(y_min, y_max)))) {
+    return(scales::breaks_pretty(n = 2))
+  }
+
+  if (isTRUE(is_fc)) {
+    brks <- unique(signif(c(y_min, 0, y_max), 3))
+    brks[is.finite(brks) & brks >= y_min & brks <= y_max]
+  } else {
+    scales::breaks_pretty(n = 2)(c(y_min, y_max))
+  }
+}
+
 .pr_build_detail_header <- function(gene_symbol, uniprot_id, protein_length,
                                     coverage_pct = NULL, title_size = 16,
-                                    features_df = NULL) {
-  tb_require_pkg("patchwork")
-
+                                    features_df = NULL, left_margin = 72) {
   header_title <- paste0(gene_symbol, " (", uniprot_id, ")")
   header_subtitle <- paste0(protein_length, " aa")
   if (!is.null(coverage_pct)) {
@@ -10857,55 +11108,18 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   p_title <- ggplot2::ggplot() +
     ggplot2::annotate("text", x = 0, y = 0.68, label = header_title,
                       hjust = 0, vjust = 0.5, fontface = "bold",
-                      size = title_size / 3.7, color = "grey15") +
+                      size = title_size / 3.7, color = "black") +
     ggplot2::annotate("text", x = 0, y = 0.30, label = header_subtitle,
                       hjust = 0, vjust = 0.5,
-                      size = max(title_size - 4, 10) / 3.7, color = "grey45") +
+                      size = max(title_size - 4, 10) / 3.7, color = "black") +
     ggplot2::coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), clip = "off") +
     ggplot2::theme_void() +
-    ggplot2::theme(plot.margin = ggplot2::margin(4, 4, 4, 10))
-
-  rect_df <- .pr_feature_rectangles(features_df, protein_length)
-  legend_levels <- intersect(names(.pr_feature_legend_palette()), unique(rect_df$category))
-  if (length(legend_levels) == 0) {
-    p_legend <- ggplot2::ggplot() +
-      ggplot2::theme_void() +
-      ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 4, 4))
-  } else {
-    legend_df <- data.frame(
-      category = factor(legend_levels, levels = legend_levels),
-      color = unname(.pr_feature_legend_palette()[legend_levels]),
-      x = seq_along(legend_levels),
-      stringsAsFactors = FALSE
-    )
-    legend_df$xmin <- legend_df$x - 0.42
-    legend_df$xmax <- legend_df$x - 0.26
-
-    p_legend <- ggplot2::ggplot(legend_df) +
-      ggplot2::geom_rect(
-        ggplot2::aes(xmin = .data$xmin, xmax = .data$xmax, ymin = 0.42, ymax = 0.62,
-                     fill = .data$color),
-        color = NA, show.legend = FALSE
-      ) +
-      ggplot2::geom_text(
-        ggplot2::aes(x = .data$x - 0.22, y = 0.52, label = .data$category),
-        hjust = 0, vjust = 0.5, size = 3.2, color = "grey30"
-      ) +
-      ggplot2::scale_fill_identity() +
-      ggplot2::coord_cartesian(
-        xlim = c(0.5, max(legend_df$x) + 0.7),
-        ylim = c(0.25, 0.8),
-        clip = "off"
-      ) +
-      ggplot2::theme_void() +
-      ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 4, 4))
-  }
-
-  p_title + p_legend + patchwork::plot_layout(widths = c(0.62, 0.38))
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 4, left_margin))
 }
 
 #' Build the interactive protein feature bar used in detail view.
-.pr_build_protein_bar_girafe <- function(features_df, protein_length, feature_text_size = 2) {
+.pr_build_protein_bar_girafe <- function(features_df, protein_length, feature_text_size = 2,
+                                         left_margin = 72) {
   tb_require_pkg("ggiraph")
 
   rect_df <- .pr_feature_rectangles(features_df, protein_length)
@@ -10915,7 +11129,7 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   p <- ggplot2::ggplot() +
     ggplot2::geom_rect(
       ggplot2::aes(xmin = 0.5, xmax = protein_length + 0.5, ymin = 0, ymax = 1),
-      fill = "grey92", color = "grey50", linewidth = 0.3, inherit.aes = FALSE
+      fill = "grey92", color = "black", linewidth = 0.3, inherit.aes = FALSE
     )
 
   if (nrow(rect_df) > 0) {
@@ -10952,14 +11166,14 @@ tb_peptide_region_overview_plotly <- function(results, style) {
   p +
     ggplot2::annotate("text", x = -protein_length * 0.015, y = 0.5,
                       label = "N", fontface = "bold.italic", size = 3,
-                      hjust = 1, color = "grey30") +
+                      hjust = 1, color = "black") +
     ggplot2::annotate("text", x = protein_length + protein_length * 0.015 + 0.5, y = 0.5,
                       label = "C", fontface = "bold.italic", size = 3,
-                      hjust = 0, color = "grey30") +
+                      hjust = 0, color = "black") +
     ggplot2::scale_x_continuous(limits = c(x_lo, x_hi), expand = c(0, 0)) +
     ggplot2::coord_cartesian(ylim = c(-0.02, 1.02), clip = "off") +
     ggplot2::theme_void(base_size = 11) +
-    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, 10))
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, left_margin))
 }
 
 tb_peptide_region_detail_components <- function(results, style, interactive_bar = FALSE) {
@@ -11026,6 +11240,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   show_markers      <- isTRUE(style$show_peptide_markers %||% TRUE)
   feature_text_size <- tb_num(style$feature_text_size, 2)
   feature_track_height <- tb_num(style$feature_track_height, 1.2)
+  detail_left_margin <- .pr_detail_left_margin(axis_text_size)
   flip_fc           <- isTRUE(style$flip_fc %||% FALSE)
   show_significance <- isTRUE(style$show_significance %||% TRUE)
   sig_display       <- as.character(style$sig_display %||% "stars")[1]
@@ -11044,6 +11259,24 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   pairwise         <- data$pairwise %||% list()
   all_group_names  <- data$group_names %||% names(group_coverages)
   group_colors_map <- data$group_colors %||% list()
+  track_state      <- tb_peptide_region_track_state(data, style)
+  selected_tracks  <- track_state$selected_tracks %||% list()
+
+  pr_lookup_group_coverage <- function(group_name) {
+    group_name <- as.character(group_name %||% "")
+    if (!nzchar(group_name)) return(NULL)
+
+    gc <- group_coverages[[group_name]]
+    if (!is.null(gc)) return(gc)
+
+    for (item in group_coverages) {
+      if (identical(as.character(item$group_name %||% ""), group_name)) {
+        return(item)
+      }
+    }
+
+    NULL
+  }
 
   # Helper: resolve a value-track fill color for a given group
   pr_value_color <- function(group_name) {
@@ -11076,7 +11309,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       ggplot2::annotate("text", x = 0.5, y = 0.5,
                         label = paste0("No peptides mapped for ", gene_symbol,
                                        " (", uniprot_id, ")"),
-                        size = 6, color = "grey50") +
+                        size = 6, color = "black") +
       ggplot2::theme_void()
     return(list(
       header = NULL,
@@ -11110,57 +11343,67 @@ tb_peptide_region_detail_girafe <- function(results, style) {
 
   if (has_new_format) {
     # ---- New per-group data model ----
-    show_fc_tracks <- isTRUE(style$show_fc_tracks %||% TRUE)
-
-    # Determine which groups to show (from style$visible_groups)
-    visible_raw <- style$visible_groups
-    visible_groups <- if (!is.null(visible_raw) && is.character(visible_raw) && any(nzchar(visible_raw))) {
-      intersect(visible_raw, all_group_names)
-    } else {
-      all_group_names
+    selected_group_names <- unique(vapply(
+      Filter(function(track) identical(as.character(track$type %||% ""), "group"), selected_tracks),
+      function(track) as.character(track$group_name %||% ""),
+      character(1)
+    ))
+    selected_group_names <- selected_group_names[nzchar(selected_group_names)]
+    coverage_group_candidates <- unique(c(selected_group_names, all_group_names))
+    first_gc <- NULL
+    for (grp in coverage_group_candidates) {
+      first_gc <- pr_lookup_group_coverage(grp)
+      if (!is.null(first_gc) && !is.null(first_gc$coverage)) break
     }
-    if (length(visible_groups) == 0) visible_groups <- all_group_names
-
-    # Coverage % from first visible group
-    first_gc <- group_coverages[[visible_groups[1]]]
-    first_col <- if ("group_mean" %in% names(first_gc$coverage)) "group_mean"
-                 else names(first_gc$coverage)[2]
-    n_covered <- sum(!is.na(first_gc$coverage[[first_col]]))
-    cov_pct   <- round(100 * n_covered / protein_length, 1)
-
-    # Determine which track type is last (for x-axis)
-    has_visible_fc <- show_fc_tracks && length(pairwise) > 0 && length(visible_groups) >= 2
-    last_type <- if (has_visible_fc) "fc" else "group"
-
-    # Group value tracks (one per visible group)
-    for (gi in seq_along(visible_groups)) {
-      grp <- visible_groups[gi]
-      gc  <- group_coverages[[grp]]
-      if (is.null(gc)) next
-      gc_color  <- pr_value_color(grp)
-      is_last   <- identical(last_type, "group") && gi == length(visible_groups)
-      track_plots[[paste0("grp_", gi)]] <- .pr_build_track(
-        gc$coverage, "group_mean", gc_color, grp,
-        protein_length, axis_text_size, show_x_axis = is_last,
-        alpha = track_alpha, marker_df = marker_df,
-        log_transform = value_transform,
-        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
-      )
-      track_heights <- c(track_heights, 1.3)
+    if (is.null(first_gc) && length(group_coverages) > 0) {
+      first_gc <- group_coverages[[1]]
+    }
+    if (!is.null(first_gc) && !is.null(first_gc$coverage)) {
+      first_col <- if ("group_mean" %in% names(first_gc$coverage)) "group_mean"
+                   else names(first_gc$coverage)[2]
+      n_covered <- sum(!is.na(first_gc$coverage[[first_col]]))
+      cov_pct   <- round(100 * n_covered / protein_length, 1)
     }
 
-    # FC tracks (pairwise, filtered to visible groups)
-    if (has_visible_fc) {
-      fc_idx <- 0
-      pw_keys <- names(pairwise)
-      for (pk in pw_keys) {
-        pw <- pairwise[[pk]]
-        if (!(pw$group_a %in% visible_groups && pw$group_b %in% visible_groups)) next
-        fc_idx <- fc_idx + 1
-        fcc <- pr_fc_color(fc_idx)
-        is_last <- identical(last_type, "fc") && pk == pw_keys[length(pw_keys)]
-        track_plots[[paste0("fc_", fc_idx)]] <- .pr_build_track(
-          pw$fc_coverage, "fc", fcc, NULL,
+    pairwise_by_id <- list()
+    for (pk in names(pairwise)) {
+      pw <- pairwise[[pk]]
+      if (is.null(pw)) next
+      pairwise_by_id[[.pr_fc_track_id(pw$group_a, pw$group_b)]] <- pw
+    }
+
+    all_stats <- list()
+    for (ti in seq_along(selected_tracks)) {
+      track <- selected_tracks[[ti]]
+      track_type <- as.character(track$type %||% "")
+      is_last <- ti == length(selected_tracks)
+
+      if (identical(track_type, "group")) {
+        grp <- as.character(track$group_name %||% "")
+        gc <- pr_lookup_group_coverage(grp)
+        if (is.null(gc) || is.null(gc$coverage)) next
+        group_col <- if ("group_mean" %in% names(gc$coverage)) "group_mean" else names(gc$coverage)[2]
+
+        track_plots[[paste0("grp_", ti)]] <- .pr_build_track(
+          gc$coverage, group_col, pr_value_color(grp), grp,
+          protein_length, axis_text_size, show_x_axis = is_last,
+          alpha = track_alpha, marker_df = marker_df,
+          log_transform = value_transform,
+          manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
+        )
+        track_heights <- c(track_heights, 1.3)
+
+        ps <- gc$peptide_stats
+        if (!is.null(ps) && nrow(ps) > 0) {
+          ps$group <- grp
+          all_stats[[grp]] <- ps
+        }
+      } else if (identical(track_type, "fc")) {
+        pw <- pairwise_by_id[[as.character(track$id %||% "")]]
+        if (is.null(pw) || is.null(pw$fc_coverage)) next
+
+        track_plots[[paste0("fc_", ti)]] <- .pr_build_track(
+          pw$fc_coverage, "fc", pr_fc_color(ti), NULL,
           protein_length, axis_text_size, show_x_axis = is_last,
           alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
           ctrl_group = pw$group_a, treatment_group = pw$group_b,
@@ -11172,16 +11415,6 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       }
     }
 
-    # Merge peptide_stats tables with group column
-    all_stats <- list()
-    for (grp in visible_groups) {
-      gc <- group_coverages[[grp]]
-      ps <- gc$peptide_stats
-      if (!is.null(ps) && nrow(ps) > 0) {
-        ps$group <- grp
-        all_stats[[grp]] <- ps
-      }
-    }
     if (length(all_stats) > 0) {
       tables_out[["peptide_stats"]] <- do.call(rbind, all_stats)
     }
@@ -11190,43 +11423,81 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     # ---- Legacy pairwise format (backward compat) ----
     comp_keys <- names(comparisons)
     first_comp <- comparisons[[comp_keys[1]]]
-    first_col <- if ("ctrl_mean" %in% names(first_comp$coverage)) "ctrl_mean"
-                 else names(first_comp$coverage)[2]
-    n_covered <- sum(!is.na(first_comp$coverage[[first_col]]))
-    cov_pct   <- round(100 * n_covered / protein_length, 1)
+    group_specs <- list()
+    fc_specs <- list()
 
-    track_plots$ctrl <- .pr_build_track(
-      first_comp$coverage, "ctrl_mean",
-      pr_value_color(first_comp$ctrl_group),
-      first_comp$ctrl_group,
-      protein_length, axis_text_size, alpha = track_alpha, marker_df = marker_df,
-      log_transform = value_transform,
-      manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
+    ctrl_group <- first_comp$ctrl_group %||% "Ctrl"
+    group_specs[[.pr_group_track_id(ctrl_group)]] <- list(
+      coverage = first_comp$coverage,
+      col_name = if ("ctrl_mean" %in% names(first_comp$coverage)) "ctrl_mean" else names(first_comp$coverage)[2],
+      group_name = ctrl_group
     )
-    track_heights <- c(track_heights, 1.3)
 
-    for (ci in seq_along(comp_keys)) {
-      comp <- comparisons[[comp_keys[ci]]]
-      track_plots[[paste0("treat_", ci)]] <- .pr_build_track(
-        comp$coverage, "treatment_mean",
-        pr_value_color(comp$treatment_group),
-        comp$treatment_group,
-        protein_length, axis_text_size, alpha = track_alpha, marker_df = marker_df,
-        log_transform = value_transform,
-        manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
-      )
-      track_heights <- c(track_heights, 1.3)
-      is_last <- ci == length(comp_keys)
-      track_plots[[paste0("fc_", ci)]] <- .pr_build_track(
-        comp$coverage, "fc", pr_fc_color(ci), NULL,
-        protein_length, axis_text_size, show_x_axis = is_last,
-        alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
-        ctrl_group = comp$ctrl_group, treatment_group = comp$treatment_group,
-        manual_y_max = if (identical(fc_y_range, "manual")) fc_y_abs else NULL
-      )
-      track_heights <- c(track_heights, 1.3)
+    for (comp_key in comp_keys) {
+      comp <- comparisons[[comp_key]]
+      if (is.null(comp)) next
+
+      treat_group <- comp$treatment_group %||% "Treatment"
+      treat_id <- .pr_group_track_id(treat_group)
+      if (is.null(group_specs[[treat_id]])) {
+        group_specs[[treat_id]] <- list(
+          coverage = comp$coverage,
+          col_name = if ("treatment_mean" %in% names(comp$coverage)) "treatment_mean" else names(comp$coverage)[2],
+          group_name = treat_group
+        )
+      }
+
+      fc_specs[[.pr_fc_track_id(comp$ctrl_group, comp$treatment_group)]] <- comp
     }
-    tables_out[["peptide_stats"]] <- first_comp$peptide_stats
+
+    first_group_track <- Filter(function(track) identical(as.character(track$type %||% ""), "group"), selected_tracks)
+    first_group_track <- if (length(first_group_track) > 0) first_group_track[[1]] else NULL
+    first_group_spec <- if (!is.null(first_group_track)) {
+      group_specs[[as.character(first_group_track$id %||% "")]]
+    } else {
+      group_specs[[1]]
+    }
+    if (!is.null(first_group_spec) && !is.null(first_group_spec$coverage)) {
+      first_col <- first_group_spec$col_name
+      n_covered <- sum(!is.na(first_group_spec$coverage[[first_col]]))
+      cov_pct   <- round(100 * n_covered / protein_length, 1)
+    }
+
+    for (ti in seq_along(selected_tracks)) {
+      track <- selected_tracks[[ti]]
+      track_type <- as.character(track$type %||% "")
+      is_last <- ti == length(selected_tracks)
+
+      if (identical(track_type, "group")) {
+        spec <- group_specs[[as.character(track$id %||% "")]]
+        if (is.null(spec) || is.null(spec$coverage) || is.null(spec$col_name)) next
+
+        track_plots[[paste0("grp_", ti)]] <- .pr_build_track(
+          spec$coverage, spec$col_name, pr_value_color(spec$group_name), spec$group_name,
+          protein_length, axis_text_size, show_x_axis = is_last,
+          alpha = track_alpha, marker_df = marker_df,
+          log_transform = value_transform,
+          manual_y_max = if (identical(value_y_range, "manual")) value_y_max else NULL
+        )
+        track_heights <- c(track_heights, 1.3)
+      } else if (identical(track_type, "fc")) {
+        comp <- fc_specs[[as.character(track$id %||% "")]]
+        if (is.null(comp) || is.null(comp$coverage)) next
+
+        track_plots[[paste0("fc_", ti)]] <- .pr_build_track(
+          comp$coverage, "fc", pr_fc_color(ti), NULL,
+          protein_length, axis_text_size, show_x_axis = is_last,
+          alpha = track_alpha, is_fc = TRUE, flip_fc = flip_fc,
+          ctrl_group = comp$ctrl_group, treatment_group = comp$treatment_group,
+          manual_y_max = if (identical(fc_y_range, "manual")) fc_y_abs else NULL
+        )
+        track_heights <- c(track_heights, 1.3)
+      }
+    }
+
+    if (!is.null(first_comp$peptide_stats) && length(selected_tracks) > 0) {
+      tables_out[["peptide_stats"]] <- first_comp$peptide_stats
+    }
   } else {
     # ---- Single-group (from new or old format) ----
     gc <- if (has_new_format) group_coverages[[1]]
@@ -11260,7 +11531,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       ggplot2::ggplot() +
         ggplot2::annotate("text", x = 0.5, y = 0.5,
                           label = "CV requires > 1 replicate",
-                          size = 4, color = "grey60") +
+                          size = 4, color = "black") +
         ggplot2::theme_void()
     }
     p_depth <- .pr_build_track(
@@ -11281,18 +11552,21 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     protein_length = protein_length,
     coverage_pct = cov_pct,
     title_size = title_text_size,
-    features_df = prot$features
+    features_df = prot$features,
+    left_margin = detail_left_margin
   )
   bar_static <- .pr_build_protein_bar(
     features_df = prot$features,
     protein_length = protein_length,
-    feature_text_size = feature_text_size
+    feature_text_size = feature_text_size,
+    left_margin = detail_left_margin
   )
   bar_interactive <- if (isTRUE(interactive_bar)) {
     .pr_build_protein_bar_girafe(
       features_df = prot$features,
       protein_length = protein_length,
-      feature_text_size = feature_text_size
+      feature_text_size = feature_text_size,
+      left_margin = detail_left_margin
     )
   } else {
     NULL
@@ -11302,7 +11576,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     tracks_plot <- ggplot2::ggplot() +
       ggplot2::annotate("text", x = 0.5, y = 0.5,
                         label = "All data tracks hidden",
-                        size = 4, color = "grey60") +
+                        size = 4, color = "black") +
       ggplot2::theme_void()
     track_weight <- 1.3
   } else if (length(track_plots) == 1) {
@@ -11387,7 +11661,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     # Background bar
     ggplot2::geom_rect(ggplot2::aes(xmin = 0.5, xmax = protein_length + 0.5,
                                      ymin = 0, ymax = 1),
-                       fill = "grey92", color = "grey50", linewidth = 0.3)
+                       fill = "grey92", color = "black", linewidth = 0.3)
 
   site_width <- max(2, protein_length * 0.006)
   fts <- feature_text_size
@@ -11423,7 +11697,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
         if (nchar(label) > max_chars) label <- paste0(substr(label, 1, max_chars - 1), "\u2026")
         # Domain row: dark text on light fill; thin strips: white text
         is_domain <- identical(mapping$cat, "Domains")
-        lbl_color <- if (is_domain) "grey25" else "white"
+        lbl_color <- if (is_domain) "black" else "white"
         p <- p +
           ggplot2::annotate("text", x = (xmin + xmax) / 2, y = label_y,
                             label = label, size = fts, color = lbl_color,
@@ -11436,10 +11710,10 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   p <- p +
     ggplot2::annotate("text", x = -protein_length * 0.015, y = 0.5,
                       label = "N", fontface = "bold.italic", size = 3,
-                      hjust = 1, color = "grey30") +
+                      hjust = 1, color = "black") +
     ggplot2::annotate("text", x = protein_length + protein_length * 0.015 + 0.5, y = 0.5,
                       label = "C", fontface = "bold.italic", size = 3,
-                      hjust = 0, color = "grey30")
+                      hjust = 0, color = "black")
 
   # Title + subtitle
   title_text <- paste0(gene_symbol, "  (", uniprot_id, ")")
@@ -11459,7 +11733,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
                                              size = title_size,
                                              margin = ggplot2::margin(b = 1)),
       plot.subtitle = ggplot2::element_text(hjust = 0.5, size = title_size - 4,
-                                             color = "grey45",
+                                             color = "black",
                                              margin = ggplot2::margin(b = 3)),
       plot.margin   = ggplot2::margin(4, 10, 0, 10)
     )
@@ -11469,7 +11743,8 @@ tb_peptide_region_detail_girafe <- function(results, style) {
 
 # Override the legacy title-bearing bar with a bare feature bar so detail mode
 # can place the header and legend outside the plotting area.
-.pr_build_protein_bar <- function(features_df, protein_length, feature_text_size = 2) {
+.pr_build_protein_bar <- function(features_df, protein_length, feature_text_size = 2,
+                                  left_margin = 72) {
   rect_df <- .pr_feature_rectangles(features_df, protein_length)
   x_lo <- -protein_length * 0.03
   x_hi <- protein_length * 1.03 + 0.5
@@ -11477,7 +11752,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   p <- ggplot2::ggplot() +
     ggplot2::geom_rect(
       ggplot2::aes(xmin = 0.5, xmax = protein_length + 0.5, ymin = 0, ymax = 1),
-      fill = "grey92", color = "grey50", linewidth = 0.3, inherit.aes = FALSE
+      fill = "grey92", color = "black", linewidth = 0.3, inherit.aes = FALSE
     )
 
   if (nrow(rect_df) > 0) {
@@ -11511,14 +11786,14 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   p +
     ggplot2::annotate("text", x = -protein_length * 0.015, y = 0.5,
                       label = "N", fontface = "bold.italic", size = 3,
-                      hjust = 1, color = "grey30") +
+                      hjust = 1, color = "black") +
     ggplot2::annotate("text", x = protein_length + protein_length * 0.015 + 0.5, y = 0.5,
                       label = "C", fontface = "bold.italic", size = 3,
-                      hjust = 0, color = "grey30") +
+                      hjust = 0, color = "black") +
     ggplot2::scale_x_continuous(limits = c(x_lo, x_hi), expand = c(0, 0)) +
     ggplot2::coord_cartesian(ylim = c(-0.02, 1.02), clip = "off") +
     ggplot2::theme_void(base_size = 11) +
-    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, 10))
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, left_margin))
 }
 
 # ---- Peptide Region: Coverage track ----
@@ -11535,7 +11810,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     return(ggplot2::ggplot() +
              ggplot2::annotate("text", x = 0.5, y = 0.5,
                                label = paste("No data for", col_name),
-                               size = 4, color = "grey60") +
+                               size = 4, color = "black") +
              ggplot2::theme_void())
   }
 
@@ -11546,7 +11821,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     return(ggplot2::ggplot() +
              ggplot2::annotate("text", x = 0.5, y = 0.5,
                                label = paste("No data for", col_name),
-                               size = 4, color = "grey60") +
+                               size = 4, color = "black") +
              ggplot2::theme_void())
   }
 
@@ -11559,7 +11834,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       return(ggplot2::ggplot() +
                ggplot2::annotate("text", x = 0.5, y = 0.5,
                                  label = "No finite fold-change values",
-                                 size = 4, color = "grey60") +
+                                 size = 4, color = "black") +
                ggplot2::theme_void())
     }
     if (!is.null(manual_y_max)) {
@@ -11568,12 +11843,8 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       y_max <- max(abs(covered$val), na.rm = TRUE) * 1.2
     }
     y_min <- -y_max
-    # Use plain string label so element_text(angle = 0) keeps it horizontal
-    if (flip_fc) {
-      y_label <- sprintf("log2(%s/%s)", ctrl_group, treatment_group)
-    } else {
-      y_label <- sprintf("log2(%s/%s)", treatment_group, ctrl_group)
-    }
+    y_label <- .pr_fc_track_label(ctrl_group, treatment_group,
+                                  flip_fc = flip_fc, format = "expression")
   } else {
     # Apply log transform to value tracks
     log_transform <- log_transform %||% "none"
@@ -11581,23 +11852,21 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       covered$val <- log2(covered$val)
       covered$val[!is.finite(covered$val)] <- NA_real_
       covered <- covered[!is.na(covered$val), , drop = FALSE]
-      if (!is.null(y_label) && is.character(y_label)) {
-        y_label <- paste0("Log2 ", y_label)
-      }
     } else if (identical(log_transform, "log10")) {
       covered$val <- log10(covered$val)
       covered$val[!is.finite(covered$val)] <- NA_real_
       covered <- covered[!is.na(covered$val), , drop = FALSE]
-      if (!is.null(y_label) && is.character(y_label)) {
-        y_label <- paste0("Log10 ", y_label)
-      }
+    }
+
+    if (!is.null(y_label)) {
+      y_label <- .pr_group_track_label(y_label, log_transform, format = "expression")
     }
 
     if (nrow(covered) == 0) {
       return(ggplot2::ggplot() +
                ggplot2::annotate("text", x = 0.5, y = 0.5,
                                  label = "No finite values after transform",
-                                 size = 4, color = "grey60") +
+                                 size = 4, color = "black") +
                ggplot2::theme_void())
     }
 
@@ -11610,6 +11879,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   }
 
   ats <- tb_num(axis_text_size, 14)
+  y_breaks <- .pr_track_y_breaks(y_min, y_max, is_fc = is_fc)
 
   p <- ggplot2::ggplot(covered, ggplot2::aes(x = .data$residue, y = .data$val))
 
@@ -11643,7 +11913,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       p <- p + ggplot2::annotate("rect", xmin = -Inf, xmax = Inf, ymin = -1, ymax = 1,
                                   fill = "grey90", alpha = 0.25)
     }
-    p <- p + ggplot2::geom_hline(yintercept = 0, linewidth = 0.35, color = "grey30")
+    p <- p + ggplot2::geom_hline(yintercept = 0, linewidth = 0.35, color = "black")
 
     # Significance annotations on FC track
     if (show_significance && "min_pvalue" %in% names(coverage)) {
@@ -11674,7 +11944,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
           ggplot2::geom_text(
             data = sig_annot,
             ggplot2::aes(x = .data$x, y = y_max * 0.85, label = .data$label),
-            inherit.aes = FALSE, size = 3, color = "grey20", fontface = "bold"
+            inherit.aes = FALSE, size = 3, color = "black", fontface = "bold"
           )
       }
     }
@@ -11686,25 +11956,30 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       limits = c(-protein_length * 0.03, protein_length * 1.03 + 0.5),
       expand = c(0, 0)
     ) +
-    ggplot2::scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) +
+    ggplot2::scale_y_continuous(
+      breaks = y_breaks,
+      labels = scales::label_number(trim = TRUE),
+      guide = ggplot2::guide_axis(check.overlap = TRUE)
+    ) +
     ggplot2::coord_cartesian(ylim = c(y_min, y_max)) +
     ggplot2::theme_classic(base_size = 10) +
     ggplot2::theme(
       panel.grid.major.y = ggplot2::element_line(color = "grey93", linetype = "dashed",
                                                   linewidth = 0.25),
       panel.grid.major.x = ggplot2::element_blank(),
-      axis.line          = ggplot2::element_line(color = "grey40", linewidth = 0.25),
-      axis.ticks         = ggplot2::element_line(color = "grey40", linewidth = 0.25),
+      axis.line          = ggplot2::element_line(color = "black", linewidth = 0.25),
+      axis.ticks         = ggplot2::element_line(color = "black", linewidth = 0.25),
       axis.title.x       = ggplot2::element_blank(),
       axis.text.x        = ggplot2::element_blank(),
       axis.ticks.x       = ggplot2::element_blank(),
       # Horizontal Y axis title (angle = 0) so multi-character group labels stay readable.
       # vjust = 0.5 keeps it vertically centered against the plot panel.
-      axis.title.y       = ggplot2::element_text(size = ats - 3, color = "grey30",
+      axis.title.y       = ggplot2::element_text(size = max(ats - 4, 8), color = "black",
                                                   angle = 0, hjust = 1,
                                                   vjust = 0.5,
                                                   margin = ggplot2::margin(r = 10)),
-      axis.text.y        = ggplot2::element_text(size = ats - 5, color = "grey40"),
+      axis.text.y        = ggplot2::element_text(size = max(ats - 6, 7), color = "black",
+                                                  lineheight = 0.9),
       plot.margin        = ggplot2::margin(1, 10, 1, 34)
     )
 
@@ -11714,12 +11989,13 @@ tb_peptide_region_detail_girafe <- function(results, style) {
         name = "Residue",
         limits = c(-protein_length * 0.03, protein_length * 1.03 + 0.5),
         expand = c(0, 0),
-        breaks = scales::breaks_pretty(n = 6)
+        breaks = scales::breaks_pretty(n = 5),
+        guide = ggplot2::guide_axis(check.overlap = TRUE)
       ) +
       ggplot2::theme(
-        axis.text.x  = ggplot2::element_text(size = ats - 5, color = "grey40"),
-        axis.ticks.x = ggplot2::element_line(color = "grey40", linewidth = 0.25),
-        axis.title.x = ggplot2::element_text(size = ats - 3, color = "grey30",
+        axis.text.x  = ggplot2::element_text(size = max(ats - 6, 7), color = "black"),
+        axis.ticks.x = ggplot2::element_line(color = "black", linewidth = 0.25),
+        axis.title.x = ggplot2::element_text(size = max(ats - 4, 8), color = "black",
                                               margin = ggplot2::margin(t = 3)),
         plot.margin  = ggplot2::margin(1, 10, 4, 34)
       )
