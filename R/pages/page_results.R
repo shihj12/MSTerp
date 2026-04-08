@@ -4396,6 +4396,22 @@ page_results_server <- function(input, output, session) {
     identical(mode, "interactive")
   }
 
+  # Returns TRUE when the active engine should render via plotly (interactive
+  # widget) instead of static ggplot. Centralizes the dispatch logic so all
+  # render-path width/height/output observers stay in sync.
+  res_engine_uses_plotly <- function(eng, style, results = NULL) {
+    if (is.null(eng)) return(FALSE)
+    eng <- tolower(eng)
+    if (eng %in% c("volcano", "2dgofcs", "rankplot")) {
+      return(isTRUE(res_is_interactive_view(style)))
+    }
+    if (identical(eng, "peptide_region")) {
+      mode <- results$data$mode %||% "overview"
+      return(identical(mode, "overview"))
+    }
+    FALSE
+  }
+
   res_volcano_hover_info <- function(state, hover) {
     if (is.null(state)) return(res_hover_empty_state())
     df <- state$df
@@ -5116,7 +5132,18 @@ page_results_server <- function(input, output, session) {
     # In overview mode, just strip selected_protein from schema to prevent accordion crash
     protein_selector_ui <- NULL
     pr_group_selector_ui <- NULL
+    pr_axis_selector_ui  <- NULL
     if (eng_lower == "peptide_region") {
+      pr_res <- isolate(active_results())
+      pr_mode <- pr_res$data$mode %||% "overview"
+      pr_is_detail <- identical(pr_mode, "detail")
+
+      # Mode-based filtering: hide overview-only fields in detail view, vice versa
+      schema <- Filter(function(f) {
+        m <- f$mode %||% "both"
+        if (pr_is_detail) m %in% c("detail", "both") else m %in% c("overview", "both")
+      }, schema)
+
       # Always remove selected_protein from schema to prevent empty-choice crash
       sp_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "selected_protein"), logical(1)))
       if (length(sp_idx) > 0) {
@@ -5129,8 +5156,67 @@ page_results_server <- function(input, output, session) {
         schema <- schema[-vg_idx[[1]]]
       }
 
-      # Hide comparison-only style fields for single-sample experiments
-      pr_res <- isolate(active_results())
+      # Strip pr_x_axis / pr_y_axis (handled as custom dynamic selectors below)
+      ax_idx <- which(vapply(schema, function(f) {
+        as.character(f$name %||% "") %in% c("pr_x_axis", "pr_y_axis")
+      }, logical(1)))
+      if (length(ax_idx) > 0) schema <- schema[-ax_idx]
+
+      # Build dynamic axis selectors for overview mode
+      if (!pr_is_detail && !is.null(pr_res)) {
+        pr_scores_obj <- pr_res$data$protein_scores
+        if (!is.null(pr_scores_obj) && is.data.frame(pr_scores_obj) && nrow(pr_scores_obj) > 0) {
+          numeric_cols <- names(pr_scores_obj)[vapply(pr_scores_obj, is.numeric, logical(1))]
+          numeric_cols <- setdiff(numeric_cols, "is_target")
+          if (length(numeric_cols) > 0) {
+            # Build human-readable labels (mirrors .pr_axis_label in terpbook.R)
+            pretty_label <- function(col) {
+              switch(
+                col,
+                "peptide_cv"        = "Peptide CV",
+                "mean_replicate_cv" = "Mean replicate CV",
+                "best_fc_disparity" = "Best FC disparity",
+                "max_log2fc"        = "Max |log2 FC|",
+                "composite_score"   = "Composite score",
+                "n_peptides"        = "# Peptides",
+                "n_unique_peptides" = "# Unique peptides",
+                {
+                  if (startsWith(col, "fc_mean_")) {
+                    paste0("Mean log2 FC (", sub("^fc_mean_", "", col), ")")
+                  } else if (startsWith(col, "fc_disp_")) {
+                    paste0("FC disparity (", sub("^fc_disp_", "", col), ")")
+                  } else col
+                }
+              )
+            }
+            axis_choices <- stats::setNames(numeric_cols, vapply(numeric_cols, pretty_label, character(1)))
+            is_single <- isTRUE(pr_res$data$single_group)
+            x_default <- "peptide_cv"
+            y_default <- if (is_single) "mean_replicate_cv" else "best_fc_disparity"
+            x_val <- eff$style$pr_x_axis
+            y_val <- eff$style$pr_y_axis
+            if (is.null(x_val) || !nzchar(as.character(x_val)) || !x_val %in% numeric_cols) x_val <- x_default
+            if (is.null(y_val) || !nzchar(as.character(y_val)) || !y_val %in% numeric_cols) y_val <- y_default
+            nid <- rv$active_node_id
+            pr_axis_selector_ui <- div(
+              style = "margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border-light);",
+              selectInput(
+                res_field_input_id(nid, "pr_x_axis"),
+                "Scatter X axis",
+                choices = axis_choices,
+                selected = x_val
+              ),
+              selectInput(
+                res_field_input_id(nid, "pr_y_axis"),
+                "Scatter Y axis",
+                choices = axis_choices,
+                selected = y_val
+              )
+            )
+          }
+        }
+      }
+
       pr_n_groups <- pr_res$data$n_groups %||% 1
       if (pr_n_groups < 2) {
         comp_only <- c("fc_color", "flip_fc", "fc_y_range", "fc_y_abs",
@@ -5455,6 +5541,13 @@ page_results_server <- function(input, output, session) {
       if (!is.null(res) && identical(res$data$mode, "overview") &&
           !is.null(res$data$protein_scores) && nrow(res$data$protein_scores) > 0) {
         n_proteins <- nrow(res$data$protein_scores)
+        # Show "(custom)" label if a shared detail style is set
+        shared_pr <- eff$style$`__pr_detail_shared` %||% list()
+        config_label <- if (length(shared_pr) > 0) {
+          sprintf("Configure Detail Style (%d custom)", length(shared_pr))
+        } else {
+          "Configure Detail Style"
+        }
         peptide_region_detail_panel_ui <- div(
           style = "margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-light);",
           tags$h6(
@@ -5477,6 +5570,12 @@ page_results_server <- function(input, output, session) {
             "Create Detail Views",
             class = "btn btn-outline-primary btn-sm",
             style = "width: 100%; margin-top: 4px;"
+          ),
+          actionButton(
+            "res_peptide_region_configure_detail",
+            config_label,
+            class = "btn btn-outline-secondary btn-sm",
+            style = "width: 100%; margin-top: 6px;"
           )
         )
       }
@@ -5571,6 +5670,7 @@ page_results_server <- function(input, output, session) {
       gene_selector_ui,   # Gene selector for gene_barchart
       protein_selector_ui,  # Protein selector for peptide_region
       pr_group_selector_ui, # Group visibility selector for peptide_region
+      pr_axis_selector_ui,  # Scatter axis selectors for peptide_region overview
       cluster_selector_ui,  # Cluster selector for PPI network
       selectors_ui,       # Selector fields (always visible, not in accordions)
       accordions_ui,      # Accordion panels for grouped fields
@@ -5621,6 +5721,19 @@ page_results_server <- function(input, output, session) {
         !nm %in% c("label_genes_map", "label_targets_map", "highlight_groups_map")
       }, schema)
     }
+
+    # Mode-aware filtering: skip overview-only fields on detail nodes and
+    # detail-only fields on overview nodes. This prevents the modal-managed
+    # detail inputs from triggering generic commits when used on a parent.
+    if (eng_lower == "peptide_region") {
+      pr_res_obs <- isolate(active_results())
+      pr_is_detail <- identical(pr_res_obs$data$mode %||% "overview", "detail")
+      schema <- Filter(function(f) {
+        m <- f$mode %||% "both"
+        if (pr_is_detail) m %in% c("detail", "both") else m %in% c("overview", "both")
+      }, schema)
+    }
+
     if (length(schema) == 0) return(invisible(NULL))
 
     node <- active_node_row()
@@ -7488,7 +7601,7 @@ page_results_server <- function(input, output, session) {
     tryCatch({
       st <- active_effective_state()$style %||% list()
       eng <- tolower(active_engine_id() %||% "")
-      use_client <- eng %in% c("volcano", "2dgofcs", "rankplot") && isTRUE(res_is_interactive_view(st))
+      use_client <- res_engine_uses_plotly(eng, st, tryCatch(active_results(), error = function(e) NULL))
       dims <- res_plot_dim_px("res_plot", 150L, st, use_client = use_client)
       dims$w
     }, error = function(e) {
@@ -7501,7 +7614,7 @@ page_results_server <- function(input, output, session) {
     tryCatch({
       st <- active_effective_state()$style %||% list()
       eng <- tolower(active_engine_id() %||% "")
-      use_client <- eng %in% c("volcano", "2dgofcs", "rankplot") && isTRUE(res_is_interactive_view(st))
+      use_client <- res_engine_uses_plotly(eng, st, tryCatch(active_results(), error = function(e) NULL))
       dims <- res_plot_dim_px("res_plot", 150L, st, use_client = use_client)
       dims$h
     }, error = function(e) {
@@ -7548,7 +7661,7 @@ page_results_server <- function(input, output, session) {
     tryCatch({
       st <- active_effective_state()$style %||% list()
       eng <- tolower(active_engine_id() %||% "")
-      use_client <- eng %in% c("volcano", "2dgofcs", "rankplot") && isTRUE(res_is_interactive_view(st))
+      use_client <- res_engine_uses_plotly(eng, st, tryCatch(active_results(), error = function(e) NULL))
       dims <- res_plot_dim_px("res_plot_hi", 300L, st, use_client = use_client)
       dims$w
     }, error = function(e) {
@@ -7561,7 +7674,7 @@ page_results_server <- function(input, output, session) {
     tryCatch({
       st <- active_effective_state()$style %||% list()
       eng <- tolower(active_engine_id() %||% "")
-      use_client <- eng %in% c("volcano", "2dgofcs", "rankplot") && isTRUE(res_is_interactive_view(st))
+      use_client <- res_engine_uses_plotly(eng, st, tryCatch(active_results(), error = function(e) NULL))
       dims <- res_plot_dim_px("res_plot_hi", 300L, st, use_client = use_client)
       dims$h
     }, error = function(e) {
@@ -7581,7 +7694,7 @@ page_results_server <- function(input, output, session) {
     hover_id <- NULL
 
     st <- active_effective_state()$style %||% list()
-    is_interactive <- eng %in% c("volcano", "2dgofcs", "rankplot") && isTRUE(res_is_interactive_view(st))
+    is_interactive <- res_engine_uses_plotly(eng, st, tryCatch(active_results(), error = function(e) NULL))
     message("[DEBUG-RENDER] res_plot_pub rendering eng='", eng, "' interactive=", is_interactive)
 
     # Use plotly for interactive mode on volcano/2dgofcs/rankplot
@@ -7672,15 +7785,20 @@ page_results_server <- function(input, output, session) {
   output$res_plotly_interactive <- plotly::renderPlotly({
     tryCatch({
     eng <- tolower(active_engine_id() %||% "")
-    if (!(eng %in% c("volcano", "2dgofcs", "rankplot"))) return(NULL)
+    if (!(eng %in% c("volcano", "2dgofcs", "rankplot", "peptide_region"))) return(NULL)
 
     st <- active_effective_state()
     style <- st$style %||% list()
-    message("[DEBUG-RENDER] res_plotly_interactive: eng='", eng, "' interactive=", isTRUE(res_is_interactive_view(style)))
-    if (!isTRUE(res_is_interactive_view(style))) return(NULL)
-
     res <- active_results()
+    message("[DEBUG-RENDER] res_plotly_interactive: eng='", eng, "' interactive=", isTRUE(res_engine_uses_plotly(eng, style, res)))
+    if (!isTRUE(res_engine_uses_plotly(eng, style, res))) return(NULL)
+
     if (is.null(res)) return(NULL)
+
+    # Peptide region overview: render the interactive scatter and return early
+    if (identical(eng, "peptide_region")) {
+      return(tb_peptide_region_overview_plotly(res, style))
+    }
 
     visibility <- st$visibility %||% list()
     plotly_state <- st$plotly %||% list()
@@ -10892,6 +11010,11 @@ page_results_server <- function(input, output, session) {
     if (nrow(node) == 0) return()
     node_dir <- node$node_dir[[1]]
 
+    # Inherit shared detail style from parent (set via the modal)
+    parent_eff <- isolate(active_effective_state())
+    shared_style <- parent_eff$style$`__pr_detail_shared` %||% list()
+    base_child_style <- modifyList(list(feature_type = "Domain"), shared_style)
+
     n_created <- 0
     withProgress(message = "Creating detail views...", value = 0, {
       for (i in seq_along(valid_ids)) {
@@ -10923,7 +11046,7 @@ page_results_server <- function(input, output, session) {
             engine_id = "peptide_region",
             label = label,
             params = list(mode = "detail", detail_protein = pid),
-            style = list(feature_type = "Domain")
+            style = base_child_style
           ),
           error = function(e) {
             showNotification(sprintf("Error creating view for %s: %s", pid, e$message), type = "warning")
@@ -10950,6 +11073,151 @@ page_results_server <- function(input, output, session) {
       rv$nodes_df <- tb_nodes_df(rv$run_root, rv$manifest, registry = res_registry())
       tb_cache_clear()
     }
+  }, ignoreInit = TRUE)
+
+  # ---- Peptide Region: Configure shared detail style modal ----
+  # Detail-mode style fields are NOT shown in the parent's style accordion (they
+  # are filtered out by mode). Instead, the user clicks "Configure Detail Style"
+  # which opens a modal with all detail fields. The values are persisted on the
+  # parent's style under `__pr_detail_shared` and inherited at child-view creation.
+  pr_detail_field_names <- function() {
+    edef <- res_engine_def("peptide_region", res_registry())
+    if (is.null(edef)) return(character(0))
+    schema <- edef$style_schema %||% list()
+    fields <- Filter(function(f) {
+      m <- f$mode %||% "both"
+      m == "detail"
+    }, schema)
+    vapply(fields, function(f) as.character(f$name %||% ""), character(1))
+  }
+
+  pr_detail_fields <- function() {
+    edef <- res_engine_def("peptide_region", res_registry())
+    if (is.null(edef)) return(list())
+    schema <- edef$style_schema %||% list()
+    Filter(function(f) (f$mode %||% "both") == "detail", schema)
+  }
+
+  observeEvent(input$res_peptide_region_configure_detail, {
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "peptide_region")) return()
+
+    fields <- pr_detail_fields()
+    if (length(fields) == 0) {
+      showNotification("No detail style fields available.", type = "warning")
+      return()
+    }
+
+    eff <- isolate(active_effective_state())
+    shared <- eff$style$`__pr_detail_shared` %||% list()
+
+    # Build modal inputs using the same per-field UI helper used by the accordion
+    nid <- isolate(rv$active_node_id)
+    field_uis <- lapply(fields, function(f) {
+      v_eff <- shared[[f$name]] %||% f$default
+      tryCatch(
+        res_field_ui_core(nid, f, value_override = v_eff),
+        error = function(e) NULL
+      )
+    })
+
+    showModal(modalDialog(
+      title = "Configure Detail View Style",
+      tags$p(
+        class = "text-muted",
+        "These settings apply to all newly created peptide detail views from this overview. ",
+        "Existing detail views are not affected."
+      ),
+      div(class = "pr-detail-modal-fields", field_uis),
+      footer = tagList(
+        actionButton("res_peptide_region_detail_reset", "Reset to defaults",
+                     class = "btn btn-link"),
+        modalButton("Cancel"),
+        actionButton("res_peptide_region_detail_save", "Save",
+                     class = "btn btn-primary")
+      ),
+      size = "l", easyClose = TRUE
+    ))
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$res_peptide_region_detail_save, {
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "peptide_region")) return()
+
+    fields <- pr_detail_fields()
+    nid <- isolate(rv$active_node_id)
+    if (is.null(nid) || length(fields) == 0) {
+      removeModal()
+      return()
+    }
+
+    # Collect values from inputs (those rendered by res_field_ui_core)
+    new_shared <- list()
+    for (f in fields) {
+      iid <- res_field_input_id(nid, f$name)
+      v <- input[[iid]]
+      if (is.null(v)) next
+      # Convert switchInput-style logical for "view_mode" — N/A for detail fields
+      # For bool fields, ensure logical
+      if (identical(f$type %||% "", "bool")) {
+        v <- isTRUE(v)
+      }
+      # Only store non-default to keep the override sparse
+      if (!identical(v, f$default)) {
+        new_shared[[f$name]] <- v
+      }
+    }
+
+    # Merge new_shared into the parent's existing style cache and persist
+    key <- as.character(nid)
+    cur_style <- rv$cache_style_by_node[[key]] %||% list()
+    cur_style$`__pr_detail_shared` <- new_shared
+    rv$cache_style_by_node[[key]] <- cur_style
+
+    nd <- active_node_dir()
+    if (!is.null(nd)) {
+      .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
+      .commit_style_debounced$flush()
+    }
+
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+    style_rev(isolate(style_rev()) + 1L)
+
+    removeModal()
+    showNotification(
+      sprintf("Saved %d detail style override%s. New child views will use these settings.",
+              length(new_shared), if (length(new_shared) != 1) "s" else ""),
+      type = "message"
+    )
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$res_peptide_region_detail_reset, {
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "peptide_region")) return()
+
+    nid <- isolate(rv$active_node_id)
+    if (is.null(nid)) {
+      removeModal()
+      return()
+    }
+    key <- as.character(nid)
+    cur_style <- rv$cache_style_by_node[[key]] %||% list()
+    cur_style$`__pr_detail_shared` <- NULL
+    rv$cache_style_by_node[[key]] <- cur_style
+
+    nd <- active_node_dir()
+    if (!is.null(nd)) {
+      .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
+      .commit_style_debounced$flush()
+    }
+
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+    style_rev(isolate(style_rev()) + 1L)
+
+    removeModal()
+    showNotification("Detail style reset to defaults.", type = "message")
   }, ignoreInit = TRUE)
 
   # ---- Manage features in existing gene_barchart ----

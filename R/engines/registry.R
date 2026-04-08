@@ -76,9 +76,11 @@ msterp_schema_field <- function(
     advanced = FALSE,
     hidden = FALSE,
     help = NULL,
+    mode = c("both", "overview", "detail"),
     viewer_only = FALSE  # DEPRECATED: use viewer_schema instead; kept for backward compatibility
 ) {
   type <- match.arg(type)
+  mode <- match.arg(mode)
   list(
     name = name,
     type = type,
@@ -91,6 +93,7 @@ msterp_schema_field <- function(
     advanced = isTRUE(advanced),
     hidden = isTRUE(hidden),
     help = help,
+    mode = mode,
     viewer_only = isTRUE(viewer_only)  # DEPRECATED: kept for backward compatibility
   )
 }
@@ -2535,6 +2538,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       requirements = list(
         min_groups = 1,
         requires_terpbase = FALSE,
+        optional_terpbase = TRUE,
         required_ids = c(),
         analysis_levels = c("peptide")
       ),
@@ -2563,24 +2567,74 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         )
       ),
       style_schema = list(
+        # ---- Overview-only style fields (scatter plot) ----
+        msterp_schema_field(
+          "point_size_scale", "num", "Point size scale",
+          default = 1, min = 0.2, max = 5,
+          mode = "overview",
+          help = "Scale factor for scatter point size (proportional to peptide count)."
+        ),
+        msterp_schema_field(
+          "point_alpha", "num", "Point opacity",
+          default = 0.8, min = 0.1, max = 1,
+          mode = "overview",
+          help = "Marker opacity in the overview scatter."
+        ),
+        msterp_schema_field(
+          "highlight_targets", "bool", "Highlight target proteins",
+          default = TRUE,
+          mode = "overview",
+          help = "Outline target proteins with a black ring in the scatter."
+        ),
+        msterp_schema_field(
+          "palette", "choice", "Biology color palette",
+          default = "Set2",
+          choices = c("Set1", "Set2", "Set3", "Dark2", "Paired"),
+          mode = "overview",
+          help = "Discrete color palette for biology category coloring."
+        ),
+        msterp_schema_field(
+          "point_color_mode", "choice", "Point color mode",
+          default = "biology",
+          choices = c("biology", "density"),
+          choice_labels = c("Biology category", "Point density"),
+          mode = "overview",
+          help = "Color points by GO biology category (discrete) or by local 2D density (continuous). Density is useful for MA-style plots with many proteins."
+        ),
+
+        # ---- Detail-only style fields (peptide track plot) ----
         msterp_schema_field(
           "fc_color", "string", "Fold-change track color",
-          default = "#7B2D8E"
+          default = "#7B2D8E",
+          mode = "detail"
+        ),
+        msterp_schema_field(
+          "ctrl_color", "string", "Control track color",
+          default = "#2166AC",
+          mode = "detail"
+        ),
+        msterp_schema_field(
+          "treatment_color", "string", "Treatment track color",
+          default = "#B2182B",
+          mode = "detail"
         ),
         msterp_schema_field(
           "flip_fc", "bool", "Flip fold-change direction",
           default = FALSE,
+          mode = "detail",
           help = "Swap numerator/denominator on FC tracks."
         ),
         msterp_schema_field(
           "show_fc_tracks", "bool", "Show fold-change tracks",
-          default = TRUE
+          default = TRUE,
+          mode = "detail"
         ),
         msterp_schema_field(
           "value_transform", "choice", "Value track transform",
           default = "none",
           choices = c("none", "log2", "log10"),
           choice_labels = c("None", "Log2", "Log10"),
+          mode = "detail",
           help = "Apply log transform to control and treatment value tracks."
         ),
         msterp_schema_field(
@@ -2588,6 +2642,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = "auto",
           choices = c("auto", "manual"),
           choice_labels = c("Auto", "Manual"),
+          mode = "detail",
           help = "Auto scales to data; Manual lets you set a fixed max."
         ),
         msterp_schema_field(
@@ -2595,6 +2650,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = 10,
           min = 0, max = 10000,
           advanced = TRUE,
+          mode = "detail",
           help = "Maximum Y value for control and treatment tracks (when Manual)."
         ),
         msterp_schema_field(
@@ -2602,6 +2658,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = "auto",
           choices = c("auto", "manual"),
           choice_labels = c("Auto", "Manual"),
+          mode = "detail",
           help = "Auto scales to data; Manual lets you set a symmetric range."
         ),
         msterp_schema_field(
@@ -2609,16 +2666,19 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = 3,
           min = 0.1, max = 20,
           advanced = TRUE,
+          mode = "detail",
           help = "Symmetric Y range for FC track: -val to +val (when Manual)."
         ),
         msterp_schema_field(
           "show_peptide_markers", "bool", "Show peptide markers",
           default = TRUE,
+          mode = "detail",
           help = "Show tick marks where peptides map on the coverage tracks (detail view)."
         ),
         msterp_schema_field(
           "show_significance", "bool", "Show significance",
           default = TRUE,
+          mode = "detail",
           help = "Show significance stars on FC track (comparison mode, requires >= 2 replicates per group)."
         ),
         msterp_schema_field(
@@ -2626,25 +2686,31 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = "stars",
           choices = c("stars", "pvalue"),
           choice_labels = c("Stars (* / ** / ***)", "P-value"),
+          mode = "detail",
           help = "How to display significance on the FC track."
         ),
         msterp_schema_field(
           "sig_threshold", "num", "Significance threshold",
           default = 0.05, min = 0.001, max = 0.5,
           advanced = TRUE,
+          mode = "detail",
           help = "P-value threshold for significance annotations."
         ),
         msterp_schema_field(
           "feature_text_size", "num", "Feature label size",
           default = 3, min = 0.5, max = 5,
           advanced = TRUE,
+          mode = "detail",
           help = "Text size for labels inside protein feature annotations."
         ),
         msterp_schema_field(
           "track_alpha", "num", "Track fill opacity",
           default = 0.85, min = 0.1, max = 1,
-          advanced = TRUE
+          advanced = TRUE,
+          mode = "detail"
         ),
+
+        # ---- Shared (both modes) ----
         msterp_schema_field(
           "title_text_size", "int", "Title size",
           default = 16, min = 8, max = 32
@@ -2670,12 +2736,28 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           "selected_protein", "choice", "Select protein",
           default = "",
           choices = c(""),
+          mode = "detail",
           help = "Browse between target proteins (detail view only)."
         ),
         msterp_schema_field(
           "visible_groups", "string", "Visible groups",
           default = "",
+          mode = "detail",
           help = "Comma-separated group names to display. Empty = all groups."
+        ),
+        msterp_schema_field(
+          "pr_x_axis", "choice", "Scatter X axis",
+          default = "peptide_cv",
+          choices = c("peptide_cv"),
+          mode = "overview",
+          help = "Numeric column to map to the scatter plot X axis."
+        ),
+        msterp_schema_field(
+          "pr_y_axis", "choice", "Scatter Y axis",
+          default = "best_fc_disparity",
+          choices = c("best_fc_disparity"),
+          mode = "overview",
+          help = "Numeric column to map to the scatter plot Y axis."
         )
       ),
       outputs = list(figures = c("peptide_region"), tables = c("protein_scores", "peptide_stats"), interactive = FALSE),

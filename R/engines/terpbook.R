@@ -10412,22 +10412,39 @@ tb_render_peptide_region <- function(results, style, meta) {
     return(list(plots = list(peptide_region = p_msg), tables = list(), tabs = NULL))
   }
 
-  n_groups <- data$n_groups %||% 1
+  is_single <- isTRUE(data$single_group)
 
+  # ---- Build display table ----
   display <- data.frame(
-    Gene            = scores$gene_symbol,
-    Protein         = scores$protein_id,
-    Peptides        = scores$n_peptides,
+    Gene              = scores$gene_symbol,
+    Protein           = scores$protein_id,
+    Biology           = scores$biology_tag %||% "Other",
+    Peptides          = scores$n_peptides,
     `Unique Peptides` = scores$n_unique_peptides,
-    `Peptide CV`    = round(scores$peptide_cv, 3),
-    `Replicate CV`  = round(scores$mean_replicate_cv, 3),
+    `Peptide CV`      = round(scores$peptide_cv, 3),
+    `Replicate CV`    = round(scores$mean_replicate_cv, 3),
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
 
-  if (n_groups >= 2) {
+  if (!is_single) {
     display[["Best FC Disparity"]] <- round(scores$best_fc_disparity, 3)
     display[["Max Log2 FC"]]       <- round(scores$max_log2fc, 3)
+
+    # Per-comparison columns (kept set from engine)
+    fc_mean_cols <- data$fc_mean_cols %||% character(0)
+    fc_disp_cols <- data$fc_disp_cols %||% character(0)
+    comp_keys    <- data$comp_keys_kept %||% character(0)
+    for (i in seq_along(comp_keys)) {
+      mc <- fc_mean_cols[i]
+      dc <- fc_disp_cols[i]
+      if (mc %in% names(scores)) {
+        display[[paste0("FC Mean (", comp_keys[i], ")")]] <- round(scores[[mc]], 3)
+      }
+      if (dc %in% names(scores)) {
+        display[[paste0("FC Disparity (", comp_keys[i], ")")]] <- round(scores[[dc]], 3)
+      }
+    }
   }
 
   display[["Score"]] <- round(scores$composite_score, 3)
@@ -10436,35 +10453,321 @@ tb_render_peptide_region <- function(results, style, meta) {
     display[["Target"]] <- ifelse(scores$is_target, "\u2605", "")
   }
 
-  top_n <- min(20, nrow(scores))
-  top <- scores[seq_len(top_n), ]
+  # GO column last (full string is searchable; renderer can ellipsis-truncate)
+  display[["GO Terms"]] <- scores$go_terms_str %||% ""
 
-  p_summary <- ggplot2::ggplot(
-    top,
-    ggplot2::aes(
-      x = stats::reorder(.data$gene_symbol, .data$composite_score),
-      y = .data$composite_score
-    )
-  ) +
-    ggplot2::geom_col(fill = "#4E79A7", alpha = 0.85, width = 0.7) +
-    ggplot2::coord_flip() +
-    ggplot2::labs(
-      title = sprintf("Top %d Proteins by Composite Score", top_n),
-      x = NULL, y = "Composite Score"
-    ) +
-    ggplot2::theme_minimal(base_size = 12) +
-    ggplot2::theme(
-      plot.title         = ggplot2::element_text(face = "bold", size = 14),
-      panel.grid.major.y = ggplot2::element_blank(),
-      panel.grid.minor   = ggplot2::element_blank(),
-      axis.text.y        = ggplot2::element_text(size = 10)
-    )
+  # ---- Resolve scatter axes from viewer/style state ----
+  # Note: viewer_schema fields are merged into style at the page level
+  numeric_cols <- .pr_overview_numeric_cols(scores)
+  x_col <- .pr_resolve_axis(style$pr_x_axis, numeric_cols, default = "peptide_cv")
+  y_col <- .pr_resolve_axis(style$pr_y_axis, numeric_cols,
+                            default = if (is_single) "mean_replicate_cv" else "best_fc_disparity")
+
+  # ---- Build static ggplot scatter (used for export / non-interactive view) ----
+  p_static <- .pr_build_overview_scatter_static(scores, style, x_col, y_col)
 
   list(
-    plots  = list(peptide_region = p_summary),
+    plots  = list(peptide_region = p_static),
     tables = list(protein_scores = display),
     tabs   = NULL
   )
+}
+
+# ---- Peptide Region overview helpers ----
+
+#' Numeric columns from protein_scores eligible for scatter axes
+.pr_overview_numeric_cols <- function(scores) {
+  if (is.null(scores) || !is.data.frame(scores)) return(character(0))
+  num_idx <- vapply(scores, is.numeric, logical(1))
+  cols <- names(scores)[num_idx]
+  # Drop columns that are uninteresting for plotting
+  drop <- c("is_target")
+  setdiff(cols, drop)
+}
+
+#' Resolve a viewer-provided axis name against the available numeric columns
+.pr_resolve_axis <- function(requested, available, default) {
+  if (length(available) == 0L) return(default)
+  if (is.null(requested) || !nzchar(as.character(requested))) {
+    return(if (default %in% available) default else available[1])
+  }
+  req <- as.character(requested)[1]
+  if (req %in% available) return(req)
+  if (default %in% available) return(default)
+  available[1]
+}
+
+#' Pretty axis label for a protein_scores column
+.pr_axis_label <- function(col) {
+  switch(
+    col,
+    "peptide_cv"        = "Peptide CV",
+    "mean_replicate_cv" = "Mean replicate CV",
+    "best_fc_disparity" = "Best FC disparity (SD of log2FC)",
+    "max_log2fc"        = "Max |log2 FC|",
+    "composite_score"   = "Composite score",
+    "n_peptides"        = "# Peptides",
+    "n_unique_peptides" = "# Unique peptides",
+    {
+      pretty <- col
+      if (startsWith(col, "fc_mean_")) {
+        pretty <- paste0("Mean log2 FC (", sub("^fc_mean_", "", col), ")")
+      } else if (startsWith(col, "fc_disp_")) {
+        pretty <- paste0("FC disparity (", sub("^fc_disp_", "", col), ")")
+      }
+      pretty
+    }
+  )
+}
+
+#' Static ggplot scatter (for PNG/PDF export)
+.pr_build_overview_scatter_static <- function(scores, style, x_col, y_col) {
+  tb_require_pkg("ggplot2")
+  point_alpha       <- tb_num(style$point_alpha, 0.8)
+  point_size_scale  <- tb_num(style$point_size_scale, 1)
+  highlight_targets <- isTRUE(style$highlight_targets %||% TRUE)
+  palette_name      <- as.character(style$palette %||% "Set2")[1]
+  color_mode        <- as.character(style$point_color_mode %||% "biology")[1]
+  axis_text_size    <- tb_num(style$axis_text_size, 14)
+  title_text_size   <- tb_num(style$title_text_size, 16)
+
+  df <- data.frame(
+    x        = scores[[x_col]],
+    y        = scores[[y_col]],
+    biology  = scores$biology_tag %||% "Other",
+    n_pep    = scores$n_peptides,
+    gene     = scores$gene_symbol,
+    is_tgt   = isTRUE(highlight_targets) & (scores$is_target %||% FALSE),
+    stringsAsFactors = FALSE
+  )
+  df <- df[is.finite(df$x) & is.finite(df$y), , drop = FALSE]
+
+  if (nrow(df) == 0) {
+    return(
+      ggplot2::ggplot() +
+        ggplot2::annotate("text", x = 0.5, y = 0.5,
+                          label = "No data points to plot",
+                          size = 5, color = "grey50") +
+        ggplot2::theme_void()
+    )
+  }
+
+  size_range <- c(1.5, 6) * point_size_scale
+
+  if (identical(color_mode, "density") && nrow(df) >= 2) {
+    # Density-based coloring: per-point color via grDevices::densCols + identity scale
+    df$denscol <- grDevices::densCols(df$x, df$y, colramp = tb_fdr_palette)
+
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = .data$x, y = .data$y)) +
+      ggplot2::geom_point(
+        ggplot2::aes(color = .data$denscol, size = .data$n_pep),
+        alpha = point_alpha
+      ) +
+      ggplot2::scale_color_identity() +
+      ggplot2::scale_size(range = size_range, name = "# peptides") +
+      ggplot2::labs(
+        x = .pr_axis_label(x_col),
+        y = .pr_axis_label(y_col)
+      ) +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(
+        axis.text  = ggplot2::element_text(size = axis_text_size * 0.75),
+        axis.title = ggplot2::element_text(size = axis_text_size * 0.85),
+        plot.title = ggplot2::element_text(face = "bold", size = title_text_size)
+      )
+  } else {
+    # Biology category coloring (default; also fallback when density needs >=2 points)
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = .data$x, y = .data$y)) +
+      ggplot2::geom_point(
+        ggplot2::aes(color = .data$biology, size = .data$n_pep),
+        alpha = point_alpha
+      ) +
+      ggplot2::scale_size(range = size_range, name = "# peptides") +
+      ggplot2::labs(
+        x = .pr_axis_label(x_col),
+        y = .pr_axis_label(y_col),
+        color = "Biology"
+      ) +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(
+        axis.text  = ggplot2::element_text(size = axis_text_size * 0.75),
+        axis.title = ggplot2::element_text(size = axis_text_size * 0.85),
+        plot.title = ggplot2::element_text(face = "bold", size = title_text_size)
+      )
+
+    # Discrete biology palette
+    pal_ok <- tryCatch({
+      RColorBrewer::brewer.pal.info[palette_name, "category"] == "qual"
+    }, error = function(e) FALSE)
+    if (isTRUE(pal_ok)) {
+      p <- p + ggplot2::scale_color_brewer(palette = palette_name)
+    }
+  }
+
+  # Highlight targets with a black outline ring
+  if (any(df$is_tgt)) {
+    p <- p +
+      ggplot2::geom_point(
+        data = df[df$is_tgt, , drop = FALSE],
+        ggplot2::aes(size = .data$n_pep),
+        shape = 21, color = "black", fill = NA, stroke = 1
+      )
+  }
+
+  p
+}
+
+#' Interactive plotly scatter (used by result viewer)
+#' @param style merged style + viewer state from active_effective_state()$style
+tb_peptide_region_overview_plotly <- function(results, style) {
+  tb_require_pkg("plotly")
+
+  data <- results$data
+  if (is.null(data)) return(NULL)
+  scores <- data$protein_scores
+  if (is.null(scores) || !is.data.frame(scores) || nrow(scores) == 0) return(NULL)
+
+  is_single <- isTRUE(data$single_group)
+
+  numeric_cols <- .pr_overview_numeric_cols(scores)
+  x_col <- .pr_resolve_axis(style$pr_x_axis, numeric_cols, default = "peptide_cv")
+  y_col <- .pr_resolve_axis(style$pr_y_axis, numeric_cols,
+                            default = if (is_single) "mean_replicate_cv" else "best_fc_disparity")
+
+  point_alpha       <- tb_num(style$point_alpha, 0.8)
+  point_size_scale  <- tb_num(style$point_size_scale, 1)
+  highlight_targets <- isTRUE(style$highlight_targets %||% TRUE)
+  palette_name      <- as.character(style$palette %||% "Set2")[1]
+  color_mode        <- as.character(style$point_color_mode %||% "biology")[1]
+
+  # Build the data frame, filtering to finite x/y
+  df <- data.frame(
+    x        = scores[[x_col]],
+    y        = scores[[y_col]],
+    biology  = scores$biology_tag %||% "Other",
+    n_pep    = scores$n_peptides,
+    gene     = scores$gene_symbol,
+    protein  = scores$protein_id,
+    cv       = round(scores$peptide_cv %||% NA_real_, 3),
+    disp     = round(scores$best_fc_disparity %||% NA_real_, 3),
+    composite = round(scores$composite_score %||% NA_real_, 3),
+    is_tgt   = isTRUE(highlight_targets) & (scores$is_target %||% FALSE),
+    go_short = .pr_truncate(scores$go_terms_str %||% "", 80L),
+    stringsAsFactors = FALSE
+  )
+  df <- df[is.finite(df$x) & is.finite(df$y), , drop = FALSE]
+  if (nrow(df) == 0) return(NULL)
+
+  # Marker size in plotly pixels: scale by sqrt(n_pep) for readability
+  pep_sz <- sqrt(pmax(df$n_pep, 1))
+  size_min <- 6 * point_size_scale
+  size_max <- 22 * point_size_scale
+  rng <- range(pep_sz, na.rm = TRUE)
+  if (diff(rng) < 1e-6) {
+    sizes <- rep((size_min + size_max) / 2, length(pep_sz))
+  } else {
+    sizes <- size_min + (pep_sz - rng[1]) / diff(rng) * (size_max - size_min)
+  }
+
+  # Discrete palette
+  bio_levels <- sort(unique(df$biology))
+  pal <- tryCatch(
+    RColorBrewer::brewer.pal(max(3, length(bio_levels)), palette_name),
+    error = function(e) NULL
+  )
+  if (is.null(pal)) {
+    pal <- c("#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3",
+             "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3")
+  }
+  color_map <- setNames(pal[((seq_along(bio_levels) - 1) %% length(pal)) + 1], bio_levels)
+  df$color  <- color_map[df$biology]
+
+  hover_text <- sprintf(
+    "<b>%s</b> (%s)<br>Biology: %s<br># peptides: %d<br>Peptide CV: %s<br>FC disparity: %s<br>Score: %s<br>%s",
+    df$gene, df$protein, df$biology, df$n_pep,
+    format(df$cv, nsmall = 2), format(df$disp, nsmall = 2),
+    format(df$composite, nsmall = 2),
+    ifelse(nzchar(df$go_short), paste0("GO: ", df$go_short), "")
+  )
+
+  use_density <- identical(color_mode, "density") && nrow(df) >= 2
+
+  if (use_density) {
+    # Density-based coloring: precompute per-point hex colors and pass as a
+    # single trace (no biology category split, no legend).
+    df$denscol <- grDevices::densCols(df$x, df$y, colramp = tb_fdr_palette)
+
+    p <- plotly::plot_ly(
+      data    = df,
+      x       = ~x,
+      y       = ~y,
+      type    = "scatter",
+      mode    = "markers",
+      text    = hover_text,
+      hoverinfo = "text",
+      marker  = list(
+        color   = df$denscol,
+        size    = sizes,
+        sizemode = "diameter",
+        opacity = point_alpha,
+        line    = list(width = 0.5, color = "rgba(0,0,0,0.4)")
+      ),
+      showlegend = FALSE,
+      source  = "peptide_region_overview"
+    )
+  } else {
+    p <- plotly::plot_ly(
+      data    = df,
+      x       = ~x,
+      y       = ~y,
+      type    = "scatter",
+      mode    = "markers",
+      color   = ~biology,
+      colors  = pal[seq_along(bio_levels)],
+      text    = hover_text,
+      hoverinfo = "text",
+      marker  = list(
+        size    = sizes,
+        sizemode = "diameter",
+        opacity = point_alpha,
+        line    = list(width = 0.5, color = "rgba(0,0,0,0.4)")
+      ),
+      source  = "peptide_region_overview"
+    )
+  }
+
+  # Target highlight: overlay black-ringed markers
+  if (any(df$is_tgt)) {
+    df_t <- df[df$is_tgt, , drop = FALSE]
+    sizes_t <- sizes[df$is_tgt]
+    p <- plotly::add_markers(
+      p,
+      data = df_t,
+      x = ~x, y = ~y,
+      marker = list(
+        size = sizes_t + 4,
+        color = "rgba(0,0,0,0)",
+        line = list(width = 2, color = "black")
+      ),
+      hoverinfo = "skip",
+      showlegend = FALSE,
+      inherit = FALSE
+    )
+  }
+
+  plotly::layout(
+    p,
+    xaxis  = list(title = .pr_axis_label(x_col), zeroline = FALSE),
+    yaxis  = list(title = .pr_axis_label(y_col), zeroline = FALSE),
+    legend = list(title = list(text = "Biology")),
+    hovermode = "closest",
+    margin = list(l = 60, r = 20, t = 30, b = 60)
+  )
+}
+
+#' Truncate a string with an ellipsis
+.pr_truncate <- function(x, n) {
+  ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "\u2026"), x)
 }
 
 # ---- Peptide Region: Detail Mode ----

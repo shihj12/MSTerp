@@ -1933,8 +1933,13 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
   # preventing copy-on-modify duplication if any field is later modified.
   req <- if (!is.null(eng)) eng$requirements %||% list() else list()
   needs_terpbase <- isTRUE(req$requires_terpbase)
+  optional_terpbase <- isTRUE(req$optional_terpbase)
   needs_complexbase <- needs_terpbase  # enrichment engines that use terpbase also use complexbase
   needs_metabobase <- isTRUE(req$requires_metabobase)
+
+  # Engines with optional_terpbase get terpbase passed through if it's loaded,
+  # but won't fail validation if it's missing.
+  include_terpbase <- needs_terpbase || optional_terpbase
 
   payload <- list(
     ok = TRUE,
@@ -1953,9 +1958,9 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
     n_groups = ctx$n_groups,
     metadata = ctx$metadata,
 
-    # Databases: only included when the engine requires them
-    terpbase = if (needs_terpbase) ctx$terpbase else NULL,
-    has_terpbase = needs_terpbase && !is.null(ctx$terpbase),
+    # Databases: only included when the engine requires (or optionally uses) them
+    terpbase = if (include_terpbase) ctx$terpbase else NULL,
+    has_terpbase = include_terpbase && !is.null(ctx$terpbase),
 
     complexbase = if (needs_complexbase) ctx$complexbase else NULL,
     has_complexbase = needs_complexbase && !is.null(ctx$complexbase),

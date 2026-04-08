@@ -257,6 +257,75 @@ pr_resolve_targets <- function(target_strings, prot_to_rows, gene_to_prot) {
   unique(resolved)
 }
 
+#' Biology category tag from GO terms
+#'
+#' Looks up the protein/gene in the supplied protein_to_go map, joins to
+#' go_terms for human-readable names, then runs an ordered first-match pattern
+#' classification. Falls back to "Other" when no GO data is available.
+#'
+#' @return list(tag = character(1), go_names = character(1))
+pr_biology_tag <- function(gene_sym, protein_id, protein_to_go, go_terms,
+                           max_terms = 15L) {
+  result <- list(tag = "Other", go_names = "")
+
+  if (length(protein_to_go) == 0L) return(result)
+
+  go_ids <- protein_to_go[[gene_sym]]
+  if (is.null(go_ids)) go_ids <- protein_to_go[[protein_id]]
+  if (is.null(go_ids) || length(go_ids) == 0L) return(result)
+
+  # Look up names if a go_terms table is available
+  go_names <- character(0)
+  if (!is.null(go_terms) && is.data.frame(go_terms) && nrow(go_terms) > 0L) {
+    id_col <- if ("go_id" %in% names(go_terms)) "go_id"
+              else if ("term_id" %in% names(go_terms)) "term_id"
+              else if ("ID" %in% names(go_terms)) "ID"
+              else NULL
+    name_col <- if ("name" %in% names(go_terms)) "name"
+                else if ("term_name" %in% names(go_terms)) "term_name"
+                else if ("Description" %in% names(go_terms)) "Description"
+                else NULL
+    if (!is.null(id_col) && !is.null(name_col)) {
+      idx <- match(go_ids, go_terms[[id_col]])
+      go_names <- as.character(go_terms[[name_col]][idx[!is.na(idx)]])
+      go_names <- go_names[!is.na(go_names) & nzchar(go_names)]
+    }
+  }
+
+  # If no name lookup, fall back to bare GO IDs
+  if (length(go_names) == 0L) go_names <- as.character(go_ids)
+  go_names <- unique(go_names)
+
+  result$go_names <- paste(utils::head(go_names, max_terms), collapse = "; ")
+
+  # Ordered first-match classification
+  combined <- tolower(paste(go_names, collapse = " | "))
+  if (grepl("integral component of membrane|transmembrane", combined)) {
+    result$tag <- "Transmembrane"
+  } else if (grepl("lysosom", combined)) {
+    result$tag <- "Lysosomal"
+  } else if (grepl("extracellular|secret", combined)) {
+    result$tag <- "Secreted"
+  } else if (grepl("mitochond", combined)) {
+    result$tag <- "Mitochondrial"
+  } else if (grepl("peptidase|protease|proteolysis", combined)) {
+    result$tag <- "Protease"
+  } else if (grepl("nucle", combined)) {
+    result$tag <- "Nuclear"
+  } else if (grepl("cytopl", combined)) {
+    result$tag <- "Cytoplasmic"
+  } else if (grepl("\\bmembrane\\b", combined)) {
+    result$tag <- "Membrane"
+  }
+
+  result
+}
+
+#' Sanitize a comparison key into a valid R column suffix
+pr_sanitize_comp_name <- function(x) {
+  gsub("[^A-Za-z0-9_]+", "_", x)
+}
+
 # ---- Overview / Scoring Engine ---------------------------------------------
 
 stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
@@ -278,6 +347,18 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
   ids     <- payload$ids
   mat     <- payload$mat
   samples <- payload$samples
+
+  # ---- Optional GO context for biology tagging ----
+  terpbase_obj  <- context$terpbase %||% payload$terpbase %||% NULL
+  protein_to_go <- terpbase_obj$protein_to_go %||% list()
+  go_terms      <- terpbase_obj$go_terms      %||% NULL
+  has_go        <- length(protein_to_go) > 0L
+  if (has_go) {
+    add_log("INFO", sprintf("GO annotation available (%d entries) — biology tags enabled",
+                             length(protein_to_go)))
+  } else {
+    add_log("INFO", "No GO annotation available — biology tags will be 'Other'")
+  }
 
   if (!nzchar(id_primary_col) || !id_primary_col %in% names(ids)) {
     stop("Peptide Region: peptide ID column '", id_primary_col, "' not found in data")
@@ -304,9 +385,25 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
     add_log("INFO", sprintf("Single-group mode: %s (n=%d)",
                              groups[1], sum(samples$group_name == groups[1])))
   }
+  is_single_group <- length(comparisons_info) == 0L
 
   aggregation_method <- params$aggregation_method %||% "harmonic_mean"
   min_peptides <- as.integer(params$min_peptides %||% 3L)
+
+  # ---- Per-comparison column scaffolding (cap at 10) ----
+  MAX_COMP_COLS <- 10L
+  comp_keys_all <- names(comparisons_info)
+  comp_keys_kept <- if (length(comp_keys_all) > MAX_COMP_COLS) {
+    add_log("WARN", sprintf(
+      "More than %d comparisons (%d total) — only the first %d will get per-comparison columns",
+      MAX_COMP_COLS, length(comp_keys_all), MAX_COMP_COLS))
+    comp_keys_all[seq_len(MAX_COMP_COLS)]
+  } else {
+    comp_keys_all
+  }
+  comp_col_suffix <- vapply(comp_keys_kept, pr_sanitize_comp_name, character(1))
+  fc_mean_cols <- if (length(comp_col_suffix) > 0L) paste0("fc_mean_", comp_col_suffix) else character(0)
+  fc_disp_cols <- if (length(comp_col_suffix) > 0L) paste0("fc_disp_", comp_col_suffix) else character(0)
 
   # ---- Build protein → row index mapping ----
   protein_col_values <- as.character(ids[[id_protein_col]])
@@ -394,8 +491,13 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
     best_fc_disparity <- NA_real_
     max_abs_fc <- NA_real_
 
+    # Per-comparison value buffers (NA when no data)
+    per_comp_means <- setNames(rep(NA_real_, length(comp_keys_kept)), comp_keys_kept)
+    per_comp_disps <- setNames(rep(NA_real_, length(comp_keys_kept)), comp_keys_kept)
+
     if (length(comparisons_info) > 0) {
-      for (comp in comparisons_info) {
+      for (comp_key in names(comparisons_info)) {
+        comp <- comparisons_info[[comp_key]]
         ctrl_s <- comp$ctrl_samples
         treat_s <- comp$treatment_samples
 
@@ -418,16 +520,31 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
         if (!is.na(overall) && (is.na(max_abs_fc) || abs(overall) > abs(max_abs_fc))) {
           max_abs_fc <- overall
         }
+
+        # Store per-comparison values if this comparison is in the kept set
+        if (comp_key %in% comp_keys_kept) {
+          per_comp_means[comp_key] <- overall
+          per_comp_disps[comp_key] <- disp
+        }
       }
     }
 
     # Composite score
-    score_parts <- c()
-    if (!is.na(peptide_cv)) score_parts <- c(score_parts, peptide_cv)
-    if (!is.na(best_fc_disparity)) score_parts <- c(score_parts, best_fc_disparity * 2)
-    composite <- if (length(score_parts) > 0) mean(score_parts) else 0
+    # Single-group: just peptide CV (no FC info available)
+    # Multi-group: mean(peptide CV, best FC disparity * 2)
+    composite <- if (is_single_group) {
+      if (is.na(peptide_cv)) 0 else peptide_cv
+    } else {
+      score_parts <- c()
+      if (!is.na(peptide_cv)) score_parts <- c(score_parts, peptide_cv)
+      if (!is.na(best_fc_disparity)) score_parts <- c(score_parts, best_fc_disparity * 2)
+      if (length(score_parts) > 0) mean(score_parts) else 0
+    }
 
-    row <- data.frame(
+    # Biology tag from GO (or "Other" when GO unavailable)
+    bio <- pr_biology_tag(gene_sym, prot_id, protein_to_go, go_terms)
+
+    row_static <- list(
       protein_id        = prot_id,
       gene_symbol       = gene_sym,
       n_peptides        = n_pep,
@@ -438,8 +555,20 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
       max_log2fc        = max_abs_fc,
       composite_score   = composite,
       is_target         = prot_id %in% resolved_targets,
-      stringsAsFactors  = FALSE
+      biology_tag       = bio$tag,
+      go_terms_str      = bio$go_names
     )
+
+    # Append per-comparison FC columns (kept set only)
+    if (length(comp_keys_kept) > 0L) {
+      per_comp_list <- c(
+        setNames(as.list(per_comp_means), fc_mean_cols),
+        setNames(as.list(per_comp_disps), fc_disp_cols)
+      )
+      row_static <- c(row_static, per_comp_list)
+    }
+
+    row <- as.data.frame(row_static, stringsAsFactors = FALSE)
     score_rows[[length(score_rows) + 1L]] <- row
   }
 
@@ -470,6 +599,10 @@ stats_peptide_region_run <- function(payload, params = NULL, context = NULL) {
       peptide_index      = peptide_index,
       comparisons_info   = comparisons_info,
       n_groups           = n_groups,
+      single_group       = is_single_group,
+      fc_mean_cols       = fc_mean_cols,
+      fc_disp_cols       = fc_disp_cols,
+      comp_keys_kept     = comp_keys_kept,
       aggregation_method = aggregation_method,
       gene_to_prot       = gene_to_prot,
       mat                = mat,
