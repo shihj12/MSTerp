@@ -4422,8 +4422,8 @@ page_results_server <- function(input, output, session) {
       return(isTRUE(res_is_interactive_view(style)))
     }
     if (identical(eng, "peptide_region")) {
-      # Both overview (scatter) and detail (feature bar + tracks) use plotly.
-      return(TRUE)
+      pr_mode <- tolower(as.character(results$data$mode %||% "overview"))
+      return(identical(pr_mode, "overview"))
     }
     FALSE
   }
@@ -6836,7 +6836,8 @@ page_results_server <- function(input, output, session) {
     hide_volcano_table <- identical(eng_lower, "volcano") &&
       isTRUE(panel_style$show_summary_cards %||% TRUE) &&
       !isTRUE(res_is_interactive_view(panel_style))
-    if (eng_lower %in% c("ftest_heatmap", "fc_ftest_heatmap") || isTRUE(hide_volcano_table)) {
+    if (eng_lower %in% c("ftest_heatmap", "fc_ftest_heatmap") ||
+        isTRUE(hide_volcano_table)) {
       has_table_panel <- FALSE
     }
 
@@ -6847,6 +6848,19 @@ page_results_server <- function(input, output, session) {
     # Extract content safely
     plots  <- if (!is.null(rend) && !inherits(rend, "error")) res_extract_ggplots(rend)   else list()
     tables <- if (!is.null(rend) && !inherits(rend, "error")) res_extract_tables(rend)    else list()
+
+    if (identical(eng_lower, "peptide_region")) {
+      pr_mode <- tolower(as.character(active_results()$data$mode %||% "overview"))
+      has_named_table <- function(tbl_name) {
+        tbl <- tables[[tbl_name]]
+        is.data.frame(tbl) && nrow(tbl) > 0
+      }
+      has_table_panel <- if (identical(pr_mode, "detail")) {
+        has_named_table("peptide_stats")
+      } else {
+        isTRUE(panel_style$show_table %||% FALSE) && has_named_table("protein_scores")
+      }
+    }
 
     # Check if tabs are present
     has_tabs <- !is.null(rend$tabs) && length(rend$tabs) > 0
@@ -6885,8 +6899,11 @@ page_results_server <- function(input, output, session) {
       if (!is.finite(h) || h <= 0) h <- 5
       ar <- w / h
       view_mode <- tolower(as.character(st$view_mode %||% "export_preview"))
+      is_pr_detail <- identical(eng_lower, "peptide_region") &&
+        identical(tolower(as.character(active_results()$data$mode %||% "overview")), "detail")
       plot_box_class <- "res-plot-box"
-      if (tolower(eng %||% "") %in% c("volcano", "2dgofcs", "rankplot") && view_mode == "interactive") {
+      if ((tolower(eng %||% "") %in% c("volcano", "2dgofcs", "rankplot") && view_mode == "interactive") ||
+          isTRUE(is_pr_detail)) {
         plot_box_class <- "res-plot-box res-plot-box-free"
       }
 
@@ -7554,6 +7571,51 @@ page_results_server <- function(input, output, session) {
     list(w = as.integer(round(w_px * scale)), h = as.integer(round(h_px * scale)))
   }
 
+  res_peptide_region_detail_components <- reactive({
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "peptide_region")) return(NULL)
+
+    res <- active_results()
+    if (is.null(res) || !identical(tolower(as.character(res$data$mode %||% "overview")), "detail")) {
+      return(NULL)
+    }
+
+    style <- active_effective_state()$style %||% list()
+    tryCatch(
+      tb_peptide_region_detail_components(res, style, interactive_bar = TRUE),
+      error = function(e) {
+        message("[DEBUG-RENDER] peptide_region detail components failed: ", conditionMessage(e))
+        NULL
+      }
+    )
+  })
+
+  res_peptide_region_detail_dims <- function(dpi = 150L) {
+    st <- active_effective_state()$style %||% list()
+    dims <- res_plot_dim_px("res_plot", dpi, st, use_client = FALSE)
+    comps <- res_peptide_region_detail_components()
+    weights <- comps$layout_weights %||% list(header = 0.9, bar = 1.2, tracks = 3.9)
+
+    header_w <- res_safe_num(weights$header, 0.9, "pr header weight")
+    bar_w <- res_safe_num(weights$bar, 1.2, "pr bar weight")
+    tracks_w <- res_safe_num(weights$tracks, 3.9, "pr tracks weight")
+    total_w <- header_w + bar_w + tracks_w
+    if (!is.finite(total_w) || total_w <= 0) total_w <- 6
+
+    usable_h <- max(as.integer(dims$h) - 16L, 240L)
+    header_px <- max(72L, as.integer(round(usable_h * header_w / total_w)))
+    bar_px <- max(84L, as.integer(round(usable_h * bar_w / total_w)))
+    tracks_px <- max(120L, usable_h - header_px - bar_px)
+
+    list(
+      width = max(as.integer(dims$w), 720L),
+      total = header_px + bar_px + tracks_px,
+      header = header_px,
+      bar = bar_px,
+      tracks = tracks_px
+    )
+  }
+
   # NOTE: The `res` parameter must be a static numeric value, not a function.
 
   # In Shiny's renderPlot, `width` and `height` can be functions, but `res` cannot.
@@ -7702,6 +7764,53 @@ page_results_server <- function(input, output, session) {
   res = 300  # Must be static numeric, not a function (see note above)
   )
 
+  output$res_peptide_region_detail_header <- renderPlot({
+    comps <- res_peptide_region_detail_components()
+    if (is.null(comps) || is.null(comps$header)) {
+      plot.new()
+      text(0.5, 0.5, "No peptide-region detail header.")
+      return(invisible(NULL))
+    }
+    suppressMessages(print(comps$header))
+  },
+  width = function() {
+    res_peptide_region_detail_dims(150L)$width
+  },
+  height = function() {
+    res_peptide_region_detail_dims(150L)$header
+  },
+  res = 150)
+
+  output$res_peptide_region_detail_tracks <- renderPlot({
+    comps <- res_peptide_region_detail_components()
+    if (is.null(comps) || is.null(comps$tracks)) {
+      plot.new()
+      text(0.5, 0.5, "No peptide-region detail tracks.")
+      return(invisible(NULL))
+    }
+    suppressMessages(print(comps$tracks))
+  },
+  width = function() {
+    res_peptide_region_detail_dims(150L)$width
+  },
+  height = function() {
+    res_peptide_region_detail_dims(150L)$tracks
+  },
+  res = 150)
+
+  output$res_peptide_region_detail_girafe <- ggiraph::renderGirafe({
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "peptide_region")) return(NULL)
+
+    res <- active_results()
+    if (is.null(res) || !identical(tolower(as.character(res$data$mode %||% "overview")), "detail")) {
+      return(NULL)
+    }
+
+    style <- active_effective_state()$style %||% list()
+    tb_peptide_region_detail_girafe(res, style)
+  })
+
   output$res_plot_pub <- renderUI({
     dpi <- suppressWarnings(as.integer(rv$preview_dpi %||% 150L))
     eng <- tolower(active_engine_id() %||% "")
@@ -7713,7 +7822,35 @@ page_results_server <- function(input, output, session) {
     is_interactive <- res_engine_uses_plotly(eng, st, tryCatch(active_results(), error = function(e) NULL))
     message("[DEBUG-RENDER] res_plot_pub rendering eng='", eng, "' interactive=", is_interactive)
 
-    # Use plotly for interactive mode on volcano/2dgofcs/rankplot
+    if (identical(eng, "peptide_region")) {
+      res <- tryCatch(active_results(), error = function(e) NULL)
+      if (!is.null(res) && identical(tolower(as.character(res$data$mode %||% "overview")), "detail")) {
+        dims <- res_peptide_region_detail_dims(150L)
+        return(
+          div(
+            class = "res-plot-interact",
+            style = "width: 100%; height: 100%; display: flex; flex-direction: column; gap: 8px; overflow: hidden;",
+            div(
+              style = sprintf("flex: 0 0 %dpx; min-height: %dpx;", dims$header, dims$header),
+              plotOutput("res_peptide_region_detail_header",
+                         height = paste0(dims$header, "px"), width = "100%")
+            ),
+            div(
+              style = sprintf("flex: 0 0 %dpx; min-height: %dpx;", dims$bar, dims$bar),
+              ggiraph::girafeOutput("res_peptide_region_detail_girafe",
+                                    height = paste0(dims$bar, "px"), width = "100%")
+            ),
+            div(
+              style = "flex: 1 1 auto; min-height: 0; overflow: hidden;",
+              plotOutput("res_peptide_region_detail_tracks",
+                         height = paste0(dims$tracks, "px"), width = "100%")
+            )
+          )
+        )
+      }
+    }
+
+    # Use plotly for interactive mode on volcano/2dgofcs/rankplot and peptide-region overview
     if (is_interactive) {
       # Get aspect ratio from style dimensions (default 7:5)
       plot_width <- st$width %||% 7
@@ -7811,12 +7948,8 @@ page_results_server <- function(input, output, session) {
 
     if (is.null(res)) return(NULL)
 
-    # Peptide region: dispatch to overview scatter or interactive detail view
+    # Peptide region overview stays on plotly; detail has a dedicated girafe path.
     if (identical(eng, "peptide_region")) {
-      pr_mode <- res$data$mode %||% "overview"
-      if (identical(pr_mode, "detail")) {
-        return(tb_peptide_region_detail_plotly(res, style))
-      }
       return(tb_peptide_region_overview_plotly(res, style))
     }
 

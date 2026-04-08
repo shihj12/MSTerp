@@ -18,6 +18,7 @@ suppressPackageStartupMessages({
 
   library(ggplot2)
   library(plotly)
+  library(ggiraph)
   library(scales)
   library(pheatmap)
   library(ggplotify)

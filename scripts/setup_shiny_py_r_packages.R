@@ -26,6 +26,7 @@ core_cran <- c(
   "zip",
   "ggplot2",
   "plotly",
+  "ggiraph",
   "htmltools",
   "htmlwidgets",
   "gtable",
