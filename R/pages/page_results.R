@@ -2139,6 +2139,40 @@ page_results_ui <- function() {
           justify-content: center;
         }
 
+        /* Peptide-region Graph/Table switcher: the view toggle lives in the
+           right-side style panel and flips visibility of two sibling
+           conditionalPanels. conditionalPanel emits a plain <div> which would
+           break the parent flex chain (collapsing the plot/table to 0px).
+           We force the visible panel to behave as a flex-column filling item.
+           Shiny's client binding sets inline `display: none` when hidden,
+           which overrides this rule so only the active panel lays out. */
+        .pr-panel-switchable > div[data-display-if] {
+          flex: 1 1 auto;
+          min-height: 0;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+        }
+
+        /* Peptide-region protein overview: clamp the GO Terms cell to one
+           ellipsised line so rows don't balloon when a protein has many
+           annotations. Full text stays available on hover (title attr) and
+           remains filterable because the DT render function only rewrites
+           the display branch. */
+        table.dataTable td.pr-go-cell {
+          max-width: 260px;
+          min-width: 120px;
+          vertical-align: middle;
+        }
+        table.dataTable td.pr-go-cell .pr-go-ellipsis {
+          display: inline-block;
+          max-width: 100%;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          vertical-align: middle;
+        }
+
         .res-plot-box {
           width: 100%;
           max-width: 100%;
@@ -4979,6 +5013,28 @@ page_results_server <- function(input, output, session) {
       view_mode_ui <- res_field_ui(rv$active_node_id, view_mode_field, value_override = v_eff)
     }
 
+    # Peptide Region: Graph/Table view switch at the top of the style panel,
+    # mirroring the placement of volcano/2dgofcs/rankplot's view_mode toggle.
+    # Uses a fixed input id (NOT node-prefixed) so it's not added to
+    # active_input_ids() and never triggers style_rev() / active_rendered().
+    # The boolean value drives the conditionalPanels in the peptide_region
+    # branch of res_main: FALSE = graph (default), TRUE = table.
+    pr_view_switch_ui <- NULL
+    if (eng_lower == "peptide_region") {
+      pr_view_current <- isolate(input$res_pr_view)
+      pr_view_is_table <- isTRUE(pr_view_current)
+      pr_view_switch_ui <- div(
+        style = "padding: 8px 12px 10px; border-bottom: 1px solid var(--border-light);",
+        res_switch_input(
+          "res_pr_view",
+          left_label  = "Graph",
+          right_label = "Table",
+          value = pr_view_is_table,
+          help_title = "Toggle between the peptide-region graph and the underlying scores / peptide-stats table."
+        )
+      )
+    }
+
     axis_ui <- NULL
     if (!is.null(axis_field)) {
       v_eff <- eff$style[[axis_field$name]] %||% axis_field$default
@@ -5668,6 +5724,7 @@ page_results_server <- function(input, output, session) {
 
     tagList(
       view_mode_ui,
+      pr_view_switch_ui,   # Graph/Table toggle for peptide_region (top of style panel)
       ontology_filter_ui,  # Ontology selector at top for enrichment engines (1dgofcs, 2dgofcs, goora)
       pathway_filter_ui,   # Pathway database selector for metabolomics enrichment (msea, pathway_fcs)
       axis_ui,
@@ -6796,6 +6853,111 @@ page_results_server <- function(input, output, session) {
       )
     }
 
+    # ---- Peptide region stable layout -------------------------------------
+    # Avoid the generic rend/style reads below for peptide_region because they
+    # cause res_main to re-render on every style commit, which would destroy
+    # the uiOutput("res_plot_pub") DOM node and re-initialize the plotly /
+    # girafe widget inside it. That reinit cascade was the root of the
+    # re-render death loop we kept hitting when trying to show the score /
+    # peptide stats table inline. This branch builds a static layout once per
+    # node switch.
+    #
+    # View toggle: instead of showing the table BELOW the graph (which forced
+    # the widget to coexist with the table and re-render on every commit), we
+    # now use a client-side conditionalPanel toggle — `input$res_pr_view`
+    # flips the panel between the graph and the table without touching any
+    # reactive source. Both subtrees are always mounted; only one is visible.
+    if (identical(tolower(active_engine_id() %||% ""), "peptide_region")) {
+      node_id_for_inputs <- rv$active_node_id
+
+      st_init      <- isolate(active_effective_state()$style %||% list())
+      res_for_mode <- isolate(active_results())
+      pr_mode_init <- tolower(as.character(res_for_mode$data$mode %||% "overview"))
+
+      init_w <- suppressWarnings(as.numeric(st_init$width  %||% 7))
+      init_h <- suppressWarnings(as.numeric(st_init$height %||% 5))
+      if (!is.finite(init_w) || init_w <= 0) init_w <- 7
+      if (!is.finite(init_h) || init_h <= 0) init_h <- 5
+      pr_ar <- init_w / init_h
+
+      pr_plot_box_class <- if (identical(pr_mode_init, "detail")) {
+        "res-plot-box res-plot-box-free"
+      } else {
+        "res-plot-box"
+      }
+
+      # The Graph/Table view toggle lives at the top of the right-side style
+      # panel (see peptide_region block in output$res_style_panel — mirrors
+      # how volcano/2dgofcs/rankplot render their view_mode switch). It is
+      # NOT a schema field, so it does not enter active_input_ids() and does
+      # not invalidate active_rendered(). The switch drives a boolean input
+      # `res_pr_view` where FALSE = graph (default), TRUE = table.
+
+      pr_plot_body <- div(
+        class = "res-panel-body",
+        div(class = "res-plot-controls",
+          div(class = "res-plot-controls-left",
+              style = "display: flex; gap: 8px; align-items: center;", div()),
+          div(class = "res-plot-controls-right", div())
+        ),
+        # Outer wrapper forces the flex chain through the conditionalPanels.
+        # `.pr-panel-switchable > div[data-display-if]` CSS (see stylesheet)
+        # makes the visible conditionalPanel a flex-filling column so the
+        # plot box / table container actually get their height.
+        div(
+          class = "pr-panel-switchable",
+          style = "flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column;",
+          # Graph subtree: always mounted in the DOM, hidden client-side when
+          # the user picks Table. Keeps the plotly / girafe widget alive
+          # across toggles.
+          conditionalPanel(
+            condition = "input.res_pr_view !== true",
+            div(class = "res-plot-stage",
+              div(
+                class = pr_plot_box_class,
+                style = sprintf("--res-plot-ar:%s;",
+                                format(pr_ar, scientific = FALSE, trim = TRUE)),
+                uiOutput("res_plot_pub")
+              )
+            )
+          ),
+          # Table subtree: uses the shared res_table_pub renderer (emits
+          # DT::DTOutput("res_table")). res_table already reads
+          # active_rendered() and we now always ship the scores /
+          # peptide_stats table in the rendered output.
+          conditionalPanel(
+            condition = "input.res_pr_view === true",
+            div(class = "res-table-stage",
+                uiOutput("res_table_pub"))
+          )
+        )
+      )
+
+      pr_bottom_bar <- div(
+        class = "res-size-bar",
+        div(class = "size-field", tags$label("Width"),
+            numericInput(res_field_input_id(node_id_for_inputs, "width"),
+                         label = NULL, value = init_w,
+                         min = 2, max = 24, step = 0.5, width = "52px")),
+        tags$span(class = "size-separator", HTML("&times;")),
+        div(class = "size-field", tags$label("Height"),
+            numericInput(res_field_input_id(node_id_for_inputs, "height"),
+                         label = NULL, value = init_h,
+                         min = 2, max = 24, step = 0.5, width = "52px")),
+        tags$span(class = "size-unit", "in"),
+        div(class = "res-dl-inline", uiOutput("res_download_ui"))
+      )
+
+      return(
+        div(
+          class = "res-center-stack",
+          warn_ui,
+          div(class = "res-plot-panel", pr_plot_body),
+          pr_bottom_bar
+        )
+      )
+    }
+
     eng  <- active_engine_id()
     rend <- active_rendered()
 
@@ -6835,18 +6997,8 @@ page_results_server <- function(input, output, session) {
     plots  <- if (!is.null(rend) && !inherits(rend, "error")) res_extract_ggplots(rend)   else list()
     tables <- if (!is.null(rend) && !inherits(rend, "error")) res_extract_tables(rend)    else list()
 
-    if (identical(eng_lower, "peptide_region")) {
-      pr_mode <- tolower(as.character(active_results()$data$mode %||% "overview"))
-      has_named_table <- function(tbl_name) {
-        tbl <- tables[[tbl_name]]
-        is.data.frame(tbl) && nrow(tbl) > 0
-      }
-      has_table_panel <- if (identical(pr_mode, "detail")) {
-        has_named_table("peptide_stats")
-      } else {
-        isTRUE(panel_style$show_table %||% FALSE) && has_named_table("protein_scores")
-      }
-    }
+    # Note: peptide_region early-returns above with a stable layout — this
+    # generic branch never executes for it.
 
     # Decide whether this engine is plot-only, plot+table, or table-only
     table_only     <- identical(tolower(eng %||% ""), "dataprocessor")
@@ -7573,51 +7725,6 @@ page_results_server <- function(input, output, session) {
     list(w = as.integer(round(w_px * scale)), h = as.integer(round(h_px * scale)))
   }
 
-  res_peptide_region_detail_components <- reactive({
-    eng <- tolower(active_engine_id() %||% "")
-    if (!identical(eng, "peptide_region")) return(NULL)
-
-    res <- active_results()
-    if (is.null(res) || !identical(tolower(as.character(res$data$mode %||% "overview")), "detail")) {
-      return(NULL)
-    }
-
-    style <- active_effective_state()$style %||% list()
-    tryCatch(
-      tb_peptide_region_detail_components(res, style, interactive_bar = TRUE),
-      error = function(e) {
-        message("[DEBUG-RENDER] peptide_region detail components failed: ", conditionMessage(e))
-        NULL
-      }
-    )
-  })
-
-  res_peptide_region_detail_dims <- function(dpi = 150L) {
-    st <- active_effective_state()$style %||% list()
-    dims <- res_plot_dim_px("res_plot", dpi, st, use_client = FALSE)
-    comps <- res_peptide_region_detail_components()
-    weights <- comps$layout_weights %||% list(header = 0.9, bar = 1.2, tracks = 3.9)
-
-    header_w <- res_safe_num(weights$header, 0.9, "pr header weight")
-    bar_w <- res_safe_num(weights$bar, 1.2, "pr bar weight")
-    tracks_w <- res_safe_num(weights$tracks, 3.9, "pr tracks weight")
-    total_w <- header_w + bar_w + tracks_w
-    if (!is.finite(total_w) || total_w <= 0) total_w <- 6
-
-    usable_h <- max(as.integer(dims$h) - 16L, 240L)
-    header_px <- max(72L, as.integer(round(usable_h * header_w / total_w)))
-    bar_px <- max(84L, as.integer(round(usable_h * bar_w / total_w)))
-    tracks_px <- max(120L, usable_h - header_px - bar_px)
-
-    list(
-      width = max(as.integer(dims$w), 720L),
-      total = header_px + bar_px + tracks_px,
-      header = header_px,
-      bar = bar_px,
-      tracks = tracks_px
-    )
-  }
-
   # NOTE: The `res` parameter must be a static numeric value, not a function.
 
   # In Shiny's renderPlot, `width` and `height` can be functions, but `res` cannot.
@@ -7766,40 +7873,10 @@ page_results_server <- function(input, output, session) {
   res = 300  # Must be static numeric, not a function (see note above)
   )
 
-  output$res_peptide_region_detail_header <- renderPlot({
-    comps <- res_peptide_region_detail_components()
-    if (is.null(comps) || is.null(comps$header)) {
-      plot.new()
-      text(0.5, 0.5, "No peptide-region detail header.")
-      return(invisible(NULL))
-    }
-    suppressMessages(print(comps$header))
-  },
-  width = function() {
-    res_peptide_region_detail_dims(150L)$width
-  },
-  height = function() {
-    res_peptide_region_detail_dims(150L)$header
-  },
-  res = 150)
-
-  output$res_peptide_region_detail_tracks <- renderPlot({
-    comps <- res_peptide_region_detail_components()
-    if (is.null(comps) || is.null(comps$tracks)) {
-      plot.new()
-      text(0.5, 0.5, "No peptide-region detail tracks.")
-      return(invisible(NULL))
-    }
-    suppressMessages(print(comps$tracks))
-  },
-  width = function() {
-    res_peptide_region_detail_dims(150L)$width
-  },
-  height = function() {
-    res_peptide_region_detail_dims(150L)$tracks
-  },
-  res = 150)
-
+  # Note: Detail view is now rendered as ONE combined patchwork plot inside
+  # output$res_peptide_region_detail_girafe (see tb_peptide_region_detail_girafe
+  # in terpbook.R). This gives patchwork-aligned panels across header / feature
+  # bar / data tracks, which the previous per-output layout could not achieve.
   output$res_peptide_region_detail_girafe <- ggiraph::renderGirafe({
     eng <- tolower(active_engine_id() %||% "")
     if (!identical(eng, "peptide_region")) return(NULL)
@@ -7813,44 +7890,68 @@ page_results_server <- function(input, output, session) {
     tb_peptide_region_detail_girafe(res, style)
   })
 
-  output$res_plot_pub <- renderUI({
-    dpi <- suppressWarnings(as.integer(rv$preview_dpi %||% 150L))
+  # Track the SHAPE signal for the outer plot container. Only re-fires
+  # res_plot_pub when a structural field changes (engine, peptide_region mode,
+  # interactive vs preview, width/height, dpi). Style-only tweaks still flow
+  # through to output$res_plotly_interactive but must NOT destroy the outer
+  # plotlyOutput DOM element -- that was causing constant plotly reinitialization
+  # and preventing the debounced style commit (e.g., the Show Score Table toggle).
+  rv_plot_container_sig <- reactiveVal(NULL)
+
+  observe({
+    req(rv$loaded, rv$active_node_id)
+    style_rev()                                                    # react to style commits
+    res <- tryCatch(active_results(), error = function(e) NULL)    # react to node data
     eng <- tolower(active_engine_id() %||% "")
+    st  <- isolate(active_effective_state()$style %||% list())
+
+    pr_mode <- if (identical(eng, "peptide_region")) {
+      tolower(as.character(res$data$mode %||% "overview"))
+    } else {
+      NA_character_
+    }
+
+    new_sig <- list(
+      eng         = eng,
+      pr_mode     = pr_mode,
+      interactive = isTRUE(res_engine_uses_plotly(eng, st, res)),
+      width       = tb_num(st$width  %||% 7, 7),
+      height      = tb_num(st$height %||% 5, 5),
+      dpi         = suppressWarnings(as.integer(rv$preview_dpi %||% 150L))
+    )
+    cur <- isolate(rv_plot_container_sig())
+    if (!identical(cur, new_sig)) rv_plot_container_sig(new_sig)
+  })
+
+  output$res_plot_pub <- renderUI({
+    sig <- rv_plot_container_sig()
+    if (is.null(sig)) return(NULL)
+    dpi <- sig$dpi
+    eng <- sig$eng
     click_id <- NULL
     dblclick_id <- NULL
     hover_id <- NULL
 
-    st <- active_effective_state()$style %||% list()
-    is_interactive <- res_engine_uses_plotly(eng, st, tryCatch(active_results(), error = function(e) NULL))
+    is_interactive <- isTRUE(sig$interactive)
     message("[DEBUG-RENDER] res_plot_pub rendering eng='", eng, "' interactive=", is_interactive)
 
     if (identical(eng, "peptide_region")) {
-      res <- tryCatch(active_results(), error = function(e) NULL)
-      if (!is.null(res) && identical(tolower(as.character(res$data$mode %||% "overview")), "detail")) {
-        dims <- res_peptide_region_detail_dims(150L)
+      if (identical(sig$pr_mode, "detail")) {
+        # Single girafe output containing header + interactive feature bar +
+        # data tracks as ONE patchwork plot. patchwork's panel-width
+        # unification guarantees the header/bar/tracks share the same x-axis.
         return(
           div(
             class = "res-plot-interact",
-            style = "width: 100%; height: 100%; display: flex; flex-direction: column; gap: 8px; overflow: hidden;",
+            style = "width: 100%; height: 100%; position: relative; overflow: hidden;",
+            # Hidden plotOutput keeps the existing copy/download path alive —
+            # res_current_plot_output_id() returns "res_plot" for detail mode.
             div(
               style = "position: absolute; left: -99999px; top: -99999px; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none;",
               plotOutput("res_plot", height = "1px", width = "1px")
             ),
-            div(
-              style = sprintf("flex: 0 0 %dpx; min-height: %dpx;", dims$header, dims$header),
-              plotOutput("res_peptide_region_detail_header",
-                         height = paste0(dims$header, "px"), width = "100%")
-            ),
-            div(
-              style = sprintf("flex: 0 0 %dpx; min-height: %dpx;", dims$bar, dims$bar),
-              ggiraph::girafeOutput("res_peptide_region_detail_girafe",
-                                    height = paste0(dims$bar, "px"), width = "100%")
-            ),
-            div(
-              style = "flex: 1 1 auto; min-height: 0; overflow: hidden;",
-              plotOutput("res_peptide_region_detail_tracks",
-                         height = paste0(dims$tracks, "px"), width = "100%")
-            )
+            ggiraph::girafeOutput("res_peptide_region_detail_girafe",
+                                  height = "100%", width = "100%")
           )
         )
       }
@@ -7859,8 +7960,8 @@ page_results_server <- function(input, output, session) {
     # Use plotly for interactive mode on volcano/2dgofcs/rankplot and peptide-region overview
     if (is_interactive) {
       # Get aspect ratio from style dimensions (default 7:5)
-      plot_width <- st$width %||% 7
-      plot_height <- st$height %||% 5
+      plot_width <- sig$width
+      plot_height <- sig$height
       aspect_style <- sprintf("position: relative; --plot-aspect: %s / %s;", plot_width, plot_height)
 
       return(
@@ -8432,6 +8533,10 @@ page_results_server <- function(input, output, session) {
     info <- rv$hover_info_by_plot[[plot_key]] %||% res_hover_empty_state()
     res_hover_card_ui(info)
   })
+
+  # Peptide-region keeps its table inside the stable res_main layout via a
+  # conditionalPanel toggle (see the peptide_region branch above), so it
+  # reuses the shared res_table_pub / res_table outputs directly.
 
   output$res_table_pub <- renderUI({
     rend <- active_rendered()
@@ -12948,6 +13053,15 @@ page_results_server <- function(input, output, session) {
       # Find Search column index for width constraint
       search_col_idx <- which(names(tbl_df) == "Search") - 1  # 0-based
 
+      # Peptide Region overview: clamp the GO Terms cell to a single
+      # ellipsised line so rows with dozens of terms don't balloon the row
+      # height. Full text stays available via the cell tooltip and remains
+      # filterable/sortable because we only rewrite the "display" branch.
+      pr_go_col_idx <- if (identical(eng, "peptide_region")) {
+        idx <- which(names(tbl_df) == "GO Terms") - 1
+        if (length(idx) > 0 && idx >= 0) idx else NULL
+      } else NULL
+
       n_rows <- nrow(tbl_df)
       disable_table_controls <- eng %in% c("idquant", "idquant_id_quant", "idquant_average_value", "volcano")
       dt_options <- list(
@@ -12964,7 +13078,21 @@ page_results_server <- function(input, output, session) {
         columnDefs = list(
           list(visible = FALSE, targets = hide_cols),  # Hide internal/hidden columns
           if (length(search_col_idx) > 0 && search_col_idx >= 0)
-            list(width = "40px", targets = search_col_idx, className = "dt-center")
+            list(width = "40px", targets = search_col_idx, className = "dt-center"),
+          if (!is.null(pr_go_col_idx))
+            list(
+              targets = pr_go_col_idx,
+              className = "pr-go-cell",
+              width = "260px",
+              render = DT::JS(
+                "function(data, type, row) {",
+                "  if (type !== 'display' || data == null) return data;",
+                "  var text = String(data);",
+                "  var esc  = $('<div>').text(text).html();",
+                "  return '<span class=\"pr-go-ellipsis\" title=\"' + esc + '\">' + esc + '</span>';",
+                "}"
+              )
+            )
         )
       )
       # Remove NULL entries from columnDefs

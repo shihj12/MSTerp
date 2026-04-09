@@ -10466,13 +10466,13 @@ tb_render_peptide_region <- function(results, style, meta) {
   # ---- Build static ggplot scatter (used for export / non-interactive view) ----
   p_static <- .pr_build_overview_scatter_static(scores, style, x_col, y_col)
 
-  # Table is hidden by default; user toggles via the overview style panel
-  show_table <- isTRUE(style$show_table %||% FALSE)
-  tables_out <- if (show_table) list(protein_scores = display) else list()
-
+  # Always include the protein scores table in the rendered output. The
+  # viewer toggles between graph and table on the client via conditionalPanel,
+  # so the render pipeline doesn't need to react to the choice — gating this
+  # on a style field previously caused a render death loop.
   list(
     plots  = list(peptide_region = p_static),
-    tables = tables_out,
+    tables = list(protein_scores = display),
     tabs   = NULL
   )
 }
@@ -11088,7 +11088,10 @@ tb_peptide_region_track_state <- function(results, style = list()) {
   }
 
   if (isTRUE(is_fc)) {
-    brks <- unique(signif(c(y_min, 0, y_max), 3))
+    # Pull edge breaks inward so labels don't collide with adjacent stacked tracks.
+    inner_max <- signif(y_max * 0.9, 3)
+    inner_min <- signif(y_min * 0.9, 3)
+    brks <- unique(c(inner_min, 0, inner_max))
     brks[is.finite(brks) & brks >= y_min & brks <= y_max]
   } else {
     scales::breaks_pretty(n = 2)(c(y_min, y_max))
@@ -11097,7 +11100,7 @@ tb_peptide_region_track_state <- function(results, style = list()) {
 
 .pr_build_detail_header <- function(gene_symbol, uniprot_id, protein_length,
                                     coverage_pct = NULL, title_size = 16,
-                                    features_df = NULL, left_margin = 72) {
+                                    features_df = NULL) {
   header_title <- paste0(gene_symbol, " (", uniprot_id, ")")
   header_subtitle <- paste0(protein_length, " aa")
   if (!is.null(coverage_pct)) {
@@ -11105,21 +11108,23 @@ tb_peptide_region_track_state <- function(results, style = list()) {
   }
 
   title_size <- tb_num(title_size, 16)
+  # Panel alignment across header/bar/tracks is handled by patchwork's gtable
+  # width unification when they are combined into a single ggplot for the
+  # interactive viewer — so this helper can stay visually minimal.
   p_title <- ggplot2::ggplot() +
-    ggplot2::annotate("text", x = 0, y = 0.68, label = header_title,
-                      hjust = 0, vjust = 0.5, fontface = "bold",
+    ggplot2::annotate("text", x = 0.5, y = 0.68, label = header_title,
+                      hjust = 0.5, vjust = 0.5, fontface = "bold",
                       size = title_size / 3.7, color = "black") +
-    ggplot2::annotate("text", x = 0, y = 0.30, label = header_subtitle,
-                      hjust = 0, vjust = 0.5,
+    ggplot2::annotate("text", x = 0.5, y = 0.30, label = header_subtitle,
+                      hjust = 0.5, vjust = 0.5,
                       size = max(title_size - 4, 10) / 3.7, color = "black") +
     ggplot2::coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), clip = "off") +
     ggplot2::theme_void() +
-    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 4, left_margin))
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 4, 0))
 }
 
 #' Build the interactive protein feature bar used in detail view.
-.pr_build_protein_bar_girafe <- function(features_df, protein_length, feature_text_size = 2,
-                                         left_margin = 72) {
+.pr_build_protein_bar_girafe <- function(features_df, protein_length, feature_text_size = 2) {
   tb_require_pkg("ggiraph")
 
   rect_df <- .pr_feature_rectangles(features_df, protein_length)
@@ -11173,7 +11178,7 @@ tb_peptide_region_track_state <- function(results, style = list()) {
     ggplot2::scale_x_continuous(limits = c(x_lo, x_hi), expand = c(0, 0)) +
     ggplot2::coord_cartesian(ylim = c(-0.02, 1.02), clip = "off") +
     ggplot2::theme_void(base_size = 11) +
-    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, left_margin))
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, 0))
 }
 
 tb_peptide_region_detail_components <- function(results, style, interactive_bar = FALSE) {
@@ -11186,23 +11191,20 @@ tb_peptide_region_detail_components <- function(results, style, interactive_bar 
 
 tb_peptide_region_detail_girafe <- function(results, style) {
   tb_require_pkg("ggiraph")
+  tb_require_pkg("patchwork")
 
   comps <- tb_peptide_region_detail_components(results, style, interactive_bar = TRUE)
-  if (is.null(comps) || is.null(comps$bar_interactive)) return(NULL)
+  if (is.null(comps) || is.null(comps$combined_interactive)) return(NULL)
 
-  weights <- comps$layout_weights %||% list(header = 0.9, bar = 1.2, tracks = 1.3)
-  total_weight <- sum(unlist(weights), na.rm = TRUE)
-  if (!is.finite(total_weight) || total_weight <= 0) total_weight <- 3.4
-
-  width_svg <- tb_num(style$width, 7)
-  height_svg <- tb_num(style$height, 5) * (tb_num(weights$bar, 1.2) / total_weight)
+  width_svg  <- tb_num(style$width,  7)
+  height_svg <- tb_num(style$height, 5)
 
   ggiraph::girafe(
-    ggobj = comps$bar_interactive,
+    ggobj = comps$combined_interactive,
     width_svg = width_svg,
-    height_svg = max(height_svg, 0.8),
+    height_svg = height_svg,
     options = list(
-      ggiraph::opts_sizing(rescale = TRUE),
+      ggiraph::opts_sizing(rescale = TRUE, width = 1),
       ggiraph::opts_hover(css = "stroke:#444444;stroke-width:1px;"),
       ggiraph::opts_tooltip(css = paste(
         "background-color: rgba(30,30,30,0.96);",
@@ -11240,7 +11242,6 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   show_markers      <- isTRUE(style$show_peptide_markers %||% TRUE)
   feature_text_size <- tb_num(style$feature_text_size, 2)
   feature_track_height <- tb_num(style$feature_track_height, 1.2)
-  detail_left_margin <- .pr_detail_left_margin(axis_text_size)
   flip_fc           <- isTRUE(style$flip_fc %||% FALSE)
   show_significance <- isTRUE(style$show_significance %||% TRUE)
   sig_display       <- as.character(style$sig_display %||% "stars")[1]
@@ -11317,6 +11318,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
       bar_interactive = NULL,
       tracks = p_msg,
       combined_static = p_msg,
+      combined_interactive = p_msg,
       tables = list(),
       layout_weights = list(header = 0.9, bar = feature_track_height, tracks = 1.3)
     ))
@@ -11552,21 +11554,18 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     protein_length = protein_length,
     coverage_pct = cov_pct,
     title_size = title_text_size,
-    features_df = prot$features,
-    left_margin = detail_left_margin
+    features_df = prot$features
   )
   bar_static <- .pr_build_protein_bar(
     features_df = prot$features,
     protein_length = protein_length,
-    feature_text_size = feature_text_size,
-    left_margin = detail_left_margin
+    feature_text_size = feature_text_size
   )
   bar_interactive <- if (isTRUE(interactive_bar)) {
     .pr_build_protein_bar_girafe(
       features_df = prot$features,
       protein_length = protein_length,
-      feature_text_size = feature_text_size,
-      left_margin = detail_left_margin
+      feature_text_size = feature_text_size
     )
   } else {
     NULL
@@ -11590,12 +11589,22 @@ tb_peptide_region_detail_girafe <- function(results, style) {
   combined_static <- (header_plot / bar_static / tracks_plot) +
     patchwork::plot_layout(heights = c(0.9, feature_track_height, track_weight))
 
+  # Combined interactive version for the live viewer. patchwork auto-aligns
+  # panel regions across subplots (using gtable widths), which is how we
+  # guarantee that the header, feature bar, and data tracks share the same
+  # x-axis. This cannot be achieved across three independent Shiny outputs.
+  combined_interactive <- if (!is.null(bar_interactive)) {
+    (header_plot / bar_interactive / tracks_plot) +
+      patchwork::plot_layout(heights = c(0.9, feature_track_height, track_weight))
+  } else NULL
+
   list(
     header = header_plot,
     bar_static = bar_static,
     bar_interactive = bar_interactive,
     tracks = tracks_plot,
     combined_static = combined_static,
+    combined_interactive = combined_interactive,
     tables = tables_out,
     layout_weights = list(header = 0.9, bar = feature_track_height, tracks = track_weight)
   )
@@ -11743,8 +11752,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
 
 # Override the legacy title-bearing bar with a bare feature bar so detail mode
 # can place the header and legend outside the plotting area.
-.pr_build_protein_bar <- function(features_df, protein_length, feature_text_size = 2,
-                                  left_margin = 72) {
+.pr_build_protein_bar <- function(features_df, protein_length, feature_text_size = 2) {
   rect_df <- .pr_feature_rectangles(features_df, protein_length)
   x_lo <- -protein_length * 0.03
   x_hi <- protein_length * 1.03 + 0.5
@@ -11793,7 +11801,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     ggplot2::scale_x_continuous(limits = c(x_lo, x_hi), expand = c(0, 0)) +
     ggplot2::coord_cartesian(ylim = c(-0.02, 1.02), clip = "off") +
     ggplot2::theme_void(base_size = 11) +
-    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, left_margin))
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 10, 0, 0))
 }
 
 # ---- Peptide Region: Coverage track ----
@@ -11980,7 +11988,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
                                                   margin = ggplot2::margin(r = 10)),
       axis.text.y        = ggplot2::element_text(size = max(ats - 6, 7), color = "black",
                                                   lineheight = 0.9),
-      plot.margin        = ggplot2::margin(1, 10, 1, 34)
+      plot.margin        = ggplot2::margin(8, 10, 8, 34)
     )
 
   if (show_x_axis) {
@@ -11997,7 +12005,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
         axis.ticks.x = ggplot2::element_line(color = "black", linewidth = 0.25),
         axis.title.x = ggplot2::element_text(size = max(ats - 4, 8), color = "black",
                                               margin = ggplot2::margin(t = 3)),
-        plot.margin  = ggplot2::margin(1, 10, 4, 34)
+        plot.margin  = ggplot2::margin(8, 10, 8, 34)
       )
   }
 

@@ -945,56 +945,6 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
         }
       }
 
-      # Peptide Analysis: always include CV bar-only IDQuant view before final aggregation.
-      if (identical(eid, "peptide_analysis")) {
-        cv_eid <- "idquant_cv_bar"
-        cv_present <- any(vapply(container_entry$substeps, function(x) identical(tolower((x %||% list())$engine_id %||% ""), cv_eid), logical(1)))
-
-        if (!cv_present && nzchar(forced_eid)) {
-          forced_idx <- which(vapply(container_entry$substeps, function(x) identical(tolower((x %||% list())$engine_id %||% ""), forced_eid), logical(1)))
-          if (length(forced_idx) == 1 && forced_idx == length(container_entry$substeps)) {
-            forced_ss <- container_entry$substeps[[forced_idx]]
-            container_entry$substeps <- container_entry$substeps[-forced_idx]
-
-            # Rewind to the level just before aggregation so CV runs on peptide-level context.
-            current_level <- forced_ss$input_level %||% current_level
-
-            cv_eng <- registry$engines[[cv_eid]] %||% NULL
-            if (is.null(cv_eng)) {
-              return(list(ok = FALSE, error = sprintf("Required Peptide Analysis substep engine not found in registry: %s", cv_eid)))
-            }
-
-            ssid <- sprintf("%s__sys__%s", container_entry$step_id, cv_eid)
-            sub_entry <- list(
-              step_index = i,
-              parent_step_id = container_entry$step_id,
-              substep_index = length(container_entry$substeps) + 1L,
-              step_id = ssid,
-              engine_id = cv_eid,
-              type = "engine",
-              label = cv_eng$label %||% cv_eid,
-              params = schema_defaults_safe(cv_eng$params_schema),
-              style = style_defaults_safe(cv_eng),
-              enabled = TRUE,
-              system_generated = TRUE,
-              input_level = current_level,
-              output_level = NULL,
-              paired_children = NULL
-            )
-
-            out_level <- apply_output_level(cv_eng, current_level)
-            sub_entry$output_level <- out_level
-            current_level <- out_level
-            container_entry$substeps[[length(container_entry$substeps) + 1L]] <- sub_entry
-
-            # Re-append the forced final aggregation last.
-            forced_ss$substep_index <- length(container_entry$substeps) + 1L
-            container_entry$substeps[[length(container_entry$substeps) + 1L]] <- forced_ss
-            current_level <- forced_ss$output_level %||% current_level
-          }
-        }
-      }
-
       if (!is.null(exit_level) && !identical(current_level, exit_level)) {
         return(list(ok = FALSE, error = sprintf(
           "Container step %d must exit at '%s' level, but exits at '%s'",

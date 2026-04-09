@@ -2568,12 +2568,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       style_schema = list(
         # ---- Overview-only style fields (scatter plot) ----
-        msterp_schema_field(
-          "show_table", "bool", "Show scores table",
-          default = FALSE,
-          mode = "overview",
-          help = "Show the protein scores DataTable below the scatter plot."
-        ),
+        # NOTE: Graph/Table view switching is handled at the viewer level via
+        # a UI-only toggle (input$res_pr_view), not a style field — making it
+        # a style field triggered a re-render cascade that crashed the widget.
         msterp_schema_field(
           "point_size_scale", "num", "Point size scale",
           default = 1, min = 0.2, max = 5,
