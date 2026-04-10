@@ -10479,6 +10479,37 @@ tb_render_peptide_region <- function(results, style, meta) {
 
 # ---- Peptide Region overview helpers ----
 
+#' Fixed biology-tag colour palette. Every tag gets a distinct, saturated
+#' colour — no near-whites or pale tans. Tags not in the named map fall
+#' through to the cycling fallback which also avoids white.
+.pr_biology_palette <- function(levels) {
+  named <- c(
+    "Proteasome"    = "#E15759",
+    "Transmembrane" = "#4E79A7",
+    "Lysosomal"     = "#59A14F",
+    "Secreted"      = "#F28E2B",
+    "Mitochondrial" = "#B07AA1",
+    "Protease"      = "#FF9DA7",
+    "Nuclear"       = "#9C755F",
+    "Cytoplasmic"   = "#76B7B2",
+    "Membrane"      = "#EDC948",
+    "Other"         = "#BAB0AC"
+  )
+  out <- character(length(levels))
+  names(out) <- levels
+  # Assign fixed colours for known tags
+  known <- levels %in% names(named)
+  out[known] <- named[levels[known]]
+  # Cycle through a fallback palette for any unknown tags
+  if (any(!known)) {
+    fallback <- c("#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3",
+                  "#A6D854", "#E6AB02", "#D95F02", "#7570B3")
+    unknown_levels <- levels[!known]
+    out[!known] <- fallback[((seq_along(unknown_levels) - 1) %% length(fallback)) + 1]
+  }
+  out
+}
+
 #' Numeric columns from protein_scores eligible for scatter axes
 .pr_overview_numeric_cols <- function(scores) {
   if (is.null(scores) || !is.data.frame(scores)) return(character(0))
@@ -10573,7 +10604,10 @@ tb_render_peptide_region <- function(results, style, meta) {
       axis.title = ggplot2::element_text(size = axis_text_size * 0.85),
       plot.title = ggplot2::element_text(face = "bold", size = title_text_size)
     ) +
-    ggplot2::scale_color_brewer(palette = "Set2", na.value = "#888888")
+    ggplot2::scale_color_manual(
+      values = .pr_biology_palette(sort(unique(df$biology))),
+      na.value = "#888888"
+    )
 
   # Highlight targets with a black outline ring
   if (any(df$is_tgt)) {
@@ -10638,17 +10672,10 @@ tb_peptide_region_overview_plotly <- function(results, style) {
     sizes <- size_min + (pep_sz - rng[1]) / diff(rng) * (size_max - size_min)
   }
 
-  # Fixed Set2 palette
+  # Biology color palette (shared with static scatter)
   bio_levels <- sort(unique(df$biology))
-  pal <- tryCatch(
-    RColorBrewer::brewer.pal(max(3, length(bio_levels)), "Set2"),
-    error = function(e) NULL
-  )
-  if (is.null(pal)) {
-    pal <- c("#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3",
-             "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3")
-  }
-  color_map <- setNames(pal[((seq_along(bio_levels) - 1) %% length(pal)) + 1], bio_levels)
+  color_map <- .pr_biology_palette(bio_levels)
+  pal <- unname(color_map)
   df$color  <- color_map[df$biology]
 
   hover_text <- sprintf(
@@ -11204,7 +11231,7 @@ tb_peptide_region_detail_girafe <- function(results, style) {
     width_svg = width_svg,
     height_svg = height_svg,
     options = list(
-      ggiraph::opts_sizing(rescale = TRUE, width = 1),
+      ggiraph::opts_sizing(rescale = TRUE, width = 0.85),
       ggiraph::opts_hover(css = "stroke:#444444;stroke-width:1px;"),
       ggiraph::opts_tooltip(css = paste(
         "background-color: rgba(30,30,30,0.96);",

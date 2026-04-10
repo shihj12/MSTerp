@@ -2139,6 +2139,23 @@ page_results_ui <- function() {
           justify-content: center;
         }
 
+        /* Peptide-region detail: center the girafe widget on the full page.
+           The center panel is offset rightward by the 260px left sidebar,
+           so naively centering within the container looks off-center on the
+           page. We shift the whole girafe block left by half the sidebar
+           width (130px) so it appears centered on the viewport. */
+        .res-pr-detail-wrap {
+          transform: translateX(-130px);
+        }
+        .res-pr-detail-wrap .shiny-bound-output {
+          display: flex;
+          justify-content: center;
+          width: 100%;
+        }
+        .res-pr-detail-wrap .girafe_container_div {
+          margin: 0 auto;
+        }
+
         /* Peptide-region Graph/Table switcher: the view toggle lives in the
            right-side style panel and flips visibility of two sibling
            conditionalPanels. conditionalPanel emits a plain <div> which would
@@ -7942,8 +7959,8 @@ page_results_server <- function(input, output, session) {
         # unification guarantees the header/bar/tracks share the same x-axis.
         return(
           div(
-            class = "res-plot-interact",
-            style = "width: 100%; height: 100%; position: relative; overflow: hidden;",
+            class = "res-plot-interact res-pr-detail-wrap",
+            style = "width: 100%; height: 100%; position: relative; overflow: hidden; display: flex; justify-content: center; align-items: flex-start;",
             # Hidden plotOutput keeps the existing copy/download path alive —
             # res_current_plot_output_id() returns "res_plot" for detail mode.
             div(
