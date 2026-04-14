@@ -7336,7 +7336,7 @@ tb_render_half_life <- function(results, style, meta) {
         ggplot2::labs(title = "H/L Ratio Distribution (log2)", x = "log2(H/L)", y = "Count") +
         ggplot2::theme_minimal() +
         ggplot2::theme(legend.position = "bottom")
-      plots$ratio_distribution <- list(plot = p1, width = w, height = h)
+      plots$ratio_distribution <- p1
     }
   }
 
@@ -7359,7 +7359,7 @@ tb_render_half_life <- function(results, style, meta) {
           y = "Count"
         ) +
         ggplot2::theme_minimal()
-      plots$halflife_histogram <- list(plot = p2, width = w, height = h)
+      plots$halflife_histogram <- p2
     }
   }
 
@@ -7389,7 +7389,7 @@ tb_render_half_life <- function(results, style, meta) {
             y = sprintf("log2(t\u00BD) %s", rep_names[2])
           ) +
           ggplot2::theme_minimal()
-        plots$replicate_concordance <- list(plot = p3, width = w, height = h)
+        plots$replicate_concordance <- p3
       }
     } else {
       # 3+ replicates: correlation matrix heatmap of all pairwise comparisons
@@ -7428,7 +7428,7 @@ tb_render_half_life <- function(results, style, meta) {
         ) +
         ggplot2::theme_minimal() +
         ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-      plots$replicate_concordance <- list(plot = p3, width = w, height = max(h, w * 0.8))
+      plots$replicate_concordance <- p3
     }
   }
 
