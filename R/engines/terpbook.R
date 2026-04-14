@@ -1979,6 +1979,143 @@ tb_render_volcano <- function(results, style, meta) {
   )
 }
 
+# ---- MA Plot renderer ---------------------------------------------------------
+
+.tb_ma_single_plot <- function(df, style, meta, comp_info, comp_name = "") {
+  col_up    <- style$col_sig_up   %||% "#FF4242"
+  col_down  <- style$col_sig_down %||% "#4245FF"
+  col_ns    <- style$col_nonsig   %||% "#B0B0B0"
+  point_sz  <- tb_num(style$point_size, 2)
+  flip_y    <- isTRUE(style$flip_y_axis %||% FALSE)
+  label_mode <- style$label_mode %||% "color_sig"
+
+  plot_df <- df
+  if (flip_y) plot_df$log2fc <- -plot_df$log2fc
+
+  if (identical(label_mode, "hide_nonsig")) {
+    plot_df <- plot_df[plot_df$significance %in% c("up", "down"), , drop = FALSE]
+  }
+
+  color_map <- c(up = col_up, down = col_down, ns = col_ns)
+
+  # Axis titles
+  a_transform <- comp_info$a_axis_transform %||% "log2"
+  mean_type   <- comp_info$mean_type %||% "arithmetic"
+  a_mean_label <- switch(mean_type, "harmonic" = "harmonic mean", "arithmetic mean")
+  a_title <- if (nzchar(style$x_axis_title %||% "")) {
+    style$x_axis_title
+  } else if (identical(a_transform, "log2")) {
+    sprintf("log2(%s)", a_mean_label)
+  } else if (identical(a_transform, "log10")) {
+    sprintf("log10(%s)", a_mean_label)
+  } else {
+    sprintf("%s abundance", tools::toTitleCase(a_mean_label))
+  }
+
+  grp_a <- comp_info$group_a %||% "A"
+  grp_b <- comp_info$group_b %||% "B"
+  # Y-axis title reflects flip state
+  y_title <- if (flip_y) {
+    sprintf("log2(%s / %s)", grp_a, grp_b)
+  } else {
+    sprintf("log2(%s / %s)", grp_b, grp_a)
+  }
+
+  p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = a_value, y = log2fc, color = significance)) +
+    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "#888888") +
+    ggplot2::geom_point(size = point_sz, alpha = 0.8) +
+    ggplot2::scale_color_manual(values = color_map,
+                                breaks = c("up", "ns", "down"),
+                                labels = c(up = "Up", ns = "NS", down = "Down"),
+                                drop = FALSE) +
+    ggplot2::labs(
+      title = if (nzchar(comp_name)) comp_name else NULL,
+      x = a_title, y = y_title, color = NULL
+    ) +
+    tb_theme_base(tb_num(style$axis_text_size, 16),
+                  axis_style = style$axis_style %||% "clean")
+
+  # FC cutoff lines
+  if (isTRUE(style$show_cut_lines %||% TRUE)) {
+    fc_thr <- comp_info$fc_threshold %||% c(-1, 1)
+    y_cuts <- if (flip_y) -rev(fc_thr) else fc_thr
+    p <- p + ggplot2::geom_hline(yintercept = y_cuts, linetype = "dotted", color = "#666666")
+  }
+
+  # Axis ranges
+  if (identical(style$x_range_mode %||% "auto", "manual")) {
+    p <- p + ggplot2::coord_cartesian(
+      xlim = c(tb_num(style$x_min, 0), tb_num(style$x_max, 12)),
+      ylim = if (identical(style$y_range_mode %||% "auto", "manual"))
+        c(tb_num(style$y_min, -5), tb_num(style$y_max, 5)) else NULL
+    )
+  } else if (identical(style$y_range_mode %||% "auto", "manual")) {
+    p <- p + ggplot2::coord_cartesian(
+      ylim = c(tb_num(style$y_min, -5), tb_num(style$y_max, 5))
+    )
+  }
+
+  # Labeling: parse label_targets_map JSON keyed by comparison name
+  label_targets <- character(0)
+  targets_map_raw <- style$label_targets_map %||% "{}"
+  if (requireNamespace("jsonlite", quietly = TRUE) && is.character(targets_map_raw) && nzchar(targets_map_raw)) {
+    parsed <- tryCatch(jsonlite::fromJSON(targets_map_raw, simplifyVector = FALSE),
+                       error = function(e) list())
+    key <- if (nzchar(comp_name)) comp_name else "default"
+    ids <- parsed[[key]] %||% parsed[["_all"]] %||% character(0)
+    label_targets <- unlist(ids, use.names = FALSE)
+  }
+
+  if (length(label_targets) > 0 && requireNamespace("ggrepel", quietly = TRUE)) {
+    lbl_df <- plot_df[plot_df$primary_id %in% label_targets |
+                      plot_df$display_id %in% label_targets |
+                      plot_df$gene_symbol %in% label_targets, , drop = FALSE]
+    if (nrow(lbl_df) > 0) {
+      lbl_df$ma_label <- ifelse(!is.na(lbl_df$display_id) & nzchar(lbl_df$display_id),
+                                lbl_df$display_id, lbl_df$primary_id)
+      p <- p + ggrepel::geom_text_repel(
+        data = lbl_df, ggplot2::aes(label = ma_label),
+        size = tb_num(style$label_font_size, 12) / .pt,
+        color = "#000000", max.overlaps = Inf,
+        min.segment.length = 0,
+        inherit.aes = TRUE
+      )
+    }
+  }
+
+  p
+}
+
+tb_render_ma_plot <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
+
+  comparisons <- results$data$comparisons
+  if (is.null(comparisons) || length(comparisons) == 0) {
+    return(list(
+      plots = list(ma_plot = ggplot2::ggplot() + ggplot2::labs(title = "No MA plot data")),
+      tables = list(ma_plot_summary = results$data$summary %||% data.frame())
+    ))
+  }
+
+  plots <- list()
+  for (comp_name in names(comparisons)) {
+    comp <- comparisons[[comp_name]]
+    df <- comp$points
+    if (!is.null(df) && is.data.frame(df) && nrow(df) > 0) {
+      plots[[comp_name]] <- .tb_ma_single_plot(df, style, meta, comp$comparison, comp_name)
+    }
+  }
+
+  if (length(plots) == 0) {
+    plots$ma_plot <- ggplot2::ggplot() + ggplot2::labs(title = "No valid points")
+  }
+
+  list(
+    plots = plots,
+    tables = list(ma_plot_summary = results$data$summary %||% data.frame())
+  )
+}
+
 tb_render_goora <- function(results, style, meta) {
   # GO-ORA with optional BP/MF/CC tabs
   tb_require_pkg("ggplot2")
@@ -2764,6 +2901,18 @@ tb_render_idquant <- function(results, style, meta) {
   names(level_labels) <- level_vals
   df$level <- factor(level_labels[as.character(df$level)], levels = unique(level_labels))
 
+  view_mode <- style$view_mode %||% "combined"
+  if (identical(view_mode, "quantified_only")) {
+    keep_levels <- levels(df$level)[grepl("reproduc", levels(df$level), ignore.case = TRUE)]
+    if (length(keep_levels) == 0) {
+      keep_levels <- levels(df$level)[grepl("quant", levels(df$level), ignore.case = TRUE)]
+    }
+    if (length(keep_levels) > 0) {
+      df <- df[df$level %in% keep_levels, , drop = FALSE]
+      df$level <- factor(as.character(df$level), levels = keep_levels)
+    }
+  }
+
   # Get custom colors for reproducibly quantified vs quantified
   color_quantified <- style$color_quantified %||% "#1f77b4"
   color_identified <- style$color_identified %||% "#ff7f0e"
@@ -2824,9 +2973,10 @@ tb_render_idquant <- function(results, style, meta) {
   plots <- list(idquant_group = p_group)
   tables <- list(idquant_group = df)
 
-  # Replicate-level bar plot (new)
+  # Replicate-level bar plot (new) - hidden in Quantification Only mode
   rep_df <- results$data$replicate_counts
-  if (!is.null(rep_df) && is.data.frame(rep_df) && nrow(rep_df) > 0) {
+  if (!identical(view_mode, "quantified_only") &&
+      !is.null(rep_df) && is.data.frame(rep_df) && nrow(rep_df) > 0) {
     if (!"replicate" %in% names(rep_df)) {
       rep_df$replicate <- ave(
         rep_df$sample_col %||% seq_len(nrow(rep_df)),
@@ -4539,42 +4689,25 @@ tb_render_hor_dis <- function(results, style, meta) {
   summary_df <- results$data$summary
   df$group <- factor(df$group %||% "group")
 
-  # log_transform: always use style (viewer-time) so user can change at render time
-  # Reverse any compute-time transform and re-apply the style's choice
-  applied_transform <- results$data$applied_transform %||% "legacy"
+  # log_transform: style is the single source of truth at render time.
+  # If compute stored data under a transform (applied_transform), reverse it first,
+  # then apply the style's choice. Legacy results (no flag) are assumed raw.
+  applied_transform <- results$data$applied_transform %||% "none"
   log_transform <- style$log_transform %||% "log10"
 
-  if (identical(applied_transform, "legacy")) {
-    # Old results without applied_transform flag: cannot reverse, use params for label
-    log_transform <- results$params$log_transform %||% "none"
-  } else if (applied_transform != "none") {
-    # Data was pre-transformed at compute time — reverse it to get raw values,
-    # then apply the style's requested transform so viewer changes take effect
-    if (applied_transform == "log10") {
-      df$value <- 10^(df$value)
-    } else if (applied_transform == "log2") {
-      df$value <- 2^(df$value)
-    }
-    # Now apply the style-requested transform
-    if (log_transform == "log10") {
-      df$value[df$value <= 0] <- NA
-      df$value <- log10(df$value)
-    } else if (log_transform == "log2") {
-      df$value[df$value <= 0] <- NA
-      df$value <- log2(df$value)
-    }
-    df <- df[is.finite(df$value), , drop = FALSE]
-  } else {
-    # New results: data is raw, apply style$log_transform at render time
-    if (log_transform == "log10") {
-      df$value[df$value <= 0] <- NA
-      df$value <- log10(df$value)
-    } else if (log_transform == "log2") {
-      df$value[df$value <= 0] <- NA
-      df$value <- log2(df$value)
-    }
-    df <- df[is.finite(df$value), , drop = FALSE]
+  if (applied_transform == "log10") {
+    df$value <- 10^(df$value)
+  } else if (applied_transform == "log2") {
+    df$value <- 2^(df$value)
   }
+  if (log_transform == "log10") {
+    df$value[df$value <= 0] <- NA
+    df$value <- log10(df$value)
+  } else if (log_transform == "log2") {
+    df$value[df$value <= 0] <- NA
+    df$value <- log2(df$value)
+  }
+  df <- df[is.finite(df$value), , drop = FALSE]
 
   # Get style options
   alpha_val <- tb_num(style$alpha, 0.8)
@@ -4585,6 +4718,8 @@ tb_render_hor_dis <- function(results, style, meta) {
   plot_type <- style$plot_type %||% "density"
   layout_mode <- style$layout %||% "overlay"
   show_group_names <- isTRUE(style$show_group_names %||% TRUE)
+  bins_n <- as.integer(tb_num(style$bins, 30))
+  if (is.na(bins_n) || bins_n < 5) bins_n <- 30
 
   # Compare mode handling for individual replicate display
   compare_mode <- results$params$compare_mode %||% "avg_groups"
@@ -4680,11 +4815,11 @@ tb_render_hor_dis <- function(results, style, meta) {
     if (color_mode == "flat") {
       p <- ggplot2::ggplot(df, ggplot2::aes(x = value)) +
         ggplot2::geom_histogram(fill = flat_color, color = "black",
-                                alpha = alpha_val, bins = 30, linewidth = 0.3)
+                                alpha = alpha_val, bins = bins_n, linewidth = 0.3)
     } else {
       # Use group for fill, but keep outline black
       p <- ggplot2::ggplot(df, ggplot2::aes(x = value, fill = group, group = series_id)) +
-        ggplot2::geom_histogram(alpha = alpha_val, position = "identity", bins = 30, color = "black", linewidth = 0.3)
+        ggplot2::geom_histogram(alpha = alpha_val, position = "identity", bins = bins_n, color = "black", linewidth = 0.3)
     }
     # Use larger y-axis expansion when mean value labels are shown to prevent clipping
     # Extra expansion needed for all_reps overlay mode with staggered labels
@@ -4873,10 +5008,10 @@ tb_render_hor_dis <- function(results, style, meta) {
     # For all_reps mode, iterate over series_id; otherwise iterate over group
     mean_vals$label_y <- NA_real_
 
-    # Compute consistent bin edges that match ggplot2's geom_histogram(bins = 30)
+    # Compute consistent bin edges that match ggplot2's geom_histogram(bins = bins_n)
     all_vals <- df$value[!is.na(df$value)]
     data_range <- range(all_vals, na.rm = TRUE)
-    bin_width <- diff(data_range) / 30
+    bin_width <- diff(data_range) / bins_n
     bin_edges <- seq(data_range[1], data_range[2] + bin_width * 0.001, by = bin_width)
 
     # Determine which column to use for iteration based on compare_mode
@@ -7309,6 +7444,182 @@ tb_render_half_life <- function(results, style, meta) {
     plots = plots,
     tables = list(half_life_log = half_life_log)
   )
+}
+
+# ---- dSILAC QC renderers ------------------------------------------------------
+
+tb_render_dsilac_isotope_density <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
+
+  df <- results$data$values
+  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
+    return(list(
+      plots = list(dsilac_isotope_density_plot =
+                     ggplot2::ggplot() + ggplot2::labs(title = "No SILAC intensity data")),
+      tables = list()
+    ))
+  }
+  if (!all(c("value", "group", "channel") %in% names(df))) {
+    stop("dsilac_isotope_density: values must have columns value, group, channel.")
+  }
+
+  # Log transform (mirror hor_dis style policy)
+  log_transform <- style$log_transform %||% "log10"
+  if (log_transform == "log10") {
+    df$value[df$value <= 0] <- NA
+    df$value <- log10(df$value)
+  } else if (log_transform == "log2") {
+    df$value[df$value <= 0] <- NA
+    df$value <- log2(df$value)
+  }
+  df <- df[is.finite(df$value), , drop = FALSE]
+  if (nrow(df) == 0) {
+    return(list(
+      plots = list(dsilac_isotope_density_plot =
+                     ggplot2::ggplot() + ggplot2::labs(title = "No finite values after transform")),
+      tables = list()
+    ))
+  }
+
+  # Pooling
+  if (isTRUE(style$pool_above %||% FALSE)) {
+    pv <- tb_num(style$pool_value, 12)
+    df$value[df$value > pv] <- pv * 0.8
+  }
+
+  df$channel <- factor(df$channel, levels = c("light", "heavy"))
+  df$group <- factor(df$group)
+
+  plot_type <- style$plot_type %||% "density"
+  layout_mode <- style$layout %||% "separate"
+  facet_by <- style$facet_by %||% "group"
+  alpha_val <- tb_num(style$alpha, 0.6)
+  bins_n <- as.integer(tb_num(style$bins, 30))
+  if (is.na(bins_n) || bins_n < 5) bins_n <- 30
+
+  light_color <- style$light_color %||% "#1f77b4"
+  heavy_color <- style$heavy_color %||% "#d62728"
+  color_values <- c(light = light_color, heavy = heavy_color)
+
+  # In overlay mode, fill/color encodes channel (ignoring group). In separate mode,
+  # facet by the chosen dimension; fill always encodes channel.
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = value, fill = channel, color = channel))
+
+  if (identical(plot_type, "histogram")) {
+    p <- p + ggplot2::geom_histogram(
+      bins = bins_n, alpha = alpha_val, position = "identity"
+    )
+  } else {
+    p <- p + ggplot2::geom_density(alpha = alpha_val)
+  }
+
+  p <- p +
+    ggplot2::scale_fill_manual(values = color_values, drop = FALSE,
+                               labels = c(light = "Light", heavy = "Heavy")) +
+    ggplot2::scale_color_manual(values = color_values, drop = FALSE,
+                                labels = c(light = "Light", heavy = "Heavy")) +
+    ggplot2::labs(x = style$x_axis_title %||% "Intensity",
+                  y = if (plot_type == "histogram") "Count" else "Density",
+                  fill = "Channel", color = "Channel") +
+    tb_theme_base(tb_num(style$axis_text_size, 18),
+                  axis_style = style$axis_style %||% "clean")
+
+  if (identical(layout_mode, "separate")) {
+    p <- switch(
+      facet_by,
+      "channel"       = p + ggplot2::facet_wrap(~ channel, scales = "free_y"),
+      "group_channel" = p + ggplot2::facet_grid(group ~ channel, scales = "free_y"),
+      p + ggplot2::facet_wrap(~ group, scales = "free_y")  # default: facet by group
+    )
+  }
+
+  # Mean lines
+  if (isTRUE(style$show_mean %||% TRUE)) {
+    mean_type <- style$mean_type %||% "arithmetic"
+    mean_fn <- switch(mean_type,
+                      "harmonic" = function(x) {
+                        x <- x[is.finite(x) & x > 0]
+                        if (length(x) == 0) NA_real_ else length(x) / sum(1 / x)
+                      },
+                      "median" = function(x) stats::median(x, na.rm = TRUE),
+                      function(x) mean(x, na.rm = TRUE))
+
+    mean_df <- do.call(rbind, lapply(split(df, list(df$group, df$channel), drop = TRUE), function(d) {
+      data.frame(group = d$group[1], channel = d$channel[1],
+                 m = mean_fn(d$value), stringsAsFactors = FALSE)
+    }))
+    mean_df$channel <- factor(mean_df$channel, levels = c("light", "heavy"))
+
+    p <- p + ggplot2::geom_vline(
+      data = mean_df, ggplot2::aes(xintercept = m, color = channel),
+      linetype = "dashed", linewidth = tb_num(style$mean_line_size, 1),
+      show.legend = FALSE
+    )
+
+    if (isTRUE(style$show_mean_value %||% FALSE)) {
+      p <- p + ggplot2::geom_text(
+        data = mean_df,
+        ggplot2::aes(x = m, y = Inf, label = sprintf("%.2f", m), color = channel),
+        vjust = 1.5, hjust = -0.1,
+        size = tb_num(style$mean_text_size, 14) / .pt,
+        show.legend = FALSE, inherit.aes = FALSE
+      )
+    }
+  }
+
+  # X range
+  if (identical(style$x_range_mode %||% "auto", "manual")) {
+    p <- p + ggplot2::coord_cartesian(
+      xlim = c(tb_num(style$x_min, 0), tb_num(style$x_max, 12))
+    )
+  }
+
+  list(
+    plots = list(dsilac_isotope_density_plot = p),
+    tables = list(dsilac_isotope_density_summary = results$data$summary %||% data.frame())
+  )
+}
+
+tb_render_dsilac_isotope_density_peptide <- function(results, style, meta) {
+  tb_render_dsilac_isotope_density(results, style, meta)
+}
+
+tb_render_dsilac_isotope_density_protein <- function(results, style, meta) {
+  tb_render_dsilac_isotope_density(results, style, meta)
+}
+
+tb_render_dsilac_ratio_box <- function(results, style, meta) {
+  # Reshape results so tb_render_vert_dis can consume it, then rename plot/table keys.
+  vert_results <- list(
+    engine_id = "vert_dis",
+    params = results$params,
+    data = list(
+      values = results$data$values,
+      summary = results$data$summary,
+      group_colors = results$data$group_colors,
+      applied_transform = results$data$applied_transform %||% "none"
+    )
+  )
+  out <- tb_render_vert_dis(vert_results, style, meta)
+  plots <- list()
+  tables <- list()
+  if (length(out$plots) > 0) {
+    plots$dsilac_ratio_box_plot <- out$plots[[1]]
+  }
+  if (length(out$tables) > 0) {
+    tables$dsilac_ratio_box_summary <- out$tables[[1]]
+  } else if (!is.null(results$data$summary)) {
+    tables$dsilac_ratio_box_summary <- results$data$summary
+  }
+  list(plots = plots, tables = tables)
+}
+
+tb_render_dsilac_ratio_box_peptide <- function(results, style, meta) {
+  tb_render_dsilac_ratio_box(results, style, meta)
+}
+
+tb_render_dsilac_ratio_box_protein <- function(results, style, meta) {
+  tb_render_dsilac_ratio_box(results, style, meta)
 }
 
 # ---- Peptide Aggregate to Protein renderer ------------------------------------
@@ -12103,6 +12414,10 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "spearman" = tb_render_scatter_correlation(results, style, meta),  # Legacy alias
     "hor_dis"  = tb_render_hor_dis(results, style, meta),
     "vert_dis" = tb_render_vert_dis(results, style, meta),
+    "dsilac_isotope_density_peptide" = tb_render_dsilac_isotope_density_peptide(results, style, meta),
+    "dsilac_isotope_density_protein" = tb_render_dsilac_isotope_density_protein(results, style, meta),
+    "dsilac_ratio_box_peptide" = tb_render_dsilac_ratio_box_peptide(results, style, meta),
+    "dsilac_ratio_box_protein" = tb_render_dsilac_ratio_box_protein(results, style, meta),
     "pca"      = tb_render_pca(results, style, meta),
     "heatmap"  = tb_render_heatmap(results, style, meta),
     "ftest_heatmap" = tb_render_ftest_heatmap(results, style, meta),
@@ -12111,6 +12426,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "fc_ftest_heatmap" = tb_render_fc_ftest_heatmap(results, style, meta),
     "gene_barchart" = tb_render_gene_barchart(results, style, meta),
     "volcano"  = tb_render_volcano(results, style, meta),
+    "ma_plot"  = tb_render_ma_plot(results, style, meta),
     "rankplot" = tb_render_rankplot(results, style, meta),
     "goora"    = tb_render_goora(results, style, meta),
     "1dgofcs"  = tb_render_1dgofcs(results, style, meta),

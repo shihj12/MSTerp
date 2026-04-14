@@ -390,6 +390,28 @@ page_format_ui <- function() {
       #format-page .silac-pair-row .selectize-dropdown-content {
         max-height: 320px !important;
       }
+
+      /* Long column names: allow wrap + ellipsis in selected value, full text in dropdown */
+      #format-page .selectize-input {
+        max-width: 100%;
+        white-space: normal;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #format-page .selectize-input > .item {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* Dropdowns rendered at <body> via dropdownParent: ensure full text shows */
+      body > .selectize-dropdown .selectize-dropdown-content {
+        max-height: 360px;
+      }
+      body > .selectize-dropdown .option {
+        white-space: normal;
+        word-break: break-all;
+      }
       #format-page .silac-pair-row .shiny-input-container {
         margin-bottom: 0;
       }
@@ -1025,22 +1047,27 @@ page_format_server <- function(input, output, session, app_state) {
         condition = "input.fmt_data_type == 'proteomics'",
         conditionalPanel(
           condition = "input.fmt_analysis_level == 'peptide'",
-          selectInput("fmt_peptide_col", "Peptide ID column (required)", choices = cols)
+          selectizeInput("fmt_peptide_col", "Peptide ID column (required)", choices = cols,
+                         width = "100%", options = list(dropdownParent = "body"))
         ),
-        selectInput("fmt_protein_col", "Protein ID column (required)", choices = cols),
+        selectizeInput("fmt_protein_col", "Protein ID column (required)", choices = cols,
+                       width = "100%", options = list(dropdownParent = "body")),
         conditionalPanel(
           condition = "input.fmt_analysis_level == 'peptide'",
           tags$small("Protein ID is required for aggregation from peptide-level to protein-level.")
         ),
-        selectInput("fmt_gene_col", "Gene symbol column", choices = c("", cols), selected = ""),
+        selectizeInput("fmt_gene_col", "Gene symbol column", choices = c("", cols), selected = "",
+                       width = "100%", options = list(dropdownParent = "body")),
         tags$small("Required for analysis (used across the app).")
       ),
       conditionalPanel(
         condition = "input.fmt_data_type == 'metabolomics'",
-        selectInput("fmt_metabolite_name_col", "Metabolite name column (required)", choices = cols),
+        selectizeInput("fmt_metabolite_name_col", "Metabolite name column (required)", choices = cols,
+                       width = "100%", options = list(dropdownParent = "body")),
         tags$small("Primary identifier for metabolites (e.g., compound names)."),
-        selectInput("fmt_metabolite_col", "Metabolite ID column (optional)",
-                    choices = c("(none)" = "", cols), selected = ""),
+        selectizeInput("fmt_metabolite_col", "Metabolite ID column (optional)",
+                    choices = c("(none)" = "", cols), selected = "",
+                    width = "100%", options = list(dropdownParent = "body")),
         tags$small("Secondary identifier (KEGG, HMDB, etc.) for MetaboBase matching.")
       )
     )

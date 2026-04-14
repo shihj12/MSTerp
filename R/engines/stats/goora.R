@@ -332,6 +332,39 @@ stats_goora_run <- function(payload, params = NULL, context = NULL) {
   add_log("INFO", sprintf("Query: %d proteins, Background: %d proteins",
                           n, N))
 
+  # Complex-enrichment species-mismatch guard: if query overlap with the
+  # complexbase universe is implausibly low, bail out with a clear error
+  # rather than silently returning near-empty results that look like a
+  # fall-back to another database.
+  if (identical(database, "complex") && length(query_proteins) >= 20) {
+    match_rate <- n / length(query_proteins)
+    if (match_rate < 0.05) {
+      sample_query <- head(query_proteins, 3)
+      sample_bg <- head(background, 3)
+      add_log("DEBUG", sprintf(
+        "Low complex match (%.1f%%). Query sample: [%s] | Complex universe sample: [%s]",
+        100 * match_rate,
+        paste(sample_query, collapse = ", "),
+        paste(sample_bg, collapse = ", ")))
+      return(list(
+        engine_id = "goora",
+        params = params,
+        data = list(
+          terms = data.frame(
+            term_id = character(0), term_name = character(0), ontology = character(0),
+            fdr = numeric(0), fold_enrichment = numeric(0), n_genes = integer(0),
+            protein_ids = character(0), stringsAsFactors = FALSE
+          ),
+          log = data.frame(time = format(Sys.time()), level = "ERROR",
+                           message = sprintf(
+                             "Complex enrichment: only %d of %d query proteins (%.1f%%) match the selected ComplexBase. This usually indicates a species mismatch (e.g. mouse data with human complexbase). Check the ComplexBase selection on the New Run page.",
+                             n, length(query_proteins), 100 * match_rate),
+                           stringsAsFactors = FALSE)
+        )
+      ))
+    }
+  }
+
   if (n == 0) {
     # Log diagnostic info to help debug ID format mismatches
     sample_query <- head(query_proteins, 3)

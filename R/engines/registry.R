@@ -210,7 +210,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       supports_sequential = FALSE,
       accepted_input_levels = c("peptide"),
       locked_parent = TRUE,
-      allowed_child_engines = c("dataprocessor", "half_life", "peptide_region"),
+      allowed_child_engines = c("dataprocessor", "half_life", "peptide_region",
+                                "dsilac_isotope_density_peptide", "dsilac_ratio_box_peptide"),
       forced_final_substep_engine_id = "peptide_aggregate_to_protein",
       forced_final_substep_params = list(method = "harmonic_mean"),
       exit_level = "protein",
@@ -335,6 +336,257 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         tables = c("half_life_log"),
         tabs = NULL
       )
+    ),
+
+    # ----------------------------
+    # dSILAC QC — Isotope intensity density + H/L ratio box plots
+    # ----------------------------
+    dsilac_isotope_density_peptide = list(
+      engine_id = "dsilac_isotope_density_peptide",
+      label = "Isotope Intensity Density (peptide)",
+      category = "qc",
+      supported_data_types = c("proteomics"),
+      description = "Density / histogram of light vs heavy isotope intensities per sample group (peptide level).",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("peptide"),
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("peptide"),
+        requires_silac = TRUE
+      ),
+      params_schema = list(
+        msterp_schema_field("compare_mode", "choice", "Compare", default = "all_reps",
+                            choices = c("avg_groups", "all_reps"),
+                            choice_labels = c("Average per group", "All replicates"))
+      ),
+      style_schema = list(
+        msterp_schema_field("log_transform", "choice", "Log transform", default = "log10",
+                            choices = c("log10", "log2", "none")),
+        msterp_schema_field("bins", "int", "Histogram bins", default = 30, min = 5, max = 300),
+        msterp_schema_field("plot_type", "choice", "Plot type", default = "density",
+                            choices = c("density", "histogram"),
+                            choice_labels = c("Density", "Histogram"), advanced = TRUE),
+        msterp_schema_field("layout", "choice", "Layout", default = "separate",
+                            choices = c("overlay", "separate"),
+                            choice_labels = c("Overlay", "Facet by group/channel"), advanced = TRUE),
+        msterp_schema_field("facet_by", "choice", "Facet by", default = "group",
+                            choices = c("group", "channel", "group_channel"),
+                            choice_labels = c("Sample group", "Channel (light/heavy)", "Group × Channel"),
+                            help = "How to split facets when Layout = Facet. Color always encodes the other dimension.",
+                            advanced = TRUE),
+        msterp_schema_field("x_axis_title", "string", "X-axis title", default = "Intensity", advanced = TRUE),
+        msterp_schema_field("light_color", "string", "Light color", default = "#1f77b4", advanced = TRUE),
+        msterp_schema_field("heavy_color", "string", "Heavy color", default = "#d62728", advanced = TRUE),
+        msterp_schema_field("alpha", "num", "Opacity", default = 0.6, min = 0, max = 1, advanced = TRUE),
+        msterp_schema_field("show_mean", "bool", "Show mean line", default = TRUE, advanced = TRUE),
+        msterp_schema_field("mean_type", "choice", "Mean type", default = "arithmetic",
+                            choices = c("arithmetic", "harmonic", "median"),
+                            choice_labels = c("Arithmetic", "Harmonic", "Median"), advanced = TRUE),
+        msterp_schema_field("show_mean_value", "bool", "Show mean value", default = FALSE, advanced = TRUE),
+        msterp_schema_field("mean_line_size", "num", "Mean line thickness", default = 1, min = 0.2, max = 5, advanced = TRUE),
+        msterp_schema_field("mean_text_size", "int", "Mean text size", default = 14, min = 6, max = 24, advanced = TRUE),
+        msterp_schema_field("pool_above", "bool", "Pool above threshold", default = FALSE, advanced = TRUE),
+        msterp_schema_field("pool_value", "num", "Pool threshold", default = 12, min = 1, max = 50, advanced = TRUE),
+        msterp_schema_field("x_range_mode", "choice", "X range", default = "auto",
+                            choices = c("auto", "manual"), advanced = TRUE),
+        msterp_schema_field("x_min", "num", "X min", default = 0, advanced = TRUE),
+        msterp_schema_field("x_max", "num", "X max", default = 12, advanced = TRUE),
+        msterp_schema_field("axis_style", "choice", "Axis style", default = "clean", choices = c("clean", "bold"), advanced = TRUE),
+        msterp_schema_field("axis_text_size", "int", "Axis text size", default = 18, min = 6, max = 40, advanced = TRUE),
+        msterp_schema_field("width",  "num", "Plot width (in)",  default = 8, min = 2, max = 24, advanced = TRUE),
+        msterp_schema_field("height", "num", "Plot height (in)", default = 5, min = 2, max = 24, advanced = TRUE)
+      ),
+      viewer_schema = list(),
+      outputs = list(figures = c("dsilac_isotope_density_plot"), tables = c("dsilac_isotope_density_summary"), interactive = FALSE),
+      render_spec = list(plots = c("dsilac_isotope_density_plot"), tables = character(0), tabs = NULL)
+    ),
+
+    dsilac_isotope_density_protein = list(
+      engine_id = "dsilac_isotope_density_protein",
+      label = "Isotope Intensity Density (protein)",
+      category = "qc",
+      supported_data_types = c("proteomics"),
+      description = "Density / histogram of light vs heavy isotope intensities per sample group (protein level).",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein"),
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("protein"),
+        requires_silac = TRUE
+      ),
+      params_schema = list(
+        msterp_schema_field("compare_mode", "choice", "Compare", default = "all_reps",
+                            choices = c("avg_groups", "all_reps"),
+                            choice_labels = c("Average per group", "All replicates"))
+      ),
+      style_schema = list(
+        msterp_schema_field("log_transform", "choice", "Log transform", default = "log10",
+                            choices = c("log10", "log2", "none")),
+        msterp_schema_field("bins", "int", "Histogram bins", default = 30, min = 5, max = 300),
+        msterp_schema_field("plot_type", "choice", "Plot type", default = "density",
+                            choices = c("density", "histogram"),
+                            choice_labels = c("Density", "Histogram"), advanced = TRUE),
+        msterp_schema_field("layout", "choice", "Layout", default = "separate",
+                            choices = c("overlay", "separate"),
+                            choice_labels = c("Overlay", "Facet by group/channel"), advanced = TRUE),
+        msterp_schema_field("facet_by", "choice", "Facet by", default = "group",
+                            choices = c("group", "channel", "group_channel"),
+                            choice_labels = c("Sample group", "Channel (light/heavy)", "Group × Channel"),
+                            help = "How to split facets when Layout = Facet. Color always encodes the other dimension.",
+                            advanced = TRUE),
+        msterp_schema_field("x_axis_title", "string", "X-axis title", default = "Intensity", advanced = TRUE),
+        msterp_schema_field("light_color", "string", "Light color", default = "#1f77b4", advanced = TRUE),
+        msterp_schema_field("heavy_color", "string", "Heavy color", default = "#d62728", advanced = TRUE),
+        msterp_schema_field("alpha", "num", "Opacity", default = 0.6, min = 0, max = 1, advanced = TRUE),
+        msterp_schema_field("show_mean", "bool", "Show mean line", default = TRUE, advanced = TRUE),
+        msterp_schema_field("mean_type", "choice", "Mean type", default = "arithmetic",
+                            choices = c("arithmetic", "harmonic", "median"),
+                            choice_labels = c("Arithmetic", "Harmonic", "Median"), advanced = TRUE),
+        msterp_schema_field("show_mean_value", "bool", "Show mean value", default = FALSE, advanced = TRUE),
+        msterp_schema_field("mean_line_size", "num", "Mean line thickness", default = 1, min = 0.2, max = 5, advanced = TRUE),
+        msterp_schema_field("mean_text_size", "int", "Mean text size", default = 14, min = 6, max = 24, advanced = TRUE),
+        msterp_schema_field("pool_above", "bool", "Pool above threshold", default = FALSE, advanced = TRUE),
+        msterp_schema_field("pool_value", "num", "Pool threshold", default = 12, min = 1, max = 50, advanced = TRUE),
+        msterp_schema_field("x_range_mode", "choice", "X range", default = "auto",
+                            choices = c("auto", "manual"), advanced = TRUE),
+        msterp_schema_field("x_min", "num", "X min", default = 0, advanced = TRUE),
+        msterp_schema_field("x_max", "num", "X max", default = 12, advanced = TRUE),
+        msterp_schema_field("axis_style", "choice", "Axis style", default = "clean", choices = c("clean", "bold"), advanced = TRUE),
+        msterp_schema_field("axis_text_size", "int", "Axis text size", default = 18, min = 6, max = 40, advanced = TRUE),
+        msterp_schema_field("width",  "num", "Plot width (in)",  default = 8, min = 2, max = 24, advanced = TRUE),
+        msterp_schema_field("height", "num", "Plot height (in)", default = 5, min = 2, max = 24, advanced = TRUE)
+      ),
+      viewer_schema = list(),
+      outputs = list(figures = c("dsilac_isotope_density_plot"), tables = c("dsilac_isotope_density_summary"), interactive = FALSE),
+      render_spec = list(plots = c("dsilac_isotope_density_plot"), tables = character(0), tabs = NULL)
+    ),
+
+    dsilac_ratio_box_peptide = list(
+      engine_id = "dsilac_ratio_box_peptide",
+      label = "H/L Ratio Box Plot (peptide)",
+      category = "qc",
+      supported_data_types = c("proteomics"),
+      description = "Vertical distribution of Heavy/Light ratios per sample / group (peptide level).",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("peptide"),
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("peptide"),
+        requires_silac = TRUE
+      ),
+      params_schema = list(
+        msterp_schema_field("compare_mode", "choice", "Compare", default = "all_reps",
+                            choices = c("avg_groups", "all_reps"),
+                            choice_labels = c("Average per group", "All replicates (per-sample boxes)"))
+      ),
+      style_schema = list(
+        msterp_schema_field("log_transform", "choice", "Log transform", default = "log2",
+                            choices = c("log10", "log2", "none")),
+        msterp_schema_field("plot_type", "choice", "Plot type", default = "box",
+                            choices = c("box", "violin"),
+                            choice_labels = c("Box plot", "Violin plot"), advanced = TRUE),
+        msterp_schema_field("y_axis_title", "string", "Y-axis title", default = "H/L ratio", advanced = TRUE),
+        msterp_schema_field("label_rotation", "choice", "Label rotation",
+                            default = "45", choices = c("0", "45", "90"),
+                            choice_labels = c("Horizontal", "45 degrees", "Vertical"), advanced = TRUE),
+        msterp_schema_field("show_n", "bool", "Show n", default = TRUE, advanced = TRUE),
+        msterp_schema_field("show_global_mean", "bool", "Show global mean", default = TRUE, advanced = TRUE),
+        msterp_schema_field("mean_type", "choice", "Mean type", default = "median",
+                            choices = c("arithmetic", "harmonic"),
+                            choice_labels = c("Arithmetic", "Harmonic"), advanced = TRUE),
+        msterp_schema_field("mean_line_color", "string", "Mean line color (hex)", default = "#FF0000", advanced = TRUE),
+        msterp_schema_field("mean_line_size", "num", "Mean line thickness", default = 1, min = 0.2, max = 5, advanced = TRUE),
+        msterp_schema_field("show_avg_label", "bool", "Show per-group average", default = FALSE, advanced = TRUE),
+        msterp_schema_field("avg_label_type", "choice", "Average type", default = "median",
+                            choices = c("median", "arithmetic", "harmonic"),
+                            choice_labels = c("Median", "Arithmetic mean", "Harmonic mean"), advanced = TRUE),
+        msterp_schema_field("avg_label_color", "string", "Label color (hex)", default = "#333333", advanced = TRUE),
+        msterp_schema_field("avg_label_size", "num", "Label text size", default = 3.5, min = 1, max = 12, advanced = TRUE),
+        msterp_schema_field("color_mode", "choice", "Color", default = "group",
+                            choices = c("group", "flat"), advanced = TRUE),
+        msterp_schema_field("flat_color", "string", "Flat color (hex)", default = "#B0B0B0", advanced = TRUE),
+        msterp_schema_field("alpha", "num", "Opacity", default = 0.8, min = 0, max = 1, advanced = TRUE),
+        msterp_schema_field("y_range_mode", "choice", "Y range", default = "auto",
+                            choices = c("auto", "manual"), advanced = TRUE),
+        msterp_schema_field("y_min", "num", "Y min", default = -3, advanced = TRUE),
+        msterp_schema_field("y_max", "num", "Y max", default = 3, advanced = TRUE),
+        msterp_schema_field("axis_style", "choice", "Axis style", default = "clean",
+                            choices = c("clean", "bold"), advanced = TRUE),
+        msterp_schema_field("axis_text_size", "int", "Axis text size", default = 18, min = 6, max = 40, advanced = TRUE),
+        msterp_schema_field("width", "num", "Plot width (in)", default = 6, min = 2, max = 24, advanced = TRUE),
+        msterp_schema_field("height", "num", "Plot height (in)", default = 5, min = 2, max = 24, advanced = TRUE)
+      ),
+      viewer_schema = list(),
+      outputs = list(figures = c("dsilac_ratio_box_plot"), tables = c("dsilac_ratio_box_summary"), interactive = FALSE),
+      render_spec = list(plots = c("dsilac_ratio_box_plot"), tables = character(0), tabs = NULL)
+    ),
+
+    dsilac_ratio_box_protein = list(
+      engine_id = "dsilac_ratio_box_protein",
+      label = "H/L Ratio Box Plot (protein)",
+      category = "qc",
+      supported_data_types = c("proteomics"),
+      description = "Vertical distribution of Heavy/Light ratios per sample / group (protein level).",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein"),
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("protein"),
+        requires_silac = TRUE
+      ),
+      params_schema = list(
+        msterp_schema_field("compare_mode", "choice", "Compare", default = "all_reps",
+                            choices = c("avg_groups", "all_reps"),
+                            choice_labels = c("Average per group", "All replicates (per-sample boxes)"))
+      ),
+      style_schema = list(
+        msterp_schema_field("log_transform", "choice", "Log transform", default = "log2",
+                            choices = c("log10", "log2", "none")),
+        msterp_schema_field("plot_type", "choice", "Plot type", default = "box",
+                            choices = c("box", "violin"),
+                            choice_labels = c("Box plot", "Violin plot"), advanced = TRUE),
+        msterp_schema_field("y_axis_title", "string", "Y-axis title", default = "H/L ratio", advanced = TRUE),
+        msterp_schema_field("label_rotation", "choice", "Label rotation",
+                            default = "45", choices = c("0", "45", "90"),
+                            choice_labels = c("Horizontal", "45 degrees", "Vertical"), advanced = TRUE),
+        msterp_schema_field("show_n", "bool", "Show n", default = TRUE, advanced = TRUE),
+        msterp_schema_field("show_global_mean", "bool", "Show global mean", default = TRUE, advanced = TRUE),
+        msterp_schema_field("mean_type", "choice", "Mean type", default = "median",
+                            choices = c("arithmetic", "harmonic"),
+                            choice_labels = c("Arithmetic", "Harmonic"), advanced = TRUE),
+        msterp_schema_field("mean_line_color", "string", "Mean line color (hex)", default = "#FF0000", advanced = TRUE),
+        msterp_schema_field("mean_line_size", "num", "Mean line thickness", default = 1, min = 0.2, max = 5, advanced = TRUE),
+        msterp_schema_field("show_avg_label", "bool", "Show per-group average", default = FALSE, advanced = TRUE),
+        msterp_schema_field("avg_label_type", "choice", "Average type", default = "median",
+                            choices = c("median", "arithmetic", "harmonic"),
+                            choice_labels = c("Median", "Arithmetic mean", "Harmonic mean"), advanced = TRUE),
+        msterp_schema_field("avg_label_color", "string", "Label color (hex)", default = "#333333", advanced = TRUE),
+        msterp_schema_field("avg_label_size", "num", "Label text size", default = 3.5, min = 1, max = 12, advanced = TRUE),
+        msterp_schema_field("color_mode", "choice", "Color", default = "group",
+                            choices = c("group", "flat"), advanced = TRUE),
+        msterp_schema_field("flat_color", "string", "Flat color (hex)", default = "#B0B0B0", advanced = TRUE),
+        msterp_schema_field("alpha", "num", "Opacity", default = 0.8, min = 0, max = 1, advanced = TRUE),
+        msterp_schema_field("y_range_mode", "choice", "Y range", default = "auto",
+                            choices = c("auto", "manual"), advanced = TRUE),
+        msterp_schema_field("y_min", "num", "Y min", default = -3, advanced = TRUE),
+        msterp_schema_field("y_max", "num", "Y max", default = 3, advanced = TRUE),
+        msterp_schema_field("axis_style", "choice", "Axis style", default = "clean",
+                            choices = c("clean", "bold"), advanced = TRUE),
+        msterp_schema_field("axis_text_size", "int", "Axis text size", default = 18, min = 6, max = 40, advanced = TRUE),
+        msterp_schema_field("width", "num", "Plot width (in)", default = 6, min = 2, max = 24, advanced = TRUE),
+        msterp_schema_field("height", "num", "Plot height (in)", default = 5, min = 2, max = 24, advanced = TRUE)
+      ),
+      viewer_schema = list(),
+      outputs = list(figures = c("dsilac_ratio_box_plot"), tables = c("dsilac_ratio_box_summary"), interactive = FALSE),
+      render_spec = list(plots = c("dsilac_ratio_box_plot"), tables = character(0), tabs = NULL)
     ),
 
     # ----------------------------
@@ -467,6 +719,15 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           )
         ),
         mk_style(width = 7, height = 5, axis_text_size = 20)
+      ),
+      viewer_schema = list(
+        msterp_schema_field(
+          "view_mode", "choice", "View",
+          default = "combined",
+          choices = c("combined", "quantified_only"),
+          choice_labels = c("ID + Quantification", "Quantification Only"),
+          help = "Combined shows both identified and reproducibly quantified bars per group plus the per-replicate identification plot. Quantification Only shows just the reproducibly quantified bars at the group level."
+        )
       ),
       outputs = list(figures = c("idquant_group", "idquant_replicate"), tables = c("idquant_group", "idquant_replicate"), interactive = TRUE),
       render_spec = list(plots = c("idquant_group", "idquant_replicate"), tables = c("idquant_group", "idquant_replicate"), tabs = NULL)
@@ -1362,6 +1623,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       style_schema = list(
         msterp_schema_field("log_transform", "choice", "Log transform", default = "log10",
                             choices = c("log10", "log2", "none")),
+        msterp_schema_field("bins", "int", "Histogram bins", default = 30, min = 5, max = 300),
         msterp_schema_field("plot_type", "choice", "Plot type", default = "histogram",
                             choices = c("density", "histogram"),
                             choice_labels = c("Density", "Histogram"), advanced = TRUE),
@@ -2897,6 +3159,119 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         click_target = "target"
       ),
       render_spec = list(plots = c("volcano_plot"), tables = c("volcano_summary"), tabs = NULL)
+    ),
+
+    ma_plot = list(
+      engine_id = "ma_plot",
+      label = "MA Plot",
+      category = "comparison",
+      supported_data_types = c("proteomics", "metabolomics"),
+      description = "M vs A plot: log2 fold change against average abundance for each pairwise comparison.",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein", "metabolite"),
+      requirements = list(
+        min_groups = 2,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("protein", "metabolite")
+      ),
+      params_schema = list(
+        msterp_schema_field(
+          "stat_mode", "choice", "Statistic",
+          default = "ttest", choices = c("ttest", "limma"),
+          help = "ttest: Welch t-test per feature. limma: empirical Bayes moderated t-test."
+        ),
+        msterp_schema_field(
+          "control_only", "bool", "Only compare against control",
+          default = FALSE,
+          help = "When a control group is defined, only generate comparisons against control."
+        ),
+        msterp_schema_field(
+          "mean_type", "choice", "A-axis mean type",
+          default = "arithmetic",
+          choices = c("arithmetic", "harmonic"),
+          choice_labels = c("Arithmetic mean", "Harmonic mean"),
+          help = "How to combine the two group means into the A (x-axis) value."
+        ),
+        msterp_schema_field(
+          "a_axis_transform", "choice", "A-axis transform",
+          default = "log2",
+          choices = c("none", "log2", "log10"),
+          help = "Log transform applied to the A (average abundance) axis."
+        ),
+        msterp_schema_field(
+          "apply_fdr", "bool", "Apply FDR correction",
+          default = TRUE,
+          help = "Use FDR-adjusted p-values (TRUE) or raw p-values (FALSE) for significance coloring."
+        ),
+        msterp_schema_field(
+          "fc_threshold", "range", "Fold-change threshold (min, max)",
+          default = c(-1, 1), min = -10, max = 10,
+          help = "log2 FC cutoffs for significant up/down."
+        ),
+        msterp_schema_field(
+          "p_threshold", "choice", "p threshold",
+          default = "0.05",
+          choices = c("0.05", "0.03", "0.01", "0.005", "0.001"),
+          help = "p-value cutoff for significance classification."
+        ),
+        msterp_schema_field(
+          "is_log_transformed", "bool", "Data is already log-transformed",
+          default = FALSE,
+          help = "Enable if your data is already log2-transformed.",
+          advanced = TRUE
+        )
+      ),
+      style_schema = c(
+        list(
+          msterp_schema_field("label_mode", "choice", "Label mode",
+                              default = "color_sig",
+                              choices = c("color_sig", "hide_nonsig"),
+                              advanced = TRUE),
+          msterp_schema_field("point_size", "num", "Point size", default = 2, min = 0.5, max = 10, advanced = TRUE),
+          msterp_schema_field("label_font_size", "int", "Label font size", default = 12, min = 6, max = 30, advanced = TRUE),
+          msterp_schema_field("show_cut_lines", "bool", "Show FC cutoff lines", default = TRUE, advanced = TRUE),
+          msterp_schema_field("col_sig_up",   "string", "Color: significant up (hex)",   default = "#FF4242", advanced = TRUE),
+          msterp_schema_field("col_sig_down", "string", "Color: significant down (hex)", default = "#4245FF", advanced = TRUE),
+          msterp_schema_field("col_nonsig",   "string", "Color: non-significant (hex)",  default = "#B0B0B0", advanced = TRUE),
+          msterp_schema_field("x_axis_title", "string", "X-axis title override",
+                              default = "", advanced = TRUE,
+                              help = "Leave blank to auto-generate from mean_type and transform."),
+          msterp_schema_field("x_range_mode", "choice", "X range", default = "auto",
+                              choices = c("auto", "manual"), advanced = TRUE),
+          msterp_schema_field("x_min", "num", "X min", default = 0, advanced = TRUE),
+          msterp_schema_field("x_max", "num", "X max", default = 12, advanced = TRUE),
+          msterp_schema_field("y_range_mode", "choice", "Y range", default = "auto",
+                              choices = c("auto", "manual"), advanced = TRUE),
+          msterp_schema_field("y_min", "num", "Y min", default = -5, advanced = TRUE),
+          msterp_schema_field("y_max", "num", "Y max", default = 5, advanced = TRUE)
+        ),
+        common_style
+      ),
+      viewer_schema = list(
+        msterp_schema_field(
+          "flip_y_axis", "bool", "Flip Y axis",
+          default = FALSE,
+          help = "Negate log2 fold change (swap up/down interpretation). The axis title updates to reflect the direction."
+        ),
+        msterp_schema_field(
+          "label_targets_map", "string", "Per-plot labels (JSON)",
+          default = "{}"
+        ),
+        msterp_schema_field(
+          "highlight_groups_map", "string", "Per-plot highlight groups (JSON)",
+          default = "{}"
+        )
+      ),
+      outputs = list(
+        figures = c("ma_plot"),
+        tables = c("ma_plot_summary"),
+        interactive = TRUE,
+        plotly_allowed = TRUE,
+        default_plot_mode = "ggplot",
+        click_target = "target"
+      ),
+      render_spec = list(plots = c("ma_plot"), tables = c("ma_plot_summary"), tabs = NULL)
     ),
 
     rankplot = list(

@@ -863,16 +863,29 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     }
   }, ignoreInit = TRUE)
 
-  # Browse button for export directory — opens native folder picker
+  # Browse button for export directory — asks the WebView2 host to open a
+  # native folder picker. The R process itself has no GUI session, so
+  # utils::choose.dir() does not work inside the packaged app.
   observeEvent(input$nr_browse_export_dir, {
-    chosen <- tryCatch(utils::choose.dir(
-      default = if (nzchar(input$nr_export_dir %||% "")) input$nr_export_dir else getwd(),
-      caption = "Select export directory"
-    ), error = function(e) NA)
-    if (!is.na(chosen) && nzchar(chosen)) {
-      updateTextInput(session, "nr_export_dir", value = normalizePath(chosen, winslash = "/"))
-    }
+    session$sendCustomMessage("msterp_choose_folder",
+      list(initial = input$nr_export_dir %||% ""))
   }, ignoreInit = TRUE)
+
+  observeEvent(input$msterp_folder_chosen, {
+    payload <- input$msterp_folder_chosen
+    if (is.null(payload)) return()
+    if (isTRUE(payload$unavailable)) {
+      showNotification(
+        "Folder picker is only available in the MSTerp desktop app. Type the path instead.",
+        type = "warning"
+      )
+      return()
+    }
+    chosen <- payload$value %||% ""
+    if (!nzchar(chosen)) return()
+    updateTextInput(session, "nr_export_dir",
+      value = normalizePath(chosen, winslash = "/", mustWork = FALSE))
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
   v_terpbase <- reactive(nr_ui_validate_terpbase(terpbase_path_rx()))
   v_metabobase <- reactive(nr_ui_validate_metabobase(metabobase_path_rx()))

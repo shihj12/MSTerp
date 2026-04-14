@@ -1962,12 +1962,14 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
 #' @return Character vector of valid engine IDs
 nr_engine_ids <- function() {
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
-    "pca", "volcano", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
+    "pca", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
     "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
     "idquant_overlap", "idquant_overlap_detected", "idquant_overlap_quantified",
+    "dsilac_isotope_density_peptide", "dsilac_isotope_density_protein",
+    "dsilac_ratio_box_peptide", "dsilac_ratio_box_protein",
     "ppi_network", "multi_scatter", "multi_correlation", "multi_cross_correlation",
     "msea", "pathway_fcs", "gene_barchart", "replicate_clustering",
     "peptide_region")
@@ -1983,12 +1985,14 @@ nr_engine_ids <- function() {
 nr_implemented_engines <- function() {
   # All engines in this list have implementations in R/engines/stats/
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
-    "pca", "volcano", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
+    "pca", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
     "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
     "idquant_group", "idquant_replicate", "idquant_cv_scatter", "idquant_cv_bar",
     "idquant_overlap", "idquant_overlap_detected", "idquant_overlap_quantified",
+    "dsilac_isotope_density_peptide", "dsilac_isotope_density_protein",
+    "dsilac_ratio_box_peptide", "dsilac_ratio_box_protein",
     "ppi_network", "multi_scatter", "multi_correlation", "multi_cross_correlation",
     "msea", "pathway_fcs", "gene_barchart", "replicate_clustering",
     "peptide_region")
@@ -2135,8 +2139,14 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "spearman"      = stats_scatter_correlation_run(payload, payload$params, context),  # Legacy alias
     "hor_dis"       = stats_hor_dis_run(payload, payload$params, context),
     "vert_dis"      = stats_vert_dis_run(payload, payload$params, context),
+    "dsilac_isotope_density_peptide" = stats_dsilac_isotope_density_peptide_run(payload, payload$params, context),
+    "dsilac_isotope_density_protein" = stats_dsilac_isotope_density_protein_run(payload, payload$params, context),
+    "dsilac_ratio_box_peptide"       = stats_dsilac_ratio_box_peptide_run(payload, payload$params, context),
+    "dsilac_ratio_box_protein"       = stats_dsilac_ratio_box_protein_run(payload, payload$params, context),
     "pca"           = stats_pca_run(payload, payload$params, context),
     "volcano"       = stats_volcano_run(payload, payload$params, context),
+    "ma_plot"       = stats_ma_plot_run(payload, payload$params, context),
+    "ma_plot"       = stats_ma_plot_run(payload, payload$params, context),
     "rankplot"      = stats_rankplot_run(payload, payload$params, context),
     "goora"         = stats_goora_run(payload, payload$params, context),
     "1dgofcs"       = stats_1dgofcs_run(payload, payload$params, context),

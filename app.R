@@ -102,7 +102,8 @@ server <- function(input, output, session) {
     complexbase = NULL,
     datasets = list(),
     pipelines = list(),
-    last_run = NULL
+    last_run = NULL,
+    pending_open_file = NULL
   )
 
   current_page <- reactiveVal("home")
@@ -190,6 +191,37 @@ server <- function(input, output, session) {
   lapply(names(MSTERP_PAGES), function(pid) {
     call_page_server(MSTERP_PAGES[[pid]]$server, input, output, session, app_state)
   })
+
+  # File-association ingress — routes a file path to the appropriate page.
+  # Cold launch: MSTerp.exe foo.terpbook  → WebView2 loads ?open_file=...
+  # Warm launch (second instance): host posts Shiny.setInputValue('open_file', ...)
+  handle_open_file <- function(path) {
+    if (is.null(path) || !nzchar(path) || !file.exists(path)) return()
+    ext <- tolower(tools::file_ext(path))
+    if (ext %in% c("terpbook", "zip")) {
+      app_state$pending_open_file <- path
+      set_page("results")
+    } else {
+      showNotification(
+        paste0("Opening .", ext, " files is not yet supported."),
+        type = "warning"
+      )
+    }
+  }
+
+  # Cold launch — read ?open_file=... once the client is ready
+  observeEvent(session$clientData$url_search, {
+    qs <- session$clientData$url_search %||% ""
+    if (!nzchar(qs)) return()
+    params <- shiny::parseQueryString(qs)
+    p <- params$open_file
+    if (!is.null(p) && nzchar(p)) handle_open_file(p)
+  }, once = TRUE, ignoreInit = FALSE)
+
+  # Warm launch — second-instance pipe posts here
+  observeEvent(input$open_file, {
+    handle_open_file(input$open_file)
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
 }
 
 shinyApp(ui, server)

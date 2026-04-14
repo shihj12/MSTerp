@@ -2923,7 +2923,7 @@ page_results_ui <- function() {
 
 # ---- Server ------------------------------------------------------------------
 
-page_results_server <- function(input, output, session) {
+page_results_server <- function(input, output, session, app_state = NULL) {
 
   rv <- reactiveValues(
     exdir = NULL,
@@ -3300,20 +3300,20 @@ page_results_server <- function(input, output, session) {
     )
   })
   
-    observeEvent(input$res_load_upload, {
-    f <- input$res_terpbook_upload
-    if (is.null(f) || is.null(f$datapath) || !file.exists(f$datapath)) {
-      showNotification("Upload missing or file does not exist.", type = "error")
-      return()
+  # Core loader: extracts a .terpbook archive and populates rv.
+  # Accepts a filesystem path + display name (used by both upload and
+  # file-association ingress paths).
+  load_terpbook_from_path <- function(path, display_name) {
+    if (is.null(path) || !nzchar(path) || !file.exists(path)) {
+      showNotification("File missing or does not exist.", type = "error")
+      return(invisible(FALSE))
     }
 
-    # Clean up any previous extraction to avoid temp bloat between loads
     if (!is.null(rv$exdir) && dir.exists(rv$exdir)) {
       try(unlink(rv$exdir, recursive = TRUE, force = TRUE), silent = TRUE)
     }
     rv$exdir <- NULL
 
-    # Clear I/O caches before loading new terpbook
     if (exists("tb_cache_clear", mode = "function")) {
       tb_cache_clear()
     }
@@ -3323,7 +3323,7 @@ page_results_server <- function(input, output, session) {
 
     tryCatch({
       msterp_set_busy(session, TRUE, "Reading archive index...", percent = 10)
-      zlist <- utils::unzip(f$datapath, list = TRUE)
+      zlist <- utils::unzip(path, list = TRUE)
       znames <- as.character(zlist$Name %||% zlist[, 1, drop = TRUE])
       if (length(znames) == 0) stop("Zip index empty (archive invalid).")
 
@@ -3335,7 +3335,7 @@ page_results_server <- function(input, output, session) {
       msterp_set_busy(session, TRUE, "Extracting files...", percent = 35)
       exdir <- tempfile("terpbook_")
       dir.create(exdir, recursive = TRUE, showWarnings = FALSE)
-      utils::unzip(f$datapath, exdir = exdir, overwrite = TRUE)
+      utils::unzip(path, exdir = exdir, overwrite = TRUE)
 
       msterp_set_busy(session, TRUE, "Locating run root...", percent = 55)
       run_root <- tb_find_run_root(exdir)
@@ -3358,15 +3358,11 @@ page_results_server <- function(input, output, session) {
       rv$manifest <- man$manifest
       rv$nodes_df <- nodes
       rv$load_warnings <- man$warnings %||% character()
-      rv$pending_cluster_goora <- NULL  # Clear any pending state from previous terpbook
+      rv$pending_cluster_goora <- NULL
       rv$run_data_type <- man$manifest$data_type %||% "proteomics"
 
-      # Store the original terpbook filename (as saved in Windows)
-      rv$terpbook_filename <- f$name %||% basename(f$datapath) %||% "Unknown"
-
-      # Start with Overview as the active node
+      rv$terpbook_filename <- display_name %||% basename(path) %||% "Unknown"
       rv$active_node_id <- "overview"
-
       rv$loaded <- TRUE
 
       if (length(rv$load_warnings) > 0) {
@@ -3374,11 +3370,34 @@ page_results_server <- function(input, output, session) {
       }
 
       msterp_set_busy(session, TRUE, "Ready.", percent = 100)
-
+      invisible(TRUE)
     }, error = function(e) {
       showNotification(paste("Load failed:", conditionMessage(e)), type = "error")
+      invisible(FALSE)
     })
+  }
+
+  observeEvent(input$res_load_upload, {
+    f <- input$res_terpbook_upload
+    if (is.null(f) || is.null(f$datapath)) {
+      showNotification("Upload missing or file does not exist.", type = "error")
+      return()
+    }
+    load_terpbook_from_path(f$datapath, f$name)
   }, ignoreInit = TRUE)
+
+  # File-association ingress: app.R sets app_state$pending_open_file when a
+  # .terpbook is passed via command-line arg or second-instance pipe.
+  if (!is.null(app_state)) {
+    observeEvent(app_state$pending_open_file, {
+      path <- app_state$pending_open_file
+      if (is.null(path) || !nzchar(path)) return()
+      ext <- tolower(tools::file_ext(path))
+      if (!ext %in% c("terpbook", "zip")) return()
+      app_state$pending_open_file <- NULL
+      load_terpbook_from_path(path, basename(path))
+    }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  }
 
   
   active_node_row <- reactive({

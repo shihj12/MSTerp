@@ -341,7 +341,30 @@ public sealed partial class MainForm : Form
             case "window-close":
                 Close();
                 break;
+            default:
+                if (msg.StartsWith("choose-folder:", StringComparison.Ordinal))
+                    ShowFolderPicker(msg.Substring("choose-folder:".Length));
+                break;
         }
+    }
+
+    private void ShowFolderPicker(string initialDir)
+    {
+        BeginInvoke(() =>
+        {
+            using var dlg = new FolderBrowserDialog
+            {
+                Description = "Select folder",
+                UseDescriptionForTitle = true,
+                ShowNewFolderButton = true,
+                SelectedPath = !string.IsNullOrWhiteSpace(initialDir) && Directory.Exists(initialDir)
+                    ? initialDir
+                    : string.Empty,
+            };
+            var chosen = dlg.ShowDialog(this) == DialogResult.OK ? dlg.SelectedPath : string.Empty;
+            // Always reply so the R side can clear any pending state.
+            _webView?.CoreWebView2?.PostWebMessageAsString($"folder-chosen:{chosen}");
+        });
     }
 
     private async void OnShinyReady()

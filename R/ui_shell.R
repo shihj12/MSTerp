@@ -19,6 +19,24 @@ msterp_theme_head <- function() {
         if (t === 'dark') document.documentElement.setAttribute('data-theme','dark');
       })();
     ")),
+    tags$script(HTML("
+      // Warn user before leaving/refreshing once the app has become interactive
+      // (prevents accidental F5 / tab close from wiping in-progress work).
+      (function(){
+        var armed = false;
+        $(document).on('shiny:sessioninitialized', function(){
+          // Arm after a short delay so initial page load doesn't trigger it.
+          setTimeout(function(){ armed = true; }, 1500);
+        });
+        window.addEventListener('beforeunload', function(e){
+          if (!armed) return undefined;
+          var msg = 'Reloading will discard any in-progress work. Continue?';
+          e.preventDefault();
+          e.returnValue = msg;
+          return msg;
+        });
+      })();
+    ")),
     tags$style(HTML("
       /* === Global CSS Variables (Spec) === */
       :root {
@@ -1197,6 +1215,20 @@ msterp_theme_head <- function() {
         border: none;
       }
 
+      /* Drag-and-drop affordance for fileInput — the whole input-group
+         acts as a drop zone (handled by JS below). */
+      .msterp-wrap .shiny-input-container:has(input[type=file]) .input-group {
+        border: 1px dashed var(--border-light) !important;
+        border-radius: 8px !important;
+        padding: 2px;
+        transition: border-color var(--duration-fast) ease,
+                    background var(--duration-fast) ease;
+      }
+      .msterp-wrap .shiny-input-container.msterp-dropzone-hover .input-group {
+        border-color: var(--primary) !important;
+        background: var(--primary-light) !important;
+      }
+
       /* verbatimTextOutput — white card style */
       .msterp-wrap pre.shiny-text-output,
       .msterp-wrap .shiny-text-output {
@@ -1914,6 +1946,89 @@ msterp_theme_head <- function() {
         e.stopPropagation();
         $(this).closest('.tools-collapse-section').toggleClass('open');
       });
+
+      // Folder picker IPC — Shiny asks the WebView2 host to open a native
+      // FolderBrowserDialog; host posts back a 'folder-chosen:<path>' message.
+      Shiny.addCustomMessageHandler('msterp_choose_folder', function(payload) {
+        var initial = (payload && payload.initial) || '';
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage('choose-folder:' + initial);
+        } else {
+          // Browser / dev fallback — no native dialog available.
+          Shiny.setInputValue('msterp_folder_chosen',
+            { value: '', ts: Date.now(), unavailable: true },
+            { priority: 'event' });
+        }
+      });
+      if (window.chrome && window.chrome.webview && !window.__msterpFolderListener) {
+        window.__msterpFolderListener = true;
+        window.chrome.webview.addEventListener('message', function(e) {
+          var d = typeof e.data === 'string' ? e.data : '';
+          if (d.indexOf('folder-chosen:') === 0) {
+            Shiny.setInputValue('msterp_folder_chosen',
+              { value: d.substring('folder-chosen:'.length), ts: Date.now() },
+              { priority: 'event' });
+          }
+        });
+      }
+
+      // Drag-and-drop for all fileInput() controls.
+      // Shiny's file input only accepts drops on the Browse button; we widen
+      // the drop target to the whole .shiny-input-container.
+      (function() {
+        function findFileInput(container) {
+          return container && container.querySelector('input[type=file]');
+        }
+        function isFileContainer(el) {
+          return el && el.classList && el.classList.contains('shiny-input-container')
+                 && findFileInput(el);
+        }
+        function closestContainer(el) {
+          while (el && el !== document.body) {
+            if (isFileContainer(el)) return el;
+            el = el.parentElement;
+          }
+          return null;
+        }
+        document.addEventListener('dragover', function(e) {
+          var c = closestContainer(e.target);
+          if (!c) return;
+          e.preventDefault();
+          c.classList.add('msterp-dropzone-hover');
+        });
+        document.addEventListener('dragleave', function(e) {
+          var c = closestContainer(e.target);
+          if (!c) return;
+          // Only unhighlight when leaving the container itself
+          if (e.target === c || !c.contains(e.relatedTarget)) {
+            c.classList.remove('msterp-dropzone-hover');
+          }
+        });
+        document.addEventListener('drop', function(e) {
+          var c = closestContainer(e.target);
+          if (!c) return;
+          e.preventDefault();
+          c.classList.remove('msterp-dropzone-hover');
+          var input = findFileInput(c);
+          if (!input || !e.dataTransfer || !e.dataTransfer.files) return;
+          var files = e.dataTransfer.files;
+          if (!files.length) return;
+          // Respect single-file inputs
+          if (!input.multiple && files.length > 1) {
+            files = [files[0]];
+          }
+          // Build a DataTransfer to assign to the hidden file input,
+          // then fire 'change' so Shiny uploads it.
+          try {
+            var dt = new DataTransfer();
+            for (var i = 0; i < files.length; i++) dt.items.add(files[i]);
+            input.files = dt.files;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          } catch (err) {
+            console.warn('[msterp] drag-drop assignment failed:', err);
+          }
+        });
+      })();
 
     "))
   )
