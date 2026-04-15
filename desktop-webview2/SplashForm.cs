@@ -1,30 +1,20 @@
+using System.Drawing.Drawing2D;
+
 namespace MSTerp;
 
 /// <summary>
 /// Simple native splash screen shown while R starts up.
+/// Shows only the app logo and a circular loading indicator.
 /// </summary>
 sealed class SplashForm : Form
 {
-    private readonly Label _statusLabel;
-    private readonly Label _timerLabel;
-    private readonly Label _firstRunLabel;
-    private readonly System.Windows.Forms.Timer _timer;
-    private readonly DateTime _startTime = DateTime.UtcNow;
-
-    private static readonly (int AfterSec, string Text)[] Messages =
-    [
-        (0,  "Starting R..."),
-        (3,  "Loading packages..."),
-        (10, "Loading packages... (this may take a moment)"),
-        (30, "Still loading packages..."),
-        (60, "Almost there..."),
-    ];
+    private readonly SpinnerControl _spinner;
 
     public SplashForm()
     {
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(400, 300);
+        ClientSize = new Size(320, 320);
         BackColor = Color.FromArgb(42, 42, 42);
         ShowInTaskbar = false;
         TopMost = true;
@@ -35,90 +25,77 @@ sealed class SplashForm : Form
             try { Icon = new Icon(iconPath); } catch { }
         }
 
-        var titleLabel = new Label
+        var logo = new PictureBox
         {
-            Text = "MSTerp",
-            ForeColor = Color.White,
-            Font = new Font("Segoe UI", 18f, FontStyle.Bold),
-            AutoSize = true,
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Size = new Size(128, 128),
+            BackColor = Color.Transparent,
         };
-
-        _statusLabel = new Label
+        var logoPath = Path.Combine(AppContext.BaseDirectory, "assets", "icon.png");
+        if (File.Exists(logoPath))
         {
-            Text = "Starting R...",
-            ForeColor = Color.FromArgb(160, 160, 160),
-            Font = new Font("Segoe UI", 10f),
-            AutoSize = true,
-        };
-
-        _timerLabel = new Label
-        {
-            Text = "",
-            ForeColor = Color.FromArgb(112, 112, 112),
-            Font = new Font("Segoe UI", 8.5f),
-            AutoSize = true,
-        };
-
-        _firstRunLabel = new Label
-        {
-            Text = "",
-            ForeColor = Color.FromArgb(128, 128, 128),
-            Font = new Font("Segoe UI", 8.5f),
-            MaximumSize = new Size(320, 0),
-            AutoSize = true,
-            TextAlign = ContentAlignment.MiddleCenter,
-        };
-
-        // Layout: center everything vertically
-        titleLabel.Location = new Point((ClientSize.Width - titleLabel.PreferredWidth) / 2, 80);
-        _statusLabel.Location = new Point((ClientSize.Width - _statusLabel.PreferredWidth) / 2, 130);
-        _timerLabel.Location = new Point((ClientSize.Width - _timerLabel.PreferredWidth) / 2, 160);
-        _firstRunLabel.Location = new Point((ClientSize.Width - 320) / 2, 220);
-
-        Controls.AddRange([titleLabel, _statusLabel, _timerLabel, _firstRunLabel]);
-
-        _timer = new System.Windows.Forms.Timer { Interval = 1000 };
-        _timer.Tick += OnTick;
-        _timer.Start();
-    }
-
-    private void OnTick(object? sender, EventArgs e)
-    {
-        var elapsed = (int)(DateTime.UtcNow - _startTime).TotalSeconds;
-        _timerLabel.Text = $"{elapsed}s";
-        CenterLabel(_timerLabel);
-
-        // Update status message
-        for (int i = Messages.Length - 1; i >= 0; i--)
-        {
-            if (elapsed >= Messages[i].AfterSec)
-            {
-                _statusLabel.Text = Messages[i].Text;
-                CenterLabel(_statusLabel);
-                break;
-            }
+            try { logo.Image = Image.FromFile(logoPath); } catch { }
         }
+        logo.Location = new Point((ClientSize.Width - logo.Width) / 2, 60);
 
-        // First-run notice after 15s
-        if (elapsed >= 15 && string.IsNullOrEmpty(_firstRunLabel.Text))
+        _spinner = new SpinnerControl
         {
-            _firstRunLabel.Text = "First launch takes longer while R initializes. Subsequent launches will be much faster.";
-            CenterLabel(_firstRunLabel);
-        }
-    }
+            Size = new Size(48, 48),
+            BackColor = Color.FromArgb(42, 42, 42),
+        };
+        _spinner.Location = new Point((ClientSize.Width - _spinner.Width) / 2, 210);
 
-    private void CenterLabel(Label lbl)
-    {
-        lbl.Location = lbl.Location with { X = (ClientSize.Width - lbl.PreferredWidth) / 2 };
+        Controls.AddRange([logo, _spinner]);
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
-        {
-            _timer.Stop();
-            _timer.Dispose();
-        }
+        if (disposing) _spinner.Dispose();
         base.Dispose(disposing);
+    }
+
+    private sealed class SpinnerControl : Control
+    {
+        private readonly System.Windows.Forms.Timer _timer;
+        private float _angle;
+
+        public SpinnerControl()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw, true);
+            _timer = new System.Windows.Forms.Timer { Interval = 40 };
+            _timer.Tick += (_, _) =>
+            {
+                _angle = (_angle + 12f) % 360f;
+                Invalidate();
+            };
+            _timer.Start();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            int pad = 4;
+            var rect = new Rectangle(pad, pad, Width - 2 * pad, Height - 2 * pad);
+
+            using var track = new Pen(Color.FromArgb(70, 70, 70), 4f);
+            g.DrawEllipse(track, rect);
+
+            using var arc = new Pen(Color.FromArgb(26, 115, 232), 4f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawArc(arc, rect, _angle, 90f);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _timer.Stop();
+                _timer.Dispose();
+            }
+            base.Dispose(disposing);
+        }
     }
 }

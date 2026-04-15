@@ -2316,9 +2316,12 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
         )
       }
       
-      # Show "dSILAC" badge for engines that require SILAC data
+      # Show "dSILAC" badge for engines that require SILAC data,
+      # unless the engine label already carries the dSILAC prefix (containers).
       req <- e$requirements %||% list()
-      silac_badge <- if (isTRUE(req$requires_silac)) {
+      label_txt <- as.character(e$label %||% "")
+      label_has_dsilac <- grepl("dsilac", label_txt, ignore.case = TRUE)
+      silac_badge <- if (isTRUE(req$requires_silac) && !label_has_dsilac) {
         tags$span(class = "tf-silac-badge", "dSILAC")
       } else NULL
 

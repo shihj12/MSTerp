@@ -5028,7 +5028,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (length(wh_idx) > 0) schema <- schema[-wh_idx]
 
     view_mode_field <- NULL
-    if (eng_lower %in% c("volcano", "2dgofcs", "rankplot")) {
+    if (eng_lower %in% c("volcano", "2dgofcs", "rankplot", "idquant_id_quant")) {
       view_mode_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "view_mode"), logical(1)))
       if (length(view_mode_idx) > 0) {
         view_mode_field <- schema[[view_mode_idx[[1]]]]

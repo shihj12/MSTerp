@@ -1,16 +1,15 @@
 # =========================================================
-# R/engines/stats/ma_plot.R — MA Plot Engine
+# R/engines/stats/ma_plot.R — MA Plot Engine (FC-only)
 #
 # M (log2 fold change, y) vs A (average abundance, x) for each
-# pairwise comparison. Mirrors volcano's pairwise flow and control
-# orientation, but axes are (A, M) instead of (log2fc, -log10 p).
+# pairwise comparison. Significance is classified purely on FC cutoffs.
+# No statistical testing (no p-values, no FDR).
 # =========================================================
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
 .ma_pairwise <- function(mat, samples, grp_a, grp_b, primary_ids, display_ids,
-                         stat_mode, mean_type, a_axis_transform,
-                         apply_fdr, fc_threshold, p_threshold,
+                         mean_type, a_axis_transform, fc_threshold,
                          add_log, is_log_transformed = FALSE) {
   add_log("INFO", sprintf("--- MA comparison: %s vs %s ---", grp_a, grp_b))
 
@@ -24,18 +23,8 @@
   mat_a <- mat[, cols_a, drop = FALSE]
   mat_b <- mat[, cols_b, drop = FALSE]
 
-  stat_mode_norm <- tolower(as.character(stat_mode %||% "ttest"))
-  if (stat_mode_norm == "t_test") stat_mode_norm <- "ttest"
-
-  if (!is_log_transformed && stat_mode_norm == "limma") {
-    log_mean_a <- rowMeans(log2(mat_a + 1), na.rm = TRUE)
-    log_mean_b <- rowMeans(log2(mat_b + 1), na.rm = TRUE)
-    mean_a <- pmax(0, 2^log_mean_a - 1)
-    mean_b <- pmax(0, 2^log_mean_b - 1)
-  } else {
-    mean_a <- rowMeans(mat_a, na.rm = TRUE)
-    mean_b <- rowMeans(mat_b, na.rm = TRUE)
-  }
+  mean_a <- rowMeans(mat_a, na.rm = TRUE)
+  mean_b <- rowMeans(mat_b, na.rm = TRUE)
 
   if (is_log_transformed) {
     log2fc <- mean_b - mean_a
@@ -76,44 +65,12 @@
     stringsAsFactors = FALSE
   )
 
-  if (stat_mode_norm == "limma") {
-    if (!requireNamespace("limma", quietly = TRUE)) {
-      stop("Missing package 'limma'. Install via BiocManager::install('limma').")
-    }
-    mat_sub <- cbind(mat_a, mat_b)
-    y <- if (is_log_transformed) mat_sub else log2(mat_sub + 1)
-    grp <- factor(c(rep("A", ncol(mat_a)), rep("B", ncol(mat_b))), levels = c("A", "B"))
-    design <- stats::model.matrix(~0 + grp)
-    colnames(design) <- c("A", "B")
-    fit <- limma::lmFit(y, design)
-    contrast <- limma::makeContrasts(BvsA = B - A, levels = design)
-    fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast))
-    results$log2fc <- as.numeric(fit2$coefficients[, 1])
-    results$pval   <- as.numeric(fit2$p.value[, 1])
-    results$padj   <- p.adjust(results$pval, method = "BH")
-  } else {
-    pvals <- numeric(nrow(mat))
-    for (i in seq_len(nrow(mat))) {
-      va <- mat_a[i, ]; vb <- mat_b[i, ]
-      va <- va[is.finite(va)]; vb <- vb[is.finite(vb)]
-      if (length(va) >= 2 && length(vb) >= 2) {
-        pvals[i] <- tryCatch(t.test(va, vb, var.equal = FALSE)$p.value,
-                             error = function(e) NA_real_)
-      } else {
-        pvals[i] <- NA_real_
-      }
-    }
-    results$pval <- pvals
-    results$padj <- p.adjust(pvals, method = "BH")
-  }
-
-  valid <- is.finite(results$log2fc) & is.finite(results$a_value) & !is.na(results$pval)
+  valid <- is.finite(results$log2fc) & is.finite(results$a_value)
   results_valid <- results[valid, , drop = FALSE]
 
-  sig_values <- if (isTRUE(apply_fdr)) results_valid$padj else results_valid$pval
   fc_up <- fc_threshold[2]; fc_down <- fc_threshold[1]
-  is_up <- results_valid$log2fc >  fc_up   & sig_values < p_threshold & !is.na(sig_values)
-  is_dn <- results_valid$log2fc <  fc_down & sig_values < p_threshold & !is.na(sig_values)
+  is_up <- results_valid$log2fc >  fc_up
+  is_dn <- results_valid$log2fc <  fc_down
   results_valid$significance <- ifelse(is_up, "up", ifelse(is_dn, "down", "ns"))
 
   add_log("INFO", sprintf("  %d features, up=%d, down=%d", nrow(results_valid), sum(is_up), sum(is_dn)))
@@ -122,12 +79,11 @@
     points = results_valid[, c("primary_id", "display_id", "protein_id",
                                "gene_symbol", "gene_id",
                                "a_value", "log2fc", "mean_a", "mean_b",
-                               "pval", "padj", "significance"), drop = FALSE],
+                               "significance"), drop = FALSE],
     comparison = list(
       group_a = grp_a, group_b = grp_b,
       label = paste0(grp_b, "_vs_", grp_a),
       mean_type = mean_type, a_axis_transform = a_axis_transform,
-      apply_fdr = apply_fdr, sig_threshold = p_threshold,
       fc_threshold = fc_threshold,
       n_sig_up = sum(is_up), n_sig_down = sum(is_dn),
       n_total = nrow(results_valid)
@@ -169,15 +125,11 @@ stats_ma_plot_run <- function(payload, params = NULL, context = NULL) {
 
   ctx <- payload$data_type_context %||% msterp_data_type_context("proteomics")
 
-  stat_mode <- tolower(as.character(params$stat_mode %||% "ttest"))
-  if (stat_mode == "t_test") stat_mode <- "ttest"
   mean_type <- as.character(params$mean_type %||% "arithmetic")
   a_axis_transform <- as.character(params$a_axis_transform %||% "log2")
   is_log_transformed <- isTRUE(params$is_log_transformed)
-  apply_fdr <- if (is.null(params$apply_fdr)) TRUE else isTRUE(params$apply_fdr)
   fc_threshold <- params$fc_threshold %||% c(-1, 1)
   if (length(fc_threshold) < 2) fc_threshold <- c(-1, 1)
-  p_threshold <- as.numeric(params$p_threshold %||% 0.05)
 
   add_log("INFO", sprintf("MA plot: %d features, %d groups, mean_type=%s, A-transform=%s",
                           nrow(mat), length(groups), mean_type, a_axis_transform))
@@ -232,8 +184,7 @@ stats_ma_plot_run <- function(payload, params = NULL, context = NULL) {
         tmp <- grp_a; grp_a <- grp_b; grp_b <- tmp
       }
       res <- .ma_pairwise(mat, samples, grp_a, grp_b, primary_ids, display_ids,
-                          stat_mode, mean_type, a_axis_transform,
-                          apply_fdr, fc_threshold, p_threshold,
+                          mean_type, a_axis_transform, fc_threshold,
                           add_log, is_log_transformed)
       if (!is.null(res)) {
         comparisons[[paste0(grp_b, "_vs_", grp_a)]] <- res

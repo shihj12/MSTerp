@@ -2055,34 +2055,6 @@ tb_render_volcano <- function(results, style, meta) {
     )
   }
 
-  # Labeling: parse label_targets_map JSON keyed by comparison name
-  label_targets <- character(0)
-  targets_map_raw <- style$label_targets_map %||% "{}"
-  if (requireNamespace("jsonlite", quietly = TRUE) && is.character(targets_map_raw) && nzchar(targets_map_raw)) {
-    parsed <- tryCatch(jsonlite::fromJSON(targets_map_raw, simplifyVector = FALSE),
-                       error = function(e) list())
-    key <- if (nzchar(comp_name)) comp_name else "default"
-    ids <- parsed[[key]] %||% parsed[["_all"]] %||% character(0)
-    label_targets <- unlist(ids, use.names = FALSE)
-  }
-
-  if (length(label_targets) > 0 && requireNamespace("ggrepel", quietly = TRUE)) {
-    lbl_df <- plot_df[plot_df$primary_id %in% label_targets |
-                      plot_df$display_id %in% label_targets |
-                      plot_df$gene_symbol %in% label_targets, , drop = FALSE]
-    if (nrow(lbl_df) > 0) {
-      lbl_df$ma_label <- ifelse(!is.na(lbl_df$display_id) & nzchar(lbl_df$display_id),
-                                lbl_df$display_id, lbl_df$primary_id)
-      p <- p + ggrepel::geom_text_repel(
-        data = lbl_df, ggplot2::aes(label = ma_label),
-        size = tb_num(style$label_font_size, 12) / .pt,
-        color = "#000000", max.overlaps = Inf,
-        min.segment.length = 0,
-        inherit.aes = TRUE
-      )
-    }
-  }
-
   p
 }
 

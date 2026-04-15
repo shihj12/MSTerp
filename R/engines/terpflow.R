@@ -60,6 +60,23 @@ msterp_idquant_default_substep_engine_ids <- function() {
   )
 }
 
+msterp_dsilac_peptide_default_substep_engine_ids <- function() {
+  c(
+    "half_life",
+    "idquant_id_quant",
+    "dsilac_isotope_density_peptide",
+    "dsilac_ratio_box_peptide"
+  )
+}
+
+msterp_dsilac_protein_default_substep_engine_ids <- function() {
+  c(
+    "half_life",
+    "dsilac_isotope_density_protein",
+    "dsilac_ratio_box_protein"
+  )
+}
+
 # -----------------------------
 # Schema helpers
 # -----------------------------
@@ -579,16 +596,25 @@ msterp_terpflow_add_step <- function(flow, section_id, engine_id, registry = NUL
     if (identical(step$type, "container")) {
       step$substeps <- list()
 
-      if (identical(engine_id, "idquant")) {
-        child_eids <- msterp_idquant_default_substep_engine_ids()
+      default_eids <- if (identical(engine_id, "idquant")) {
+        msterp_idquant_default_substep_engine_ids()
+      } else if (identical(engine_id, "dsilac_peptide_analysis")) {
+        msterp_dsilac_peptide_default_substep_engine_ids()
+      } else if (identical(engine_id, "dsilac_protein_analysis")) {
+        msterp_dsilac_protein_default_substep_engine_ids()
+      } else {
+        character(0)
+      }
+
+      if (length(default_eids) > 0) {
         lock_substeps <- isTRUE(eng$locked_parent %||% FALSE)
-        for (k in seq_along(child_eids)) {
-          child_eng <- msterp_engine_get_safe(child_eids[[k]], registry)
-          if (is.null(child_eng)) stop("Unknown child engine_id: ", child_eids[[k]])
+        for (k in seq_along(default_eids)) {
+          child_eng <- msterp_engine_get_safe(default_eids[[k]], registry)
+          if (is.null(child_eng)) stop("Unknown child engine_id: ", default_eids[[k]])
           step$substeps[[k]] <- list(
             step_id = msterp_make_id("substep"),
             order = as.integer(k),
-            engine_id = child_eids[[k]],
+            engine_id = default_eids[[k]],
             type = "engine",
             enabled = TRUE,
             params = msterp_schema_defaults(child_eng$params_schema),
@@ -603,13 +629,17 @@ msterp_terpflow_add_step <- function(flow, section_id, engine_id, registry = NUL
       if (!is.null(forced_eid) && nzchar(forced_eid)) {
         forced_eng <- msterp_engine_get_safe(forced_eid, registry)
         if (!is.null(forced_eng)) {
-          step$substeps[[1]] <- list(
+          forced_params <- msterp_schema_defaults(forced_eng$params_schema)
+          forced_override <- eng$forced_final_substep_params %||% list()
+          for (nm in names(forced_override)) forced_params[[nm]] <- forced_override[[nm]]
+          forced_pos <- length(step$substeps) + 1L
+          step$substeps[[forced_pos]] <- list(
             step_id = msterp_make_id("substep"),
-            order = 1L,
+            order = as.integer(forced_pos),
             engine_id = forced_eid,
             type = "engine",
             enabled = TRUE,
-            params = msterp_schema_defaults(forced_eng$params_schema),
+            params = forced_params,
             paired = NULL,
             sequential = NULL,
             system_generated = TRUE

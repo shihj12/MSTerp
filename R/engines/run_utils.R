@@ -2146,7 +2146,6 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "pca"           = stats_pca_run(payload, payload$params, context),
     "volcano"       = stats_volcano_run(payload, payload$params, context),
     "ma_plot"       = stats_ma_plot_run(payload, payload$params, context),
-    "ma_plot"       = stats_ma_plot_run(payload, payload$params, context),
     "rankplot"      = stats_rankplot_run(payload, payload$params, context),
     "goora"         = stats_goora_run(payload, payload$params, context),
     "1dgofcs"       = stats_1dgofcs_run(payload, payload$params, context),

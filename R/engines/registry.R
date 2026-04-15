@@ -205,12 +205,14 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       type = "container",
       label = "dSILAC Peptide Analysis",
       category = "processing",
+      hide_category_badge = TRUE,
       supported_data_types = c("proteomics"),
       description = "Container for peptide-level dynamic SILAC half-life calculation; aggregates to protein-level via harmonic mean.",
       supports_sequential = FALSE,
       accepted_input_levels = c("peptide"),
       locked_parent = TRUE,
       allowed_child_engines = c("dataprocessor", "half_life", "peptide_region",
+                                "idquant_id_quant",
                                 "dsilac_isotope_density_peptide", "dsilac_ratio_box_peptide"),
       forced_final_substep_engine_id = "peptide_aggregate_to_protein",
       forced_final_substep_params = list(method = "harmonic_mean"),
@@ -220,6 +222,36 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         requires_terpbase = FALSE,
         required_ids = c(),
         analysis_levels = c("peptide"),
+        requires_silac = TRUE
+      ),
+      params_schema = list(),
+      style_schema = list(),
+      outputs = list(figures = c(), tables = c(), interactive = FALSE),
+      render_spec = list(plots = character(0), tables = character(0), tabs = NULL)
+    ),
+
+    # ----------------------------
+    # dSILAC Protein Analysis Container
+    # ----------------------------
+    dsilac_protein_analysis = list(
+      engine_id = "dsilac_protein_analysis",
+      type = "container",
+      label = "dSILAC Protein Analysis",
+      category = "processing",
+      hide_category_badge = TRUE,
+      supported_data_types = c("proteomics"),
+      description = "Container for protein-level dynamic SILAC half-life calculation with QC plots.",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein"),
+      locked_parent = TRUE,
+      allowed_child_engines = c("dataprocessor", "half_life",
+                                "dsilac_isotope_density_protein", "dsilac_ratio_box_protein"),
+      exit_level = "protein",
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("protein"),
         requires_silac = TRUE
       ),
       params_schema = list(),
@@ -265,12 +297,13 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
     # ----------------------------
     half_life = list(
       engine_id = "half_life",
-      label = "Half-Life (dSILAC)",
+      label = "Half-Life",
       category = "processing",
       supported_data_types = c("proteomics"),
       description = "Compute half-lives from dynamic SILAC Heavy/Light ratios at a single time point.",
       supports_sequential = FALSE,
       accepted_input_levels = c("protein", "peptide"),
+      picker_hidden = TRUE,
       requirements = list(
         min_groups = 1,
         requires_terpbase = FALSE,
@@ -349,6 +382,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       description = "Density / histogram of light vs heavy isotope intensities per sample group (peptide level).",
       supports_sequential = FALSE,
       accepted_input_levels = c("peptide"),
+      picker_hidden = TRUE,
       requirements = list(
         min_groups = 1,
         requires_terpbase = FALSE,
@@ -411,6 +445,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       description = "Density / histogram of light vs heavy isotope intensities per sample group (protein level).",
       supports_sequential = FALSE,
       accepted_input_levels = c("protein"),
+      picker_hidden = TRUE,
       requirements = list(
         min_groups = 1,
         requires_terpbase = FALSE,
@@ -473,6 +508,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       description = "Vertical distribution of Heavy/Light ratios per sample / group (peptide level).",
       supports_sequential = FALSE,
       accepted_input_levels = c("peptide"),
+      picker_hidden = TRUE,
       requirements = list(
         min_groups = 1,
         requires_terpbase = FALSE,
@@ -535,6 +571,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       description = "Vertical distribution of Heavy/Light ratios per sample / group (protein level).",
       supports_sequential = FALSE,
       accepted_input_levels = c("protein"),
+      picker_hidden = TRUE,
       requirements = list(
         min_groups = 1,
         requires_terpbase = FALSE,
@@ -3177,11 +3214,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       params_schema = list(
         msterp_schema_field(
-          "stat_mode", "choice", "Statistic",
-          default = "ttest", choices = c("ttest", "limma"),
-          help = "ttest: Welch t-test per feature. limma: empirical Bayes moderated t-test."
-        ),
-        msterp_schema_field(
           "control_only", "bool", "Only compare against control",
           default = FALSE,
           help = "When a control group is defined, only generate comparisons against control."
@@ -3200,20 +3232,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           help = "Log transform applied to the A (average abundance) axis."
         ),
         msterp_schema_field(
-          "apply_fdr", "bool", "Apply FDR correction",
-          default = TRUE,
-          help = "Use FDR-adjusted p-values (TRUE) or raw p-values (FALSE) for significance coloring."
-        ),
-        msterp_schema_field(
           "fc_threshold", "range", "Fold-change threshold (min, max)",
           default = c(-1, 1), min = -10, max = 10,
           help = "log2 FC cutoffs for significant up/down."
-        ),
-        msterp_schema_field(
-          "p_threshold", "choice", "p threshold",
-          default = "0.05",
-          choices = c("0.05", "0.03", "0.01", "0.005", "0.001"),
-          help = "p-value cutoff for significance classification."
         ),
         msterp_schema_field(
           "is_log_transformed", "bool", "Data is already log-transformed",
@@ -3253,14 +3274,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           "flip_y_axis", "bool", "Flip Y axis",
           default = FALSE,
           help = "Negate log2 fold change (swap up/down interpretation). The axis title updates to reflect the direction."
-        ),
-        msterp_schema_field(
-          "label_targets_map", "string", "Per-plot labels (JSON)",
-          default = "{}"
-        ),
-        msterp_schema_field(
-          "highlight_groups_map", "string", "Per-plot highlight groups (JSON)",
-          default = "{}"
         )
       ),
       outputs = list(

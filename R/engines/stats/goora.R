@@ -125,7 +125,11 @@ stats_goora_run <- function(payload, params = NULL, context = NULL) {
   background <- NULL
 
   # Allow callers to pre-build term_proteins (e.g., cluster loop optimization)
-  if (!is.null(payload$term_proteins) && length(payload$term_proteins) > 0) {
+  # Skip pre-built when user explicitly requests complex mode — pre-built term_proteins
+  # are GO-based and would otherwise silently produce GO results in complex mode.
+  use_prebuilt <- !is.null(payload$term_proteins) && length(payload$term_proteins) > 0 &&
+                  !identical(database, "complex")
+  if (use_prebuilt) {
     term_proteins <- payload$term_proteins
     term_info <- payload$term_info %||% NULL
     background <- payload$background %||% NULL
@@ -172,6 +176,20 @@ stats_goora_run <- function(payload, params = NULL, context = NULL) {
     term_info <- complexbase_get_term_info(complexbase)
 
     add_log("INFO", sprintf("Loaded %d protein complex mappings", length(term_proteins)))
+
+    # Organism mismatch warning (does not block the run)
+    cb_organism <- as.character(complexbase$organism %||% "")[1]
+    run_organism <- as.character(
+      payload$organism %||% payload$metadata$organism %||%
+      context$organism %||%
+      (payload$terpbase %||% context$terpbase)$organism %||% ""
+    )[1]
+    if (nzchar(cb_organism) && nzchar(run_organism) &&
+        !identical(tolower(cb_organism), tolower(run_organism))) {
+      add_log("WARN", sprintf(
+        "Organism mismatch: ComplexBase=%s, run=%s. Proceeding \u2014 mapping may be sparse.",
+        cb_organism, run_organism))
+    }
 
   } else if (identical(data_type, "metabolomics")) {
     # =========================================================
