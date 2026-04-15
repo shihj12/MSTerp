@@ -2169,6 +2169,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                 configs[[cfg_idx]]$name <- name_val
                 configs[[cfg_idx]]$fdr_cutoff <- input[[sprintf("%s_fdr", cfg_prefix)]] %||% configs[[cfg_idx]]$fdr_cutoff
                 configs[[cfg_idx]]$min_overlap <- input[[sprintf("%s_min_overlap", cfg_prefix)]] %||% configs[[cfg_idx]]$min_overlap
+                configs[[cfg_idx]]$database <- input[[sprintf("%s_database", cfg_prefix)]] %||% configs[[cfg_idx]]$database %||% "go"
                 configs[[cfg_idx]]$include_unique_in_sig <- isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
               }
             }
@@ -2185,6 +2186,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                 name = name_val,
                 fdr_cutoff = input[[sprintf("%s_fdr", cfg_prefix)]] %||% 0.05,
                 min_overlap = input[[sprintf("%s_min_overlap", cfg_prefix)]] %||% 3,
+                database = input[[sprintf("%s_database", cfg_prefix)]] %||% "go",
                 include_unique_in_sig = isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
               )
               cfg_idx <- cfg_idx + 1
@@ -2195,6 +2197,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                 name = "Default",
                 fdr_cutoff = 0.05,
                 min_overlap = 3,
+                database = "go",
                 include_unique_in_sig = FALSE
               ))
             }
@@ -2937,6 +2940,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
               name = "Default",
               fdr_cutoff = old_fdr,
               min_overlap = 3,
+              database = "go",
               include_unique_in_sig = old_include_unique
             )
           )
@@ -3008,6 +3012,16 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                   )
                 ),
                 div(
+                  style = "flex: 1; min-width: 140px;",
+                  selectInput(
+                    sprintf("%s_database", cfg_prefix),
+                    "Database",
+                    choices = c("Gene Ontology" = "go", "Protein Complexes" = "complex"),
+                    selected = cfg$database %||% "go",
+                    width = "100%"
+                  )
+                ),
+                div(
                   style = "flex: 2; min-width: 200px; display: flex; align-items: center; padding-top: 25px;",
                   checkboxInput(
                     sprintf("%s_include_unique", cfg_prefix),
@@ -3049,6 +3063,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
             name = sprintf("Config %d", new_idx),
             fdr_cutoff = 0.05,
             min_overlap = 3,
+            database = "go",
             include_unique_in_sig = FALSE
           )
           goora_configs_rv$map[[step_id]] <- configs

@@ -99,6 +99,11 @@ stats_hor_dis_run <- function(payload, params = NULL, context = NULL) {
         # Store unpooled values - pooling applied at render time
         vals <- grp_mean[valid]
 
+        if (length(vals) == 0) {
+          add_log("WARN", sprintf("Group '%s': no finite values, skipping", grp))
+          next
+        }
+
         values_list <- c(values_list, list(
           data.frame(
             value = vals,
@@ -125,6 +130,11 @@ stats_hor_dis_run <- function(payload, params = NULL, context = NULL) {
         vals <- vals[valid]
 
         # Store unpooled values - pooling applied at render time
+
+        if (length(vals) == 0) {
+          add_log("WARN", sprintf("Sample '%s': no finite values, skipping", col))
+          next
+        }
 
         rep_num <- s$replicate
         if (is.null(rep_num) || is.na(rep_num)) rep_num <- i

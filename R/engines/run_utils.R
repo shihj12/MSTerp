@@ -1096,7 +1096,8 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
                   global_params,
                   list(
                     fdr_cutoff = cfg$fdr_cutoff %||% 0.05,
-                    min_overlap = cfg$min_overlap %||% 3
+                    min_overlap = cfg$min_overlap %||% 3,
+                    database = cfg$database %||% "go"
                   )
                 )
 
@@ -1162,7 +1163,8 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
               global_params,
               list(
                 fdr_cutoff = cfg$fdr_cutoff %||% 0.05,
-                min_overlap = cfg$min_overlap %||% 3
+                min_overlap = cfg$min_overlap %||% 3,
+                database = cfg$database %||% "go"
               )
             )
 

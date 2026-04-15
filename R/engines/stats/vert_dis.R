@@ -96,6 +96,11 @@ stats_vert_dis_run <- function(payload, params = NULL, context = NULL) {
         grp_mean <- rowMeans(mat[, grp_cols, drop = FALSE], na.rm = TRUE)
         valid <- !is.na(grp_mean) & is.finite(grp_mean)
 
+        if (!any(valid)) {
+          add_log("WARN", sprintf("Group '%s': no finite values, skipping", grp))
+          next
+        }
+
         values_list <- c(values_list, list(
           data.frame(
             value = grp_mean[valid],
@@ -119,6 +124,11 @@ stats_vert_dis_run <- function(payload, params = NULL, context = NULL) {
 
         vals <- mat[, col]
         valid <- !is.na(vals) & is.finite(vals)
+
+        if (!any(valid)) {
+          add_log("WARN", sprintf("Sample '%s': no finite values, skipping", col))
+          next
+        }
 
         rep_num <- s$replicate
         if (is.null(rep_num) || is.na(rep_num)) rep_num <- i
