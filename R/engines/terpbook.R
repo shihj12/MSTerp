@@ -1996,29 +1996,52 @@ tb_render_volcano <- function(results, style, meta) {
     plot_df <- plot_df[plot_df$significance %in% c("up", "down"), , drop = FALSE]
   }
 
+  # Viewer-time A-axis transform: recompute from raw mean_a / mean_b if present.
+  a_transform <- style$a_axis_transform %||% comp_info$a_axis_transform %||% "log2"
+  mean_type   <- comp_info$mean_type %||% "arithmetic"
+  if (all(c("mean_a", "mean_b") %in% names(plot_df))) {
+    ma <- plot_df$mean_a
+    mb <- plot_df$mean_b
+    if (identical(mean_type, "harmonic")) {
+      safe_a <- ifelse(ma > 0, ma, NA_real_)
+      safe_b <- ifelse(mb > 0, mb, NA_real_)
+      a_raw <- 2 / (1 / safe_a + 1 / safe_b)
+    } else {
+      a_raw <- (ma + mb) / 2
+    }
+    if (identical(a_transform, "log2")) {
+      a_raw[!is.na(a_raw) & a_raw <= 0] <- NA_real_
+      plot_df$a_value <- log2(a_raw)
+    } else if (identical(a_transform, "log10")) {
+      a_raw[!is.na(a_raw) & a_raw <= 0] <- NA_real_
+      plot_df$a_value <- log10(a_raw)
+    } else {
+      plot_df$a_value <- a_raw
+    }
+    plot_df <- plot_df[is.finite(plot_df$a_value), , drop = FALSE]
+  }
+
   color_map <- c(up = col_up, down = col_down, ns = col_ns)
 
-  # Axis titles
-  a_transform <- comp_info$a_axis_transform %||% "log2"
-  mean_type   <- comp_info$mean_type %||% "arithmetic"
+  # Axis titles — subscript formatting for log2 / log10
   a_mean_label <- switch(mean_type, "harmonic" = "harmonic mean", "arithmetic mean")
   a_title <- if (nzchar(style$x_axis_title %||% "")) {
     style$x_axis_title
   } else if (identical(a_transform, "log2")) {
-    sprintf("log2(%s)", a_mean_label)
+    bquote(log[2] * "(" * .(a_mean_label) * ")")
   } else if (identical(a_transform, "log10")) {
-    sprintf("log10(%s)", a_mean_label)
+    bquote(log[10] * "(" * .(a_mean_label) * ")")
   } else {
     sprintf("%s abundance", tools::toTitleCase(a_mean_label))
   }
 
   grp_a <- comp_info$group_a %||% "A"
   grp_b <- comp_info$group_b %||% "B"
-  # Y-axis title reflects flip state
+  # Y-axis title reflects flip state (always log2 fold change)
   y_title <- if (flip_y) {
-    sprintf("log2(%s / %s)", grp_a, grp_b)
+    bquote(log[2] * "(" * .(grp_a) * " / " * .(grp_b) * ")")
   } else {
-    sprintf("log2(%s / %s)", grp_b, grp_a)
+    bquote(log[2] * "(" * .(grp_b) * " / " * .(grp_a) * ")")
   }
 
   p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = a_value, y = log2fc, color = significance)) +
@@ -2027,7 +2050,8 @@ tb_render_volcano <- function(results, style, meta) {
     ggplot2::scale_color_manual(values = color_map,
                                 breaks = c("up", "ns", "down"),
                                 labels = c(up = "Up", ns = "NS", down = "Down"),
-                                drop = FALSE) +
+                                drop = FALSE,
+                                guide = "none") +
     ggplot2::labs(
       title = if (nzchar(comp_name)) comp_name else NULL,
       x = a_title, y = y_title, color = NULL
@@ -2257,7 +2281,7 @@ tb_render_goora <- function(results, style, meta) {
     alpha <- tb_num(style$alpha, 0.8)
     fdr_palette <- style$fdr_palette %||% "yellow_cap"
     flip_axis <- isTRUE(style$flip_axis %||% FALSE)
-    x_axis_metric <- style$x_axis_metric %||% "fold_enrichment"
+    x_axis_metric <- style$x_axis_metric %||% "neglog10_fdr"
 
     # Color mode
     cm <- style$color_mode %||% "fdr"
@@ -2328,9 +2352,16 @@ tb_render_goora <- function(results, style, meta) {
         }
       }
 
+      # Query count subtitle
+      show_query_count <- isTRUE(style$show_query_count %||% TRUE)
+      n_query <- results$data$query_info$n_query %||% NA_integer_
+      subtitle_text <- if (show_query_count && is.finite(as.numeric(n_query))) {
+        sprintf("n = %d", as.integer(n_query))
+      } else NULL
+
       # FIX: font_size now applies to term labels AND axis titles
       p <- p +
-        ggplot2::labs(x = x_label, y = NULL) +
+        ggplot2::labs(x = x_label, y = NULL, subtitle = subtitle_text) +
         tb_theme_base(axis_text_size, axis_style = style$axis_style %||% "clean") +
         ggplot2::theme(
           axis.text.y = ggplot2::element_text(size = font_size),
@@ -2352,10 +2383,12 @@ tb_render_goora <- function(results, style, meta) {
   plot_type <- style$plot_type %||% "bar"
   all_plots <- list()
   all_tables <- list()
+  multi_n_query <- results$data$query_info$n_query %||% NA_integer_
 
   for (tab in available_tabs) {
     tab_data <- data_obj[[tab]]
-    rendered <- tb_render_go_tab(tab, tab_data, style, plot_type, meta)
+    rendered <- tb_render_go_tab(tab, tab_data, style, plot_type, meta,
+                                 n_query = multi_n_query)
 
     for (pn in names(rendered$plots)) {
       all_plots[[pn]] <- rendered$plots[[pn]]
@@ -2576,7 +2609,7 @@ tb_render_subloc <- function(results, style, meta) {
 # ---- GO/Complex enrichment with BP/MF/CC or CORUM/ComplexPortal tabs ----------------------------------------
 
 tb_render_go_tab <- function(tab_name, tab_data, style, plot_type = "bar", meta = NULL,
-                             is_fcs = FALSE, score_label = NULL) {
+                             is_fcs = FALSE, score_label = NULL, n_query = NA_integer_) {
   # Render a single enrichment tab (GO: BP/MF/CC or Complex: CORUM/ComplexPortal)
   # is_fcs: if TRUE, force score axis to [-1, 1] with specific tick labels
   # score_label: custom x-axis label (e.g., "PC1", "log2(BafA1/Control)"), NULL uses default
@@ -2699,7 +2732,7 @@ tb_render_go_tab <- function(tab_name, tab_data, style, plot_type = "bar", meta 
   alpha <- tb_num(style$alpha, 0.8)
   fdr_palette <- style$fdr_palette %||% "yellow_cap"
   flip_axis <- isTRUE(style$flip_axis %||% FALSE)
-  x_axis_metric <- style$x_axis_metric %||% "fold_enrichment"
+  x_axis_metric <- style$x_axis_metric %||% "neglog10_fdr"
 
   # Color mode
   cm <- style$color_mode %||% "fdr"
@@ -2801,8 +2834,13 @@ tb_render_go_tab <- function(tab_name, tab_data, style, plot_type = "bar", meta 
     } else {
       ora_x_label
     }
+    # Query count subtitle (ORA only; FCS uses full ranked list)
+    show_query_count <- isTRUE(style$show_query_count %||% TRUE)
+    subtitle_text <- if (!is_fcs && show_query_count && is.finite(as.numeric(n_query))) {
+      sprintf("n = %d", as.integer(n_query))
+    } else NULL
     p <- p +
-      ggplot2::labs(x = x_axis_label, y = NULL) +
+      ggplot2::labs(x = x_axis_label, y = NULL, subtitle = subtitle_text) +
       tb_theme_base(axis_text_size, axis_style = style$axis_style %||% "clean") +
       ggplot2::theme(
         axis.text.y = ggplot2::element_text(size = font_size),
@@ -4115,7 +4153,11 @@ tb_render_idquant_cv <- function(results, style, meta) {
   point_size <- suppressWarnings(as.numeric(style$point_size %||% 1.5))
   if (!is.finite(point_size) || point_size <= 0) point_size <- 1.5
 
-  threshold_show <- isTRUE(style$threshold_show %||% TRUE)
+  vthreshold_show <- isTRUE(style$vthreshold_show %||% FALSE)
+  vthreshold_x <- suppressWarnings(as.numeric(style$vthreshold_x %||% 3))
+  if (!is.finite(vthreshold_x)) vthreshold_x <- 3
+  smooth_show <- isTRUE(style$smooth_show %||% TRUE)
+  show_below_count <- isTRUE(style$show_below_count %||% TRUE)
   threshold_color <- as.character(style$threshold_color %||% "gray60")
   threshold_width <- suppressWarnings(as.numeric(style$threshold_width %||% 0.5))
   if (!is.finite(threshold_width) || threshold_width < 0) threshold_width <- 0.5
@@ -4146,12 +4188,30 @@ tb_render_idquant_cv <- function(results, style, meta) {
       ggplot2::geom_point(alpha = point_alpha, size = point_size, color = flat_color, show.legend = FALSE)
   }
 
-  if (threshold_show) {
-    p <- p + ggplot2::geom_hline(
-      yintercept = cv_threshold,
+  if (vthreshold_show && identical(x_axis_mode, "abundance")) {
+    p <- p + ggplot2::geom_vline(
+      xintercept = vthreshold_x,
       color = threshold_color,
       linetype = threshold_linetype,
       linewidth = threshold_width
+    )
+  }
+
+  if (smooth_show) {
+    p <- p + ggplot2::geom_smooth(
+      method = "loess", formula = y ~ x, se = FALSE,
+      color = "black", linewidth = 0.7, show.legend = FALSE,
+      inherit.aes = FALSE,
+      mapping = ggplot2::aes(x = !!rlang::sym(x_col), y = cv_pct),
+      data = df_plot
+    )
+  }
+
+  if (show_below_count && vthreshold_show && identical(x_axis_mode, "abundance")) {
+    n_below <- sum(df_plot$abundance < vthreshold_x, na.rm = TRUE)
+    p <- p + ggplot2::annotate(
+      "text", x = -Inf, y = Inf, hjust = -0.1, vjust = 1.4,
+      label = sprintf("n < %.2g: %d", vthreshold_x, n_below), size = 4
     )
   }
 
@@ -4713,9 +4773,13 @@ tb_render_hor_dis <- function(results, style, meta) {
       group_colors <- c(group_colors, auto_colors)
     }
   } else {
-    # Fallback to auto-generated colors
-    group_colors <- scales::hue_pal()(n_original_groups)
-    names(group_colors) <- original_group_levels
+    # Fallback to auto-generated colors; guard against empty factor levels
+    if (n_original_groups < 1 || length(original_group_levels) == 0) {
+      group_colors <- c(`(all)` = "#808080")
+    } else {
+      group_colors <- scales::hue_pal()(n_original_groups)
+      names(group_colors) <- original_group_levels
+    }
   }
 
   # For all_reps and within_groups modes, create replicate-level series
@@ -5233,9 +5297,13 @@ tb_render_vert_dis <- function(results, style, meta) {
       group_colors <- c(group_colors, auto_colors)
     }
   } else {
-    # Fallback to auto-generated colors
-    group_colors <- scales::hue_pal()(n_original_groups)
-    names(group_colors) <- original_group_levels
+    # Fallback to auto-generated colors; guard against empty factor levels
+    if (n_original_groups < 1 || length(original_group_levels) == 0) {
+      group_colors <- c(`(all)` = "#808080")
+    } else {
+      group_colors <- scales::hue_pal()(n_original_groups)
+      names(group_colors) <- original_group_levels
+    }
   }
 
   # For all_reps and within_groups modes, create replicate-level series
@@ -6706,6 +6774,7 @@ tb_render_msea <- function(results, style, meta) {
   alpha <- tb_num(style$alpha, 0.8)
   fdr_palette <- style$fdr_palette %||% "yellow_cap"
   flip_axis <- isTRUE(style$flip_axis %||% FALSE)
+  x_axis_metric <- style$x_axis_metric %||% "neglog10_fdr"
 
   cm <- style$color_mode %||% "fdr"
   use_flat_color <- (cm == "flat")
@@ -6721,28 +6790,44 @@ tb_render_msea <- function(results, style, meta) {
     df_plot <- df_plot[seq_len(max_terms), , drop = FALSE]
   }
 
-  # Order by fold_enrichment for display
-  df_plot$pathway_name <- factor(df_plot$pathway_name, levels = unique(df_plot$pathway_name[order(df_plot$fold_enrichment)]))
+  # Compute x-axis value based on selected metric
+  if (x_axis_metric == "neglog10_fdr") {
+    df_plot$x_value <- df_plot$neglog10_fdr
+    x_label <- "-log10(FDR)"
+  } else {
+    df_plot$x_value <- df_plot$fold_enrichment
+    x_label <- "Fold Enrichment"
+  }
+
+  # Order by x_value for display
+  df_plot$pathway_name <- factor(df_plot$pathway_name, levels = unique(df_plot$pathway_name[order(df_plot$x_value)]))
 
   # Build plot
   if (plot_type == "dot") {
-    p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = fold_enrichment, y = pathway_name, size = n))
+    p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = x_value, y = pathway_name, size = n))
     if (use_flat_color) {
       p <- p + ggplot2::geom_point(color = flat_color, alpha = alpha)
     } else {
       p <- p + ggplot2::geom_point(ggplot2::aes(color = fdr), alpha = alpha) +
         tb_fdr_scale("color", df_plot$fdr, palette = fdr_palette)
     }
-    p <- p + ggplot2::labs(x = "Fold Enrichment", y = NULL, size = "Count", color = "-log10(FDR)")
+    p <- p + ggplot2::labs(x = x_label, y = NULL, size = "Count", color = "-log10(FDR)")
   } else {
-    p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = fold_enrichment, y = pathway_name))
+    p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = x_value, y = pathway_name))
     if (use_flat_color) {
       p <- p + ggplot2::geom_col(fill = flat_color, alpha = alpha)
     } else {
       p <- p + ggplot2::geom_col(ggplot2::aes(fill = fdr), alpha = alpha) +
         tb_fdr_scale("fill", df_plot$fdr, palette = fdr_palette)
     }
-    p <- p + ggplot2::labs(x = "Fold Enrichment", y = NULL, fill = "-log10(FDR)")
+    p <- p + ggplot2::labs(x = x_label, y = NULL, fill = "-log10(FDR)")
+  }
+
+  # Query count subtitle
+  show_query_count <- isTRUE(style$show_query_count %||% TRUE)
+  n_query <- results$data$query_count %||% results$data$query_info$n_query %||% NA_integer_
+  if (show_query_count && is.finite(as.numeric(n_query))) {
+    p <- p + ggplot2::labs(subtitle = sprintf("n = %d", as.integer(n_query)))
   }
 
   p <- p + ggplot2::theme_minimal(base_size = font_size) +
@@ -7287,124 +7372,6 @@ tb_render_half_life <- function(results, style, meta) {
     ))
   }
 
-  plots <- list()
-  qc <- data$qc
-  w <- as.numeric(style$width %||% 7)
-  h <- as.numeric(style$height %||% 5)
-
-  # 1. H:L Ratio Distribution (log2 scale)
-  if (!is.null(qc$ratio_data)) {
-    ratio_long <- data.frame(
-      value = as.vector(qc$ratio_data),
-      replicate = rep(colnames(qc$ratio_data), each = nrow(qc$ratio_data)),
-      stringsAsFactors = FALSE
-    )
-    ratio_long <- ratio_long[!is.na(ratio_long$value) & ratio_long$value > 0, , drop = FALSE]
-
-    if (nrow(ratio_long) > 0) {
-      bins <- as.integer(style$ratio_hist_bins %||% 50)
-      p1 <- ggplot2::ggplot(ratio_long, ggplot2::aes(x = log2(.data$value), fill = .data$replicate)) +
-        ggplot2::geom_histogram(bins = bins, alpha = 0.6, position = "identity") +
-        ggplot2::labs(title = "H/L Ratio Distribution (log2)", x = "log2(H/L)", y = "Count") +
-        ggplot2::theme_minimal() +
-        ggplot2::theme(legend.position = "bottom")
-      plots$ratio_distribution <- p1
-    }
-  }
-
-  # 2. Half-Life Distribution (log2 scale)
-  if (!is.null(qc$halflife_data)) {
-    hl_long <- data.frame(
-      value = as.vector(qc$halflife_data),
-      stringsAsFactors = FALSE
-    )
-    hl_long <- hl_long[!is.na(hl_long$value) & hl_long$value > 0, , drop = FALSE]
-
-    if (nrow(hl_long) > 0) {
-      bins <- as.integer(style$halflife_hist_bins %||% 50)
-      time_unit <- qc$time_unit %||% "hour"
-      p2 <- ggplot2::ggplot(hl_long, ggplot2::aes(x = log2(.data$value))) +
-        ggplot2::geom_histogram(bins = bins, fill = "#4A90D9", alpha = 0.8) +
-        ggplot2::labs(
-          title = "Half-Life Distribution (log2)",
-          x = sprintf("log2(half-life) [%ss]", time_unit),
-          y = "Count"
-        ) +
-        ggplot2::theme_minimal()
-      plots$halflife_histogram <- p2
-    }
-  }
-
-  # 3. Replicate Concordance (if >= 2 replicates)
-  # For 2 replicates: single scatter plot. For 3+: correlation matrix heatmap + pairwise scatters.
-  if (!is.null(qc$halflife_data) && ncol(qc$halflife_data) >= 2) {
-    n_reps <- ncol(qc$halflife_data)
-    rep_names <- colnames(qc$halflife_data)
-    log2_hl <- log2(qc$halflife_data)
-
-    if (n_reps == 2) {
-      # Simple pairwise scatter for exactly 2 replicates
-      rep1 <- log2_hl[, 1]
-      rep2 <- log2_hl[, 2]
-      valid <- !is.na(rep1) & !is.na(rep2) & is.finite(rep1) & is.finite(rep2)
-
-      if (sum(valid) > 2) {
-        conc_df <- data.frame(rep1 = rep1[valid], rep2 = rep2[valid], stringsAsFactors = FALSE)
-        r_val <- cor(conc_df$rep1, conc_df$rep2, use = "complete.obs")
-
-        p3 <- ggplot2::ggplot(conc_df, ggplot2::aes(x = .data$rep1, y = .data$rep2)) +
-          ggplot2::geom_point(alpha = 0.3, size = 0.8, color = "#333333") +
-          ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-          ggplot2::labs(
-            title = sprintf("Replicate Concordance (R = %.3f)", r_val),
-            x = sprintf("log2(t\u00BD) %s", rep_names[1]),
-            y = sprintf("log2(t\u00BD) %s", rep_names[2])
-          ) +
-          ggplot2::theme_minimal()
-        plots$replicate_concordance <- p3
-      }
-    } else {
-      # 3+ replicates: correlation matrix heatmap of all pairwise comparisons
-      cor_mat <- matrix(NA_real_, nrow = n_reps, ncol = n_reps,
-                        dimnames = list(rep_names, rep_names))
-      for (ri in seq_len(n_reps)) {
-        for (rj in seq_len(n_reps)) {
-          v1 <- log2_hl[, ri]
-          v2 <- log2_hl[, rj]
-          valid <- !is.na(v1) & !is.na(v2) & is.finite(v1) & is.finite(v2)
-          if (sum(valid) > 2) {
-            cor_mat[ri, rj] <- cor(v1[valid], v2[valid])
-          }
-        }
-      }
-
-      # Melt the correlation matrix for ggplot heatmap
-      cor_long <- data.frame(
-        x = rep(rep_names, each = n_reps),
-        y = rep(rep_names, times = n_reps),
-        r = as.vector(cor_mat),
-        stringsAsFactors = FALSE
-      )
-      cor_long$x <- factor(cor_long$x, levels = rep_names)
-      cor_long$y <- factor(cor_long$y, levels = rev(rep_names))
-
-      p3 <- ggplot2::ggplot(cor_long, ggplot2::aes(x = .data$x, y = .data$y, fill = .data$r)) +
-        ggplot2::geom_tile(color = "white", linewidth = 0.5) +
-        ggplot2::geom_text(ggplot2::aes(label = sprintf("%.3f", .data$r)),
-                           size = 3, color = "black") +
-        ggplot2::scale_fill_gradient2(low = "#d73027", mid = "#ffffbf", high = "#1a9850",
-                                      midpoint = 0.5, limits = c(0, 1), name = "R") +
-        ggplot2::labs(
-          title = "Replicate Concordance (Pairwise Correlation)",
-          x = NULL, y = NULL
-        ) +
-        ggplot2::theme_minimal() +
-        ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-      plots$replicate_concordance <- p3
-    }
-  }
-
-  # Summary table
   half_life_log <- data$half_life_log
   if (is.null(half_life_log) || !is.data.frame(half_life_log)) {
     half_life_log <- data.frame(
@@ -7413,7 +7380,7 @@ tb_render_half_life <- function(results, style, meta) {
   }
 
   list(
-    plots = plots,
+    plots = list(),
     tables = list(half_life_log = half_life_log)
   )
 }
@@ -8432,11 +8399,12 @@ tb_render_heatmap <- function(results, style, context = NULL) {
       }
       return(grDevices::colorRampPalette(c("#440154", "#21908C", "#FDE725"))(n))
     }
+    # Convention: blue = low, red = high for signed diverging palettes
     if (identical(name, "RdBu")) {
-      return(grDevices::colorRampPalette(c("#B2182B", "#F7F7F7", "#2166AC"))(n))
+      return(grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n))
     }
     if (identical(name, "RdYlBu")) {
-      return(grDevices::colorRampPalette(c("#D73027", "#FFFFBF", "#4575B4"))(n))
+      return(grDevices::colorRampPalette(c("#4575B4", "#FFFFBF", "#D73027"))(n))
     }
     if (identical(name, "Blues")) {
       return(grDevices::colorRampPalette(c("#EFF3FF", "#2171B5"))(n))
@@ -8445,7 +8413,7 @@ tb_render_heatmap <- function(results, style, context = NULL) {
       return(grDevices::colorRampPalette(c("#FEE0D2", "#A50F15"))(n))
     }
     if (identical(name, "PuOr")) {
-      return(grDevices::colorRampPalette(c("#B35806", "#F7F7F7", "#542788"))(n))
+      return(grDevices::colorRampPalette(c("#542788", "#F7F7F7", "#B35806"))(n))
     }
     grDevices::colorRampPalette(c("#2c7bb6", "#ffffbf", "#d7191c"))(n)
   }

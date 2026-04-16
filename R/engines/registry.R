@@ -345,27 +345,15 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           help = "Remove H/L ratios above this threshold before computing half-lives."
         )
       ),
-      style_schema = c(
-        mk_style(width = 7, height = 5, axis_text_size = 14),
-        list(
-          msterp_schema_field(
-            "ratio_hist_bins", "int", "Ratio histogram bins",
-            default = 50, min = 10, max = 200
-          ),
-          msterp_schema_field(
-            "halflife_hist_bins", "int", "Half-life histogram bins",
-            default = 50, min = 10, max = 200
-          )
-        )
-      ),
+      style_schema = mk_style(width = 7, height = 5, axis_text_size = 14),
       viewer_schema = list(),
       outputs = list(
-        figures = c("ratio_distribution", "halflife_histogram", "replicate_concordance"),
+        figures = character(0),
         tables = c("half_life_log"),
         interactive = FALSE
       ),
       render_spec = list(
-        plots = c("ratio_distribution", "halflife_histogram", "replicate_concordance"),
+        plots = character(0),
         tables = c("half_life_log"),
         tabs = NULL
       )
@@ -1011,15 +999,34 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             advanced = TRUE
           ),
           msterp_schema_field(
-            "cv_threshold", "num", "CV% threshold",
+            "cv_threshold", "num", "CV% threshold (legacy)",
             default = 30, min = 0, max = 200,
-            help = "Highlight/filter proteins with CV% above this threshold.",
+            help = "Legacy CV% threshold (kept for label list ordering).",
+            advanced = TRUE,
+            hidden = TRUE
+          ),
+          msterp_schema_field(
+            "smooth_show", "bool", "Show LOESS trend",
+            default = TRUE,
+            help = "Show a LOESS-fit trend curve across the scatter.",
             advanced = TRUE
           ),
           msterp_schema_field(
-            "threshold_show", "bool", "Show threshold line",
+            "vthreshold_show", "bool", "Show vertical threshold",
             default = FALSE,
-            help = "Show the horizontal CV% threshold line on the scatter plot.",
+            help = "Show a vertical dashed line at the chosen X-axis value.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "vthreshold_x", "num", "Threshold X",
+            default = 3, min = 0, max = 30,
+            help = "X-axis value (abundance) where the vertical threshold line is drawn.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_below_count", "bool", "Show count below threshold",
+            default = TRUE,
+            help = "Annotate the plot with how many points fall below the vertical threshold.",
             advanced = TRUE
           ),
           msterp_schema_field(
@@ -3226,12 +3233,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           help = "How to combine the two group means into the A (x-axis) value."
         ),
         msterp_schema_field(
-          "a_axis_transform", "choice", "A-axis transform",
-          default = "log2",
-          choices = c("none", "log2", "log10"),
-          help = "Log transform applied to the A (average abundance) axis."
-        ),
-        msterp_schema_field(
           "fc_threshold", "range", "Fold-change threshold (min, max)",
           default = c(-1, 1), min = -10, max = 10,
           help = "log2 FC cutoffs for significant up/down."
@@ -3245,6 +3246,12 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       style_schema = c(
         list(
+          msterp_schema_field(
+            "a_axis_transform", "choice", "A-axis transform",
+            default = "log2",
+            choices = c("none", "log2", "log10"),
+            help = "Log transform applied to the A (average abundance) axis. Change in the viewer to re-render without recomputing."
+          ),
           msterp_schema_field("label_mode", "choice", "Label mode",
                               default = "color_sig",
                               choices = c("color_sig", "hide_nonsig"),
@@ -3477,9 +3484,15 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field("font_size", "int", "Font size", default = 14, min = 6, max = 30, advanced = TRUE),
           msterp_schema_field(
             "x_axis_metric", "choice", "X-axis metric",
-            default = "fold_enrichment",
+            default = "neglog10_fdr",
             choices = c("fold_enrichment", "neglog10_fdr"),
             choice_labels = c("Fold Enrichment", "-log10(FDR)"),
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_query_count", "bool", "Show query count (n =)",
+            default = TRUE,
+            help = "Display 'n = <count>' as a subtitle showing how many query genes were analyzed.",
             advanced = TRUE
           )
         ),
@@ -4112,6 +4125,19 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                             default = FALSE, advanced = TRUE),
         msterp_schema_field("font_size", "int", "Font size",
                             default = 14, min = 6, max = 30, advanced = TRUE),
+        msterp_schema_field(
+          "x_axis_metric", "choice", "X-axis metric",
+          default = "neglog10_fdr",
+          choices = c("fold_enrichment", "neglog10_fdr"),
+          choice_labels = c("Fold Enrichment", "-log10(FDR)"),
+          advanced = TRUE
+        ),
+        msterp_schema_field(
+          "show_query_count", "bool", "Show query count (n =)",
+          default = TRUE,
+          help = "Display 'n = <count>' as a subtitle showing how many query metabolites were analyzed.",
+          advanced = TRUE
+        ),
         msterp_schema_field("axis_text_size", "int", "Axis text size",
                             default = 20, min = 6, max = 40, advanced = TRUE),
         msterp_schema_field("width", "num", "Plot width (in)",

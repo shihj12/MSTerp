@@ -1923,7 +1923,7 @@ page_results_ui <- function() {
         .res-right-mini .selectize-dropdown { font-size: 12px; }
         .res-right-mini .res-switch-row { margin: 4px 0; }
         .res-right-mini label { font-size: 11px; margin-bottom: 2px; }
-        .res-right-style { flex: 1 1 auto; min-height: 0; }
+        .res-right-style { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
         .res-style-controls { flex: 1 1 auto; min-height: 0; padding: 10px; overflow: auto; }
         
         /* --- Toggle switch ------------------------------------------------ */
@@ -9094,7 +9094,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       } else if (eng == "2dgofcs") {
         if ("fdr" %in% names(tbl_df_raw)) "fdr" else NULL
       } else {
-        x_metric <- active_effective_state()$style$x_axis_metric %||% "fold_enrichment"
+        x_metric <- active_effective_state()$style$x_axis_metric %||% "neglog10_fdr"
         if (x_metric == "neglog10_fdr" && "fdr" %in% names(tbl_df_raw)) "fdr"
         else if ("fold_enrichment" %in% names(tbl_df_raw)) "fold_enrichment"
         else NULL

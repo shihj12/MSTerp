@@ -3829,11 +3829,10 @@ nr_execute_run <- function(formatted_path,
         ctx$n_groups <- length(results$data$groups)
       }
 
-      # After half-life computation, data is no longer paired H/L — clear the SILAC flag
-      # so downstream engines don't incorrectly treat it as SILAC data
-      ctx$is_silac <- FALSE
-
-      nr_log(run_root, sprintf("  Context updated (half_life): %d rows x %d cols, %d groups (is_silac cleared)",
+      # Keep ctx$is_silac = TRUE here so later substeps within the same dSILAC
+      # container (e.g. isotope density, H/L ratio box) can still read SILAC data.
+      # The container wrapper clears the flag after its substep loop ends.
+      nr_log(run_root, sprintf("  Context updated (half_life): %d rows x %d cols, %d groups",
                                 nrow(ctx$mat), ncol(ctx$mat), ctx$n_groups))
     }
 
@@ -3908,6 +3907,15 @@ nr_execute_run <- function(formatted_path,
             system_generated = isTRUE(ss$system_generated %||% FALSE)
           )
         )
+      }
+
+      # After all substeps of this container finish, clear SILAC flag if the
+      # container converted paired H/L ratios into a single-channel output
+      # (e.g. dsilac_peptide_analysis runs half_life then dSILAC QC substeps).
+      sub_engine_ids <- vapply(subs, function(ss) as.character(ss$engine_id %||% ""), character(1))
+      if (isTRUE(ctx$is_silac) && "half_life" %in% sub_engine_ids) {
+        ctx$is_silac <- FALSE
+        nr_log(run_root, "  Container exit: is_silac cleared (half_life substep ran)")
       }
 
       container_results <- list(

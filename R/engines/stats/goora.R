@@ -156,7 +156,7 @@ stats_goora_run <- function(payload, params = NULL, context = NULL) {
             stringsAsFactors = FALSE
           ),
           log = data.frame(time = format(Sys.time()), level = "ERROR",
-                           message = "Complex enrichment requires complexbase",
+                           message = "Complex enrichment requested (database=\"complex\") but no ComplexBase is loaded. Select a species on New Run so the matched ComplexBase is available.",
                            stringsAsFactors = FALSE)
         )
       ))

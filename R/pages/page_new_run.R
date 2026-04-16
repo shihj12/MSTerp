@@ -827,6 +827,40 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     }
   })
 
+  # Species pairing: picking a species auto-sets both TerpBase and ComplexBase
+  # default-path inputs to the matched files for that species.
+  observeEvent(input$nr_species, {
+    sp <- input$nr_species
+    if (is.null(sp) || !nzchar(sp)) return()
+    pairs <- tools_species_pairs()
+    pair <- pairs[[sp]]
+    if (is.null(pair)) return()
+    if (!is.na(pair$terpbase) && nzchar(pair$terpbase)) {
+      updateRadioButtons(session, "nr_terpbase_default_path", selected = pair$terpbase)
+    }
+    if (!is.na(pair$complexbase) && nzchar(pair$complexbase)) {
+      updateSelectInput(session, "nr_complexbase_default_path", selected = pair$complexbase)
+    }
+  }, ignoreInit = FALSE)
+
+  # Warn when TerpBase and ComplexBase species keys differ (manual override mismatch).
+  output$nr_species_warning <- renderUI({
+    tb_path <- terpbase_path_rx()
+    cb_path <- complexbase_path_rx()
+    if (!nzchar(tb_path) || !nzchar(cb_path)) return(NULL)
+    tb_sp <- .db_species_key(tb_path)
+    cb_sp <- .db_species_key(cb_path)
+    if (!nzchar(tb_sp) || !nzchar(cb_sp) || identical(tb_sp, cb_sp)) return(NULL)
+    div(
+      class = "nr-warning-banner",
+      style = "background:#fff3cd;color:#856404;border:1px solid #ffeeba;padding:8px 12px;border-radius:6px;margin-top:8px;font-size:13px;",
+      HTML(sprintf(
+        "<strong>Species mismatch:</strong> TerpBase is <code>%s</code> but ComplexBase is <code>%s</code>. Pick a single species above so the two databases are paired.",
+        tb_sp, cb_sp
+      ))
+    )
+  })
+
   formatted_path_rx <- reactive(nr_fileinput_path(input$nr_formatted_upload))
   terpflow_path_rx  <- reactive({
     nr_fileinput_path(input$nr_terpflow_upload)
@@ -1128,6 +1162,33 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     if (show_terpbase) {
       terpbase_choices <- tools_default_terpbase_choices()
       default_terpbase <- if (length(terpbase_choices) > 0 && nzchar(terpbase_choices[1])) terpbase_choices[1] else ""
+
+      # Species pairing: present a single species selector that drives both dropdowns below
+      pairs <- tools_species_pairs()
+      species_choices <- if (length(pairs) > 0) {
+        setNames(names(pairs), tools::toTitleCase(names(pairs)))
+      } else character(0)
+      default_species <- if (length(species_choices) > 0) unname(species_choices[1]) else ""
+
+      sections <- tagList(
+        sections,
+        div(class = "nr-section",
+            strong("Species (loads matched TerpBase + ComplexBase)"),
+            if (length(species_choices) > 0) {
+              radioButtons(
+                "nr_species",
+                label = NULL,
+                choices = species_choices,
+                selected = default_species,
+                inline = TRUE
+              )
+            } else {
+              helpText("No species DB pairs detected \u2014 upload TerpBase/ComplexBase manually below.")
+            },
+            uiOutput("nr_species_warning")
+        )
+      )
+
       sections <- tagList(
         sections,
         div(class = "nr-section",

@@ -101,6 +101,38 @@ tools_default_complexbase_choices <- function() {
   stats::setNames(all_files, vapply(basename(all_files), .friendly_db_label, character(1)))
 }
 
+# Parse species key from a .terpbase / .complexbase filename (e.g. "mouse.terpbase" -> "mouse").
+.db_species_key <- function(path) {
+  bn <- tolower(basename(path))
+  bn <- sub("\\.(terpbase|complexbase|rds)$", "", bn)
+  bn <- sub("\\.(terpbase|complexbase)$", "", bn)
+  bn
+}
+
+# Return a named list of species -> list(terpbase = <path|NA>, complexbase = <path|NA>).
+# Scans both folders (user dir + bundled) and pairs by species key.
+tools_species_pairs <- function() {
+  tb_map <- tools_default_terpbase_choices()
+  cb_map <- tools_default_complexbase_choices()
+  tb_paths <- unname(tb_map[nzchar(tb_map)])
+  cb_paths <- unname(cb_map[nzchar(cb_map)])
+
+  species <- unique(c(vapply(tb_paths, .db_species_key, character(1)),
+                      vapply(cb_paths, .db_species_key, character(1))))
+  species <- species[nzchar(species)]
+
+  out <- list()
+  for (sp in species) {
+    tb <- tb_paths[vapply(tb_paths, .db_species_key, character(1)) == sp]
+    cb <- cb_paths[vapply(cb_paths, .db_species_key, character(1)) == sp]
+    out[[sp]] <- list(
+      terpbase = if (length(tb) > 0) tb[[1]] else NA_character_,
+      complexbase = if (length(cb) > 0) cb[[1]] else NA_character_
+    )
+  }
+  out
+}
+
 # ============================================================
 # Tools Landing Page UI
 # ============================================================

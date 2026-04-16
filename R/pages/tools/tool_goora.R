@@ -494,7 +494,7 @@ tools_goora_ui <- function() {
             "tools_goora_x_axis_metric",
             "X-axis metric",
             choices = c("Fold Enrichment" = "fold_enrichment", "-log10(FDR)" = "neglog10_fdr"),
-            selected = style_defaults$x_axis_metric %||% "fold_enrichment"
+            selected = style_defaults$x_axis_metric %||% "neglog10_fdr"
           ),
           numericInput(
             "tools_goora_font_size",
@@ -778,7 +778,7 @@ tools_goora_server <- function(input, output, session, app_state, rv, defs_goora
       width = safe_num(input$tools_goora_width, defs_goora$style$width %||% 12),
       height = safe_num(input$tools_goora_height, defs_goora$style$height %||% 6),
       flip_axis = isTRUE(input$tools_goora_flip_axis),
-      x_axis_metric = input$tools_goora_x_axis_metric %||% defs_goora$style$x_axis_metric %||% "fold_enrichment",
+      x_axis_metric = input$tools_goora_x_axis_metric %||% defs_goora$style$x_axis_metric %||% "neglog10_fdr",
       ontology_filter = "all"  # Always compute all ontologies
     )
 
@@ -1018,7 +1018,7 @@ tools_goora_server <- function(input, output, session, app_state, rv, defs_goora
       width = safe_num(input$tools_goora_width, defs_goora$style$width %||% 12),
       height = safe_num(input$tools_goora_height, defs_goora$style$height %||% 6),
       flip_axis = isTRUE(input$tools_goora_flip_axis),
-      x_axis_metric = input$tools_goora_x_axis_metric %||% defs_goora$style$x_axis_metric %||% "fold_enrichment",
+      x_axis_metric = input$tools_goora_x_axis_metric %||% defs_goora$style$x_axis_metric %||% "neglog10_fdr",
       ontology_filter = input$tools_goora_ontology_view %||% "BP"
     )
   })
