@@ -801,11 +801,12 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
   }
 
   terpbase_path_rx <- reactive({
-    if (identical(input$nr_terpbase_mode, "upload")) {
-      nr_fileinput_path(input$nr_terpbase_upload)
-    } else {
-      input$nr_terpbase_default_path %||% ""
-    }
+    sp <- input$nr_species
+    if (is.null(sp) || !nzchar(sp)) return("")
+    pairs <- tools_species_pairs()
+    pair <- pairs[[sp]]
+    if (is.null(pair) || is.na(pair$terpbase)) return("")
+    pair$terpbase
   })
 
   metabobase_path_rx <- reactive({
@@ -817,47 +818,27 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
   })
 
   complexbase_path_rx <- reactive({
-    mode <- input$nr_complexbase_mode %||% "default"
-    if (identical(mode, "none")) {
-      return("")
-    } else if (identical(mode, "upload")) {
-      nr_fileinput_path(input$nr_complexbase_upload)
-    } else {
-      input$nr_complexbase_default_path %||% ""
-    }
-  })
-
-  # Species pairing: picking a species auto-sets both TerpBase and ComplexBase
-  # default-path inputs to the matched files for that species.
-  observeEvent(input$nr_species, {
     sp <- input$nr_species
-    if (is.null(sp) || !nzchar(sp)) return()
+    if (is.null(sp) || !nzchar(sp)) return("")
     pairs <- tools_species_pairs()
     pair <- pairs[[sp]]
-    if (is.null(pair)) return()
-    if (!is.na(pair$terpbase) && nzchar(pair$terpbase)) {
-      updateRadioButtons(session, "nr_terpbase_default_path", selected = pair$terpbase)
-    }
-    if (!is.na(pair$complexbase) && nzchar(pair$complexbase)) {
-      updateSelectInput(session, "nr_complexbase_default_path", selected = pair$complexbase)
-    }
-  }, ignoreInit = FALSE)
+    if (is.null(pair) || is.na(pair$complexbase)) return("")
+    pair$complexbase
+  })
 
-  # Warn when TerpBase and ComplexBase species keys differ (manual override mismatch).
-  output$nr_species_warning <- renderUI({
-    tb_path <- terpbase_path_rx()
-    cb_path <- complexbase_path_rx()
-    if (!nzchar(tb_path) || !nzchar(cb_path)) return(NULL)
-    tb_sp <- .db_species_key(tb_path)
-    cb_sp <- .db_species_key(cb_path)
-    if (!nzchar(tb_sp) || !nzchar(cb_sp) || identical(tb_sp, cb_sp)) return(NULL)
+  # Species pairing is now handled directly by terpbase_path_rx / complexbase_path_rx
+  # which read input$nr_species reactively — no observer needed.
+
+  # Show which database files the species toggle resolved to
+  output$nr_species_db_summary <- renderUI({
+    tb <- terpbase_path_rx()
+    cb <- complexbase_path_rx()
+    tb_label <- if (nzchar(tb)) basename(tb) else "none"
+    cb_label <- if (nzchar(cb)) basename(cb) else "none"
     div(
-      class = "nr-warning-banner",
-      style = "background:#fff3cd;color:#856404;border:1px solid #ffeeba;padding:8px 12px;border-radius:6px;margin-top:8px;font-size:13px;",
-      HTML(sprintf(
-        "<strong>Species mismatch:</strong> TerpBase is <code>%s</code> but ComplexBase is <code>%s</code>. Pick a single species above so the two databases are paired.",
-        tb_sp, cb_sp
-      ))
+      style = "font-size:12px;color:#6c757d;margin-top:2px;",
+      HTML(sprintf("TerpBase: <strong>%s</strong> &nbsp;|&nbsp; ComplexBase: <strong>%s</strong>",
+                   tb_label, cb_label))
     )
   })
 
@@ -879,21 +860,9 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     }
   }, ignoreInit = TRUE)
 
-  observeEvent(input$nr_terpbase_upload, {
-    if (!is.null(input$nr_terpbase_upload$name)) {
-      rv$terpbase_filename <- input$nr_terpbase_upload$name
-    }
-  }, ignoreInit = TRUE)
-
   observeEvent(input$nr_metabobase_upload, {
     if (!is.null(input$nr_metabobase_upload$name)) {
       rv$metabobase_filename <- input$nr_metabobase_upload$name
-    }
-  }, ignoreInit = TRUE)
-
-  observeEvent(input$nr_complexbase_upload, {
-    if (!is.null(input$nr_complexbase_upload$name)) {
-      rv$complexbase_filename <- input$nr_complexbase_upload$name
     }
   }, ignoreInit = TRUE)
 
@@ -1173,82 +1142,22 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
       sections <- tagList(
         sections,
         div(class = "nr-section",
-            strong("Species (loads matched TerpBase + ComplexBase)"),
+            strong("Species"),
             if (length(species_choices) > 0) {
-              radioButtons(
-                "nr_species",
-                label = NULL,
-                choices = species_choices,
-                selected = default_species,
-                inline = TRUE
+              tagList(
+                radioButtons(
+                  "nr_species",
+                  label = NULL,
+                  choices = species_choices,
+                  selected = default_species,
+                  inline = TRUE
+                ),
+                uiOutput("nr_species_db_summary")
               )
             } else {
-              helpText("No species DB pairs detected \u2014 upload TerpBase/ComplexBase manually below.")
+              helpText("No species database pairs detected. Place .terpbase and .complexbase files in the databases folder.")
             },
-            uiOutput("nr_species_warning")
-        )
-      )
-
-      sections <- tagList(
-        sections,
-        div(class = "nr-section",
-            strong("TerpBase (proteomics annotation)"),
-            radioButtons(
-              "nr_terpbase_mode",
-              label = NULL,
-              choices = c("Use default" = "default", "Upload" = "upload"),
-              selected = "default",
-              inline = TRUE
-            ),
-            div(class = "nr-terpbase-conditional-wrapper",
-              conditionalPanel(
-                "input.nr_terpbase_mode == 'default'",
-                radioButtons(
-                  "nr_terpbase_default_path",
-                  label = NULL,
-                  choices = terpbase_choices,
-                  selected = default_terpbase,
-                  inline = TRUE
-                )
-              ),
-              conditionalPanel(
-                "input.nr_terpbase_mode == 'upload'",
-                fileInput("nr_terpbase_upload", label = NULL, accept = c(".terpbase", ".rds"))
-              )
-            ),
-            uiOutput("nr_light_terpbase")
-        )
-      )
-
-      # Also show ComplexBase for proteomics
-      complexbase_choices <- tools_default_complexbase_choices()
-      default_complexbase <- if (length(complexbase_choices) > 0 && nzchar(complexbase_choices[1])) complexbase_choices[1] else ""
-      sections <- tagList(
-        sections,
-        div(class = "nr-section",
-            strong("ComplexBase (protein complex annotation)"),
-            radioButtons(
-              "nr_complexbase_mode",
-              label = NULL,
-              choices = c("Use default" = "default", "Upload" = "upload", "None" = "none"),
-              selected = "default",
-              inline = TRUE
-            ),
-            div(class = "nr-terpbase-conditional-wrapper",
-              conditionalPanel(
-                "input.nr_complexbase_mode == 'default'",
-                selectInput(
-                  "nr_complexbase_default_path",
-                  label = NULL,
-                  choices = complexbase_choices,
-                  selected = default_complexbase
-                )
-              ),
-              conditionalPanel(
-                "input.nr_complexbase_mode == 'upload'",
-                fileInput("nr_complexbase_upload", label = NULL, accept = c(".complexbase", ".rds"))
-              )
-            ),
+            uiOutput("nr_light_terpbase"),
             uiOutput("nr_light_complexbase")
         )
       )
@@ -1844,17 +1753,11 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     # Use original file names if available, otherwise fall back to temp path basename
     formatted_display <- rv$formatted_filename %||% basename(ff_norm)
     terpflow_display <- rv$terpflow_filename %||% basename(tf_norm)
-    terpbase_display <- rv$terpbase_filename %||% (if (!is.null(tb_norm)) basename(tb_norm) else NULL)
 
     ui_log(sprintf("  Formatted: %s", formatted_display))
     ui_log(sprintf("  Pipeline:  %s", terpflow_display))
     if (!is.null(tb_norm)) {
-      # For default terpbase path, show the actual path
-      if (identical(input$nr_terpbase_mode, "default")) {
-        ui_log(sprintf("  Terpbase:  %s", basename(tb_norm)))
-      } else {
-        ui_log(sprintf("  Terpbase:  %s", terpbase_display %||% basename(tb_norm)))
-      }
+      ui_log(sprintf("  Terpbase:  %s", basename(tb_norm)))
     }
     ui_log(sprintf("  Output:    %s", out_norm))
 
@@ -2340,7 +2243,6 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     session$onFlushed(function() {
       reset_file_input("nr_formatted_upload")
       reset_file_input("nr_terpflow_upload")
-      reset_file_input("nr_terpbase_upload")
       reset_file_input("nr_metabobase_upload")
     }, once = TRUE)
   }, ignoreInit = TRUE)
@@ -2381,9 +2283,9 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
       name = run_name,
       status = "pending",
       terpbase = list(
-        mode = input$nr_terpbase_mode %||% "default",
+        mode = "default",
         path = terpbase_path_rx(),
-        display_name = rv$terpbase_filename %||% basename(terpbase_path_rx() %||% "default")
+        display_name = basename(terpbase_path_rx() %||% "default")
       ),
       metabobase = list(
         mode = input$nr_metabobase_mode %||% "default",
@@ -2417,14 +2319,12 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     session$onFlushed(function() {
       reset_file_input("nr_formatted_upload")
       reset_file_input("nr_terpflow_upload")
-      reset_file_input("nr_terpbase_upload")
       reset_file_input("nr_metabobase_upload")
     }, once = TRUE)
 
     # Reset cached filenames
     rv$formatted_filename <- NULL
     rv$terpflow_filename <- NULL
-    rv$terpbase_filename <- NULL
     rv$metabobase_filename <- NULL
   }, ignoreInit = TRUE)
 

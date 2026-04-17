@@ -3859,6 +3859,17 @@ nr_execute_run <- function(formatted_path,
 
       nr_log(run_root, sprintf("=== Step %d: %s (container) ===", i, step$engine_id))
 
+      # Snapshot original SILAC data before half_life transforms it.
+      # dSILAC QC engines (isotope density, ratio box) need the pre-transformation
+      # H/L matrix and samples table with 'channel' column.
+      silac_snapshot <- if (isTRUE(ctx$is_silac)) {
+        list(mat = ctx$mat, samples = ctx$samples)
+      } else NULL
+
+      # Engine IDs for dSILAC QC that need the original SILAC data
+      dsilac_qc_ids <- c("dsilac_isotope_density_peptide", "dsilac_isotope_density_protein",
+                         "dsilac_ratio_box_peptide", "dsilac_ratio_box_protein")
+
       sub_views <- list()
       for (j in seq_along(subs)) {
         ss <- subs[[j]]
@@ -3883,6 +3894,12 @@ nr_execute_run <- function(formatted_path,
         payload <- if (!is.null(multi_payload) && ss$engine_id %in% multi_engine_ids) {
           nr_log(run_root, sprintf("    [Multi-dataset mode] Using multi-dataset payload"))
           multi_payload
+        } else if (!is.null(silac_snapshot) && ss$engine_id %in% dsilac_qc_ids) {
+          nr_log(run_root, sprintf("    [dSILAC QC] Using pre-transformation SILAC snapshot"))
+          p <- nr_build_step_payload(ctx, ss)
+          p$mat <- silac_snapshot$mat
+          p$samples <- silac_snapshot$samples
+          p
         } else {
           nr_build_step_payload(ctx, ss)
         }
