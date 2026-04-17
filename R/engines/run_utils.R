@@ -1030,6 +1030,14 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
           ))
         }
 
+        # Log what we received so users can verify database choices survived
+        # the build/load cycle. Empty database fields default to "go" downstream.
+        cfg_db_summary <- paste(vapply(goora_configs, function(c) {
+          sprintf("%s=%s", c$config_id %||% "cfg", as.character(c$database %||% "go"))
+        }, character(1)), collapse = ", ")
+        message(sprintf("[compile_plan] paired %s configs: %s",
+                        paired_engine_id, cfg_db_summary))
+
         # Get global params (shared across all configs)
         global_params <- paired_cfg$global_params %||% list()
         if (length(global_params) == 0) {

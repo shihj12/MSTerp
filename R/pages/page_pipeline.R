@@ -2161,18 +2161,31 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
           configs <- goora_configs_rv$map[[sid]]
 
           if (!is.null(configs) && length(configs) > 0) {
-            # Update config values from current UI inputs (if they exist)
+            # Update config values from current UI inputs.
+            # IMPORTANT: always refresh per-config database from the selectInput
+            # value, even if the name input is transiently null (e.g. right
+            # after the paired card first renders), so the dropdown choice is
+            # never dropped on the way to st$paired$configs.
             for (cfg_idx in seq_along(configs)) {
               cfg_prefix <- sprintf("%s__goora_cfg_%d", sid, cfg_idx)
               name_val <- input[[sprintf("%s_name", cfg_prefix)]]
+              db_val   <- input[[sprintf("%s_database", cfg_prefix)]]
               if (!is.null(name_val)) {
                 configs[[cfg_idx]]$name <- name_val
                 configs[[cfg_idx]]$fdr_cutoff <- input[[sprintf("%s_fdr", cfg_prefix)]] %||% configs[[cfg_idx]]$fdr_cutoff
                 configs[[cfg_idx]]$min_overlap <- input[[sprintf("%s_min_overlap", cfg_prefix)]] %||% configs[[cfg_idx]]$min_overlap
-                configs[[cfg_idx]]$database <- input[[sprintf("%s_database", cfg_prefix)]] %||% configs[[cfg_idx]]$database %||% "go"
                 configs[[cfg_idx]]$include_unique_in_sig <- isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
               }
+              if (!is.null(db_val) && nzchar(db_val)) {
+                configs[[cfg_idx]]$database <- db_val
+              } else if (is.null(configs[[cfg_idx]]$database)) {
+                configs[[cfg_idx]]$database <- "go"
+              }
             }
+            # Write updated configs back to reactive store so future re-renders
+            # of the paired card reflect the user's choices (prevents DOM reset
+            # from snapping the Database dropdown back to the stale default).
+            goora_configs_rv$map[[sid]] <- configs
           } else {
             # Initial load: scan inputs or create default
             configs <- list()
@@ -2211,6 +2224,12 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
             style = p_style,
             configs = configs
           )
+
+          db_summary <- paste(vapply(configs, function(c) {
+            sprintf("%s=%s", c$config_id %||% "cfg", as.character(c$database %||% "go"))
+          }, character(1)), collapse = ", ")
+          message(sprintf("[collect_flow] %s paired %s configs: %s",
+                          sid, peid, db_summary))
           
         } else if (identical(eid, "pca")) {
 
