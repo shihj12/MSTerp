@@ -7402,7 +7402,6 @@ tb_render_dsilac_isotope_density <- function(results, style, meta) {
     stop("dsilac_isotope_density: values must have columns value, group, channel.")
   }
 
-  # Log transform (mirror hor_dis style policy)
   log_transform <- style$log_transform %||% "log10"
   if (log_transform == "log10") {
     df$value[df$value <= 0] <- NA
@@ -7420,59 +7419,83 @@ tb_render_dsilac_isotope_density <- function(results, style, meta) {
     ))
   }
 
-  # Pooling
   if (isTRUE(style$pool_above %||% FALSE)) {
     pv <- tb_num(style$pool_value, 12)
-    df$value[df$value > pv] <- pv * 0.8
+    df$value[df$value > pv] <- pv * 0.99
   }
 
-  df$channel <- factor(df$channel, levels = c("light", "heavy"))
+  # One row per biological sample (group + replicate), two columns (Light | Heavy).
+  if ("replicate" %in% names(df) && !all(is.na(df$replicate))) {
+    df$rep_label <- ifelse(is.na(df$replicate),
+                           as.character(df$group),
+                           paste(df$group, df$replicate))
+  } else {
+    df$rep_label <- df$sample %||% as.character(df$group)
+  }
+  rep_order <- unique(df[, c("group", "replicate", "rep_label"), drop = FALSE])
+  rep_order <- rep_order[order(as.character(rep_order$group),
+                               suppressWarnings(as.numeric(rep_order$replicate))),
+                         , drop = FALSE]
+  df$rep_label <- factor(df$rep_label, levels = unique(rep_order$rep_label))
+
+  df$channel <- factor(df$channel, levels = c("light", "heavy"),
+                       labels = c("Light", "Heavy"))
   df$group <- factor(df$group)
 
   plot_type <- style$plot_type %||% "density"
   layout_mode <- style$layout %||% "separate"
-  facet_by <- style$facet_by %||% "group"
-  alpha_val <- tb_num(style$alpha, 0.6)
+  alpha_val <- tb_num(style$alpha, 0.7)
   bins_n <- as.integer(tb_num(style$bins, 30))
   if (is.na(bins_n) || bins_n < 5) bins_n <- 30
 
-  light_color <- style$light_color %||% "#1f77b4"
-  heavy_color <- style$heavy_color %||% "#d62728"
-  color_values <- c(light = light_color, heavy = heavy_color)
+  group_levels <- levels(df$group)
+  if (length(group_levels) > 0) {
+    group_colors <- scales::hue_pal()(length(group_levels))
+    names(group_colors) <- group_levels
+  } else {
+    group_colors <- c(`(all)` = "#808080")
+  }
 
-  # In overlay mode, fill/color encodes channel (ignoring group). In separate mode,
-  # facet by the chosen dimension; fill always encodes channel.
-  p <- ggplot2::ggplot(df, ggplot2::aes(x = value, fill = channel, color = channel))
-
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = value, fill = group, color = group))
   if (identical(plot_type, "histogram")) {
     p <- p + ggplot2::geom_histogram(
-      bins = bins_n, alpha = alpha_val, position = "identity"
+      bins = bins_n, alpha = alpha_val, position = "identity",
+      color = "black", linewidth = 0.3
     )
+    y_label <- "Count"
   } else {
-    p <- p + ggplot2::geom_density(alpha = alpha_val)
+    p <- p + ggplot2::geom_density(alpha = alpha_val, linewidth = 0.6)
+    y_label <- "Density"
   }
 
   p <- p +
-    ggplot2::scale_fill_manual(values = color_values, drop = FALSE,
-                               labels = c(light = "Light", heavy = "Heavy")) +
-    ggplot2::scale_color_manual(values = color_values, drop = FALSE,
-                                labels = c(light = "Light", heavy = "Heavy")) +
-    ggplot2::labs(x = style$x_axis_title %||% "Intensity",
-                  y = if (plot_type == "histogram") "Count" else "Density",
-                  fill = "Channel", color = "Channel") +
+    ggplot2::scale_fill_manual(values = group_colors, drop = FALSE) +
+    ggplot2::scale_color_manual(values = group_colors, drop = FALSE) +
+    ggplot2::labs(
+      x = tb_log_axis_label(style$x_axis_title %||% "Intensity", log_transform),
+      y = y_label, fill = "Group", color = "Group"
+    ) +
     tb_theme_base(tb_num(style$axis_text_size, 18),
                   axis_style = style$axis_style %||% "clean")
 
   if (identical(layout_mode, "separate")) {
-    p <- switch(
-      facet_by,
-      "channel"       = p + ggplot2::facet_wrap(~ channel, scales = "free_y"),
-      "group_channel" = p + ggplot2::facet_grid(group ~ channel, scales = "free_y"),
-      p + ggplot2::facet_wrap(~ group, scales = "free_y")  # default: facet by group
+    # Ridge-style: each biological sample on its own row, Light | Heavy as columns.
+    p <- p + ggplot2::facet_grid(
+      rep_label ~ channel,
+      scales = "free_y",
+      switch = "y"
+    ) + ggplot2::theme(
+      strip.background = ggplot2::element_blank(),
+      strip.placement  = "outside",
+      strip.text.y.left = ggplot2::element_text(angle = 0, hjust = 1, size = 11),
+      strip.text.x      = ggplot2::element_text(size = 13, face = "bold"),
+      panel.spacing.y   = grid::unit(0.2, "lines")
     )
+  } else {
+    # Overlay all samples within each channel column.
+    p <- p + ggplot2::facet_wrap(~ channel, scales = "free_y", nrow = 1)
   }
 
-  # Mean lines
   if (isTRUE(style$show_mean %||% TRUE)) {
     mean_type <- style$mean_type %||% "arithmetic"
     mean_fn <- switch(mean_type,
@@ -7483,14 +7506,26 @@ tb_render_dsilac_isotope_density <- function(results, style, meta) {
                       "median" = function(x) stats::median(x, na.rm = TRUE),
                       function(x) mean(x, na.rm = TRUE))
 
-    mean_df <- do.call(rbind, lapply(split(df, list(df$group, df$channel), drop = TRUE), function(d) {
-      data.frame(group = d$group[1], channel = d$channel[1],
-                 m = mean_fn(d$value), stringsAsFactors = FALSE)
-    }))
-    mean_df$channel <- factor(mean_df$channel, levels = c("light", "heavy"))
+    if (identical(layout_mode, "separate")) {
+      mean_df <- do.call(rbind, lapply(
+        split(df, list(df$rep_label, df$channel), drop = TRUE),
+        function(d) data.frame(
+          rep_label = d$rep_label[1], channel = d$channel[1],
+          group = d$group[1], m = mean_fn(d$value),
+          stringsAsFactors = FALSE
+        )))
+    } else {
+      mean_df <- do.call(rbind, lapply(
+        split(df, list(df$group, df$channel), drop = TRUE),
+        function(d) data.frame(
+          group = d$group[1], channel = d$channel[1],
+          m = mean_fn(d$value), stringsAsFactors = FALSE
+        )))
+    }
 
     p <- p + ggplot2::geom_vline(
-      data = mean_df, ggplot2::aes(xintercept = m, color = channel),
+      data = mean_df,
+      ggplot2::aes(xintercept = m, color = group),
       linetype = "dashed", linewidth = tb_num(style$mean_line_size, 1),
       show.legend = FALSE
     )
@@ -7498,7 +7533,7 @@ tb_render_dsilac_isotope_density <- function(results, style, meta) {
     if (isTRUE(style$show_mean_value %||% FALSE)) {
       p <- p + ggplot2::geom_text(
         data = mean_df,
-        ggplot2::aes(x = m, y = Inf, label = sprintf("%.2f", m), color = channel),
+        ggplot2::aes(x = m, y = Inf, label = sprintf("%.2f", m), color = group),
         vjust = 1.5, hjust = -0.1,
         size = tb_num(style$mean_text_size, 14) / .pt,
         show.legend = FALSE, inherit.aes = FALSE
@@ -7506,7 +7541,6 @@ tb_render_dsilac_isotope_density <- function(results, style, meta) {
     }
   }
 
-  # X range
   if (identical(style$x_range_mode %||% "auto", "manual")) {
     p <- p + ggplot2::coord_cartesian(
       xlim = c(tb_num(style$x_min, 0), tb_num(style$x_max, 12))
