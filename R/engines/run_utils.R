@@ -763,6 +763,14 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
     return(list(ok = FALSE, error = "Invalid inputs"))
   }
 
+  # Plan-time diagnostics accumulated so the runner can flush them into log.txt
+  # once run_root exists. Each entry is a single log line.
+  .plan_diag <- character()
+  .plan_log <- function(msg) {
+    message(msg)
+    .plan_diag[[length(.plan_diag) + 1L]] <<- msg
+  }
+
   flow <- terpflow$flow
   meta <- formatted$metadata
 
@@ -1035,8 +1043,8 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
         cfg_db_summary <- paste(vapply(goora_configs, function(c) {
           sprintf("%s=%s", c$config_id %||% "cfg", as.character(c$database %||% "go"))
         }, character(1)), collapse = ", ")
-        message(sprintf("[compile_plan] paired %s configs: %s",
-                        paired_engine_id, cfg_db_summary))
+        .plan_log(sprintf("[compile_plan] paired %s configs: %s",
+                          paired_engine_id, cfg_db_summary))
 
         # Get global params (shared across all configs)
         global_params <- paired_cfg$global_params %||% list()
@@ -1108,6 +1116,10 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
                     database = cfg$database %||% "go"
                   )
                 )
+
+                .plan_log(sprintf("  paired child %s/%s: database=%s",
+                                  comparison_label_safe, cfg_id_safe,
+                                  config_params$database))
 
                 include_unique_in_sig <- isTRUE(cfg$include_unique_in_sig)
 
@@ -1545,6 +1557,7 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
     plan$steps[[length(plan$steps) + 1L]] <- step_entry
   }
 
+  plan$.plan_diag <- .plan_diag
   list(ok = TRUE, plan = plan, error = NULL)
 }
 
@@ -3648,6 +3661,30 @@ nr_execute_run <- function(formatted_path,
   nr_log(run_root, sprintf("Steps: %d", plan$meta$n_steps))
   nr_log(run_root, sprintf("Analysis level: %s", plan$meta$analysis_level))
   nr_log(run_root, sprintf("Data type: %s", run_data_type))
+
+  # Flush plan-time diagnostic lines (paired GO-ORA database choices, etc.)
+  for (line in (plan$.plan_diag %||% character())) nr_log(run_root, line)
+
+  # Hard-stop: any paired goora child requests database="complex" but no
+  # ComplexBase is loaded. Surfaces intent mismatch instead of silently
+  # degrading to GO enrichment (or emitting an empty-table engine error).
+  if (is.null(ctx$complexbase)) {
+    offenders <- character()
+    for (s in (plan$steps %||% list())) {
+      for (child in (s$paired_children %||% list())) {
+        if (identical((child$params %||% list())$database, "complex")) {
+          offenders <- c(offenders, child$view_id %||% "(unnamed)")
+        }
+      }
+    }
+    if (length(offenders) > 0) {
+      err_msg <- sprintf(
+        "Pipeline requests Protein Complex enrichment for child(ren) [%s] but no ComplexBase is loaded. Pick the matching Species on New Run or change the step's Database to Gene Ontology.",
+        paste(offenders, collapse = ", "))
+      nr_log(run_root, err_msg, level = "ERROR")
+      return(list(ok = FALSE, error = err_msg, run_root = run_root))
+    }
+  }
 
   # Auto-resolve metabolite IDs against MetaboBase (metabolomics only)
   # Runs before any engine steps to augment ctx$ids with annotation columns:

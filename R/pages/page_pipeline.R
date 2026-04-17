@@ -2008,6 +2008,14 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
   # (Defined here so collect_flow_from_inputs can access it)
   # -----------------------------
   goora_configs_rv <- reactiveValues(map = list())  # step_id -> list of configs
+  # Bumped ONLY when the structure (count of configs per step) changes — used
+  # by the renderUI below to re-render add/remove. Avoids re-firing on field
+  # value changes (e.g. Database dropdown) which would clobber the user's
+  # DOM selection via Shiny's selectInput `selected` reset on re-render.
+  goora_rerender_trigger <- reactiveVal(0L)
+  bump_goora_rerender <- function() {
+    goora_rerender_trigger(isolate(goora_rerender_trigger()) + 1L)
+  }
 
   # -----------------------------
   # Collect flow from inputs (unchanged logic)
@@ -2182,10 +2190,12 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                 configs[[cfg_idx]]$database <- "go"
               }
             }
-            # Write updated configs back to reactive store so future re-renders
-            # of the paired card reflect the user's choices (prevents DOM reset
-            # from snapping the Database dropdown back to the stale default).
-            goora_configs_rv$map[[sid]] <- configs
+            # IMPORTANT: do NOT write configs back to goora_configs_rv$map here.
+            # The renderUI only depends on goora_rerender_trigger (structural),
+            # not on map contents, so DOM state is authoritative for per-config
+            # field values between Build clicks. Writing back would re-invalidate
+            # the trigger path (indirectly) and re-mount the selectInput with
+            # a stale `selected` attribute, clobbering the user's choice.
           } else {
             # Initial load: scan inputs or create default
             configs <- list()
@@ -2215,6 +2225,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
               ))
             }
             goora_configs_rv$map[[sid]] <- configs
+            bump_goora_rerender()
           }
 
           st$paired <- list(
@@ -2934,6 +2945,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
     # Cleanup removed volcano steps
     existing <- names(goora_configs_rv$map)
     removed <- setdiff(existing, volcano_ids)
+    structural_change <- FALSE
     for (sid in removed) {
       goora_configs_rv$map[[sid]] <- NULL
       handles <- goora_obs$map[[sid]]
@@ -2941,6 +2953,7 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
         for (h in handles) if (!is.null(h) && is.function(h$destroy)) h$destroy()
       }
       goora_obs$map[[sid]] <- NULL
+      structural_change <- TRUE
     }
 
     # Initialize new volcano steps
@@ -2966,8 +2979,10 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
         } else {
           goora_configs_rv$map[[sid]] <- existing_configs
         }
+        structural_change <- TRUE
       }
     }
+    if (structural_change) bump_goora_rerender()
   })
 
   # Render GO-ORA configs UI for each volcano step
@@ -2980,7 +2995,13 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
         ui_id <- sprintf("%s__goora_configs_ui", step_id)
 
         output[[ui_id]] <- renderUI({
-          configs <- goora_configs_rv$map[[step_id]] %||% list()
+          # Depend ONLY on the structural trigger (add/remove), not on
+          # goora_configs_rv$map — otherwise picking a Database from the
+          # dropdown would invalidate renderUI and Shiny would re-mount the
+          # selectInput with `selected = <stale rv value>`, silently erasing
+          # the user's DOM choice before Build ever reads it.
+          goora_rerender_trigger()
+          configs <- isolate(goora_configs_rv$map[[step_id]]) %||% list()
 
           if (length(configs) == 0) {
             return(div(class = "tf-note", "No configurations. Click 'Add Configuration' to add one."))
@@ -3075,9 +3096,25 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
 
         # Add config button
         h_add <- observeEvent(input[[add_btn_id]], {
-          configs <- goora_configs_rv$map[[step_id]] %||% list()
-          new_idx <- length(configs) + 1
-          configs[[new_idx]] <- list(
+          # Snapshot current DOM state for existing rows BEFORE writing back
+          # to rv, so the add-trigger re-render doesn't reset user choices
+          # (database dropdown, fdr/min_overlap, name, include_unique) on
+          # rows already on screen.
+          existing <- goora_configs_rv$map[[step_id]] %||% list()
+          for (i in seq_along(existing)) {
+            cfg_prefix <- sprintf("%s__goora_cfg_%d", step_id, i)
+            nm  <- input[[sprintf("%s_name", cfg_prefix)]]
+            db  <- input[[sprintf("%s_database", cfg_prefix)]]
+            fdr <- input[[sprintf("%s_fdr", cfg_prefix)]]
+            mo  <- input[[sprintf("%s_min_overlap", cfg_prefix)]]
+            if (!is.null(nm))  existing[[i]]$name <- nm
+            if (!is.null(db) && nzchar(db)) existing[[i]]$database <- db
+            if (!is.null(fdr)) existing[[i]]$fdr_cutoff <- fdr
+            if (!is.null(mo))  existing[[i]]$min_overlap <- mo
+            existing[[i]]$include_unique_in_sig <- isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
+          }
+          new_idx <- length(existing) + 1
+          existing[[new_idx]] <- list(
             config_id = sprintf("cfg_%d", new_idx),
             name = sprintf("Config %d", new_idx),
             fdr_cutoff = 0.05,
@@ -3085,7 +3122,8 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
             database = "go",
             include_unique_in_sig = FALSE
           )
-          goora_configs_rv$map[[step_id]] <- configs
+          goora_configs_rv$map[[step_id]] <- existing
+          bump_goora_rerender()
         }, ignoreInit = TRUE)
 
         goora_obs$map[[step_id]] <- list(h_add)
@@ -3138,12 +3176,27 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
           h <- observeEvent(input[[remove_btn_id]], {
             cfgs <- goora_configs_rv$map[[sid]] %||% list()
             if (length(cfgs) > 1) {
+              # Snapshot DOM state for ALL rows before removal so surviving
+              # rows don't snap back to stale rv values on re-render.
+              for (i in seq_along(cfgs)) {
+                cfg_prefix <- sprintf("%s__goora_cfg_%d", sid, i)
+                nm  <- input[[sprintf("%s_name", cfg_prefix)]]
+                db  <- input[[sprintf("%s_database", cfg_prefix)]]
+                fdr <- input[[sprintf("%s_fdr", cfg_prefix)]]
+                mo  <- input[[sprintf("%s_min_overlap", cfg_prefix)]]
+                if (!is.null(nm))  cfgs[[i]]$name <- nm
+                if (!is.null(db) && nzchar(db)) cfgs[[i]]$database <- db
+                if (!is.null(fdr)) cfgs[[i]]$fdr_cutoff <- fdr
+                if (!is.null(mo))  cfgs[[i]]$min_overlap <- mo
+                cfgs[[i]]$include_unique_in_sig <- isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
+              }
               cfgs[[idx]] <- NULL
               # Re-index config_ids
               for (j in seq_along(cfgs)) {
                 cfgs[[j]]$config_id <- sprintf("cfg_%d", j)
               }
               goora_configs_rv$map[[sid]] <- cfgs
+              bump_goora_rerender()
             } else {
               showNotification("Cannot remove the last configuration.", type = "warning")
             }
@@ -3248,6 +3301,26 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
     built_rv(list(built_flow = built, built_at = built_at))
     last_built_at_rv(built_at)
     dirty_rv(FALSE)
+
+    # Surface the captured Database choice for every paired-GO-ORA volcano so
+    # the user can confirm "Protein Complexes" actually reached the built flow
+    # (not reverted to "go" by a stale reactive path). If anything looks wrong
+    # this toast will show it before download.
+    for (s in (built$steps %||% list())) {
+      if (!identical(s$engine_id, "volcano")) next
+      p <- s$paired %||% list()
+      if (!isTRUE(p$enabled)) next
+      cfgs <- p$configs %||% list()
+      if (length(cfgs) == 0) next
+      db_summary <- paste(vapply(cfgs, function(c) {
+        sprintf("%s=%s", c$config_id %||% "cfg", as.character(c$database %||% "(missing)"))
+      }, character(1)), collapse = ", ")
+      showNotification(
+        sprintf("Built %s paired %s: %s", s$step_id %||% "?", p$engine_id %||% "goora", db_summary),
+        type = "message",
+        duration = 5
+      )
+    }
   }, ignoreInit = TRUE)
   
   output$tf_status_line <- renderUI({
