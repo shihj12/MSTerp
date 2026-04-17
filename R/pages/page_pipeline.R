@@ -2147,8 +2147,10 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
           if (!is.null(peng)) {
             for (f in tf_schema_fields(peng$params_schema %||% list())) {
               if (!is.list(f) || is.null(f$name)) next
-              # Only collect global params (min_term_size, max_terms), not per-config ones
-              if (f$name %in% c("min_term_size", "max_terms")) {
+              # Step-level (global) params: database (GO vs Complex), plus
+              # min_term_size / max_terms. Per-config UI only overrides
+              # fdr_cutoff / min_overlap / include_unique_in_sig / name.
+              if (f$name %in% c("database", "min_term_size", "max_terms")) {
                 id <- sprintf("%s__paired_%s__p_%s", sid, peid, f$name)
                 v <- input[[id]]
                 if (!is.null(v)) global_params[[f$name]] <- v
@@ -2170,32 +2172,21 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
 
           if (!is.null(configs) && length(configs) > 0) {
             # Update config values from current UI inputs.
-            # IMPORTANT: always refresh per-config database from the selectInput
-            # value, even if the name input is transiently null (e.g. right
-            # after the paired card first renders), so the dropdown choice is
-            # never dropped on the way to st$paired$configs.
+            # Per-config UI only covers name / fdr_cutoff / min_overlap /
+            # include_unique_in_sig. The Database (GO vs Complex) is chosen
+            # once at the step level (paired card) and lives in global_params.
             for (cfg_idx in seq_along(configs)) {
               cfg_prefix <- sprintf("%s__goora_cfg_%d", sid, cfg_idx)
               name_val <- input[[sprintf("%s_name", cfg_prefix)]]
-              db_val   <- input[[sprintf("%s_database", cfg_prefix)]]
               if (!is.null(name_val)) {
                 configs[[cfg_idx]]$name <- name_val
                 configs[[cfg_idx]]$fdr_cutoff <- input[[sprintf("%s_fdr", cfg_prefix)]] %||% configs[[cfg_idx]]$fdr_cutoff
                 configs[[cfg_idx]]$min_overlap <- input[[sprintf("%s_min_overlap", cfg_prefix)]] %||% configs[[cfg_idx]]$min_overlap
                 configs[[cfg_idx]]$include_unique_in_sig <- isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
               }
-              if (!is.null(db_val) && nzchar(db_val)) {
-                configs[[cfg_idx]]$database <- db_val
-              } else if (is.null(configs[[cfg_idx]]$database)) {
-                configs[[cfg_idx]]$database <- "go"
-              }
+              # Drop legacy per-config database, if present on a loaded flow.
+              configs[[cfg_idx]]$database <- NULL
             }
-            # IMPORTANT: do NOT write configs back to goora_configs_rv$map here.
-            # The renderUI only depends on goora_rerender_trigger (structural),
-            # not on map contents, so DOM state is authoritative for per-config
-            # field values between Build clicks. Writing back would re-invalidate
-            # the trigger path (indirectly) and re-mount the selectInput with
-            # a stale `selected` attribute, clobbering the user's choice.
           } else {
             # Initial load: scan inputs or create default
             configs <- list()
@@ -2209,7 +2200,6 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                 name = name_val,
                 fdr_cutoff = input[[sprintf("%s_fdr", cfg_prefix)]] %||% 0.05,
                 min_overlap = input[[sprintf("%s_min_overlap", cfg_prefix)]] %||% 3,
-                database = input[[sprintf("%s_database", cfg_prefix)]] %||% "go",
                 include_unique_in_sig = isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
               )
               cfg_idx <- cfg_idx + 1
@@ -2220,7 +2210,6 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                 name = "Default",
                 fdr_cutoff = 0.05,
                 min_overlap = 3,
-                database = "go",
                 include_unique_in_sig = FALSE
               ))
             }
@@ -2972,11 +2961,12 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
               name = "Default",
               fdr_cutoff = old_fdr,
               min_overlap = 3,
-              database = "go",
               include_unique_in_sig = old_include_unique
             )
           )
         } else {
+          # Strip legacy per-config database if a loaded flow still carries it.
+          for (k in seq_along(existing_configs)) existing_configs[[k]]$database <- NULL
           goora_configs_rv$map[[sid]] <- existing_configs
         }
         structural_change <- TRUE
@@ -3052,16 +3042,6 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
                   )
                 ),
                 div(
-                  style = "flex: 1; min-width: 140px;",
-                  selectInput(
-                    sprintf("%s_database", cfg_prefix),
-                    "Database",
-                    choices = c("Gene Ontology" = "go", "Protein Complexes" = "complex"),
-                    selected = cfg$database %||% "go",
-                    width = "100%"
-                  )
-                ),
-                div(
                   style = "flex: 2; min-width: 200px; display: flex; align-items: center; padding-top: 25px;",
                   checkboxInput(
                     sprintf("%s_include_unique", cfg_prefix),
@@ -3098,20 +3078,19 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
         h_add <- observeEvent(input[[add_btn_id]], {
           # Snapshot current DOM state for existing rows BEFORE writing back
           # to rv, so the add-trigger re-render doesn't reset user choices
-          # (database dropdown, fdr/min_overlap, name, include_unique) on
-          # rows already on screen.
+          # (fdr/min_overlap, name, include_unique) on rows already on screen.
+          # Database is step-level (paired card) so not per-config here.
           existing <- goora_configs_rv$map[[step_id]] %||% list()
           for (i in seq_along(existing)) {
             cfg_prefix <- sprintf("%s__goora_cfg_%d", step_id, i)
             nm  <- input[[sprintf("%s_name", cfg_prefix)]]
-            db  <- input[[sprintf("%s_database", cfg_prefix)]]
             fdr <- input[[sprintf("%s_fdr", cfg_prefix)]]
             mo  <- input[[sprintf("%s_min_overlap", cfg_prefix)]]
             if (!is.null(nm))  existing[[i]]$name <- nm
-            if (!is.null(db) && nzchar(db)) existing[[i]]$database <- db
             if (!is.null(fdr)) existing[[i]]$fdr_cutoff <- fdr
             if (!is.null(mo))  existing[[i]]$min_overlap <- mo
             existing[[i]]$include_unique_in_sig <- isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
+            existing[[i]]$database <- NULL  # drop legacy per-config database
           }
           new_idx <- length(existing) + 1
           existing[[new_idx]] <- list(
@@ -3119,7 +3098,6 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
             name = sprintf("Config %d", new_idx),
             fdr_cutoff = 0.05,
             min_overlap = 3,
-            database = "go",
             include_unique_in_sig = FALSE
           )
           goora_configs_rv$map[[step_id]] <- existing
@@ -3178,17 +3156,17 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
             if (length(cfgs) > 1) {
               # Snapshot DOM state for ALL rows before removal so surviving
               # rows don't snap back to stale rv values on re-render.
+              # Database is step-level, not per-config.
               for (i in seq_along(cfgs)) {
                 cfg_prefix <- sprintf("%s__goora_cfg_%d", sid, i)
                 nm  <- input[[sprintf("%s_name", cfg_prefix)]]
-                db  <- input[[sprintf("%s_database", cfg_prefix)]]
                 fdr <- input[[sprintf("%s_fdr", cfg_prefix)]]
                 mo  <- input[[sprintf("%s_min_overlap", cfg_prefix)]]
                 if (!is.null(nm))  cfgs[[i]]$name <- nm
-                if (!is.null(db) && nzchar(db)) cfgs[[i]]$database <- db
                 if (!is.null(fdr)) cfgs[[i]]$fdr_cutoff <- fdr
                 if (!is.null(mo))  cfgs[[i]]$min_overlap <- mo
                 cfgs[[i]]$include_unique_in_sig <- isTRUE(input[[sprintf("%s_include_unique", cfg_prefix)]])
+                cfgs[[i]]$database <- NULL
               }
               cfgs[[idx]] <- NULL
               # Re-index config_ids
@@ -3302,21 +3280,19 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
     last_built_at_rv(built_at)
     dirty_rv(FALSE)
 
-    # Surface the captured Database choice for every paired-GO-ORA volcano so
-    # the user can confirm "Protein Complexes" actually reached the built flow
-    # (not reverted to "go" by a stale reactive path). If anything looks wrong
-    # this toast will show it before download.
+    # Surface the captured step-level Database choice for every paired-GO-ORA
+    # volcano so the user can confirm "Protein Complexes" actually reached the
+    # built flow. Database is step-level (paired card), not per-config.
     for (s in (built$steps %||% list())) {
       if (!identical(s$engine_id, "volcano")) next
       p <- s$paired %||% list()
       if (!isTRUE(p$enabled)) next
-      cfgs <- p$configs %||% list()
-      if (length(cfgs) == 0) next
-      db_summary <- paste(vapply(cfgs, function(c) {
-        sprintf("%s=%s", c$config_id %||% "cfg", as.character(c$database %||% "(missing)"))
-      }, character(1)), collapse = ", ")
+      db <- (p$global_params %||% list())$database %||% "go"
+      n_cfg <- length(p$configs %||% list())
       showNotification(
-        sprintf("Built %s paired %s: %s", s$step_id %||% "?", p$engine_id %||% "goora", db_summary),
+        sprintf("Built %s paired %s: database=%s (%d config%s)",
+                s$step_id %||% "?", p$engine_id %||% "goora", db,
+                n_cfg, if (n_cfg == 1) "" else "s"),
         type = "message",
         duration = 5
       )

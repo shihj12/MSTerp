@@ -1038,15 +1038,9 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
           ))
         }
 
-        # Log what we received so users can verify database choices survived
-        # the build/load cycle. Empty database fields default to "go" downstream.
-        cfg_db_summary <- paste(vapply(goora_configs, function(c) {
-          sprintf("%s=%s", c$config_id %||% "cfg", as.character(c$database %||% "go"))
-        }, character(1)), collapse = ", ")
-        .plan_log(sprintf("[compile_plan] paired %s configs: %s",
-                          paired_engine_id, cfg_db_summary))
-
-        # Get global params (shared across all configs)
+        # Get global params (shared across all configs). Database (GO vs
+        # Complex) is now step-level and lives in global_params$database, with
+        # a legacy fallback to any per-config database on older flows.
         global_params <- paired_cfg$global_params %||% list()
         if (length(global_params) == 0) {
           # Migrate from legacy params
@@ -1055,6 +1049,14 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
             max_terms = (paired_cfg$params %||% list())$max_terms %||% 20
           )
         }
+        step_database <- global_params$database %||%
+                         (paired_cfg$params %||% list())$database %||%
+                         (goora_configs[[1]] %||% list())$database %||%
+                         "go"
+        global_params$database <- step_database
+
+        .plan_log(sprintf("[compile_plan] paired %s step-level database=%s (configs: %d)",
+                          paired_engine_id, step_database, length(goora_configs)))
 
         # Get groups from formatted metadata to generate per-comparison children
         groups <- meta$groups$group_name %||% character()
@@ -1113,7 +1115,7 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
                   list(
                     fdr_cutoff = cfg$fdr_cutoff %||% 0.05,
                     min_overlap = cfg$min_overlap %||% 3,
-                    database = cfg$database %||% "go"
+                    database = step_database
                   )
                 )
 
@@ -1184,7 +1186,7 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
               list(
                 fdr_cutoff = cfg$fdr_cutoff %||% 0.05,
                 min_overlap = cfg$min_overlap %||% 3,
-                database = cfg$database %||% "go"
+                database = step_database
               )
             )
 
