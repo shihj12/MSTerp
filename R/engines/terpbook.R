@@ -5933,6 +5933,8 @@ tb_render_umap_gene <- function(results, style, meta) {
   tb_require_pkg("plotly")
 
   emb <- results$data$embedding
+  groups_all <- results$data$groups %||% unique(emb$group %||% "combined")
+
   if (is.null(emb) || !is.data.frame(emb) || nrow(emb) == 0) {
     p_empty <- plotly::plot_ly(type = "scatter", mode = "markers") %>%
       plotly::layout(
@@ -5944,132 +5946,151 @@ tb_render_umap_gene <- function(results, style, meta) {
                 tables = list(gene_embedding = emb %||% data.frame())))
   }
 
+  if (!"group" %in% names(emb)) emb$group <- "combined"
+
   color_by <- style$color_by %||% "subloc"
   size_by  <- style$size_by %||% "flat"
   pt_size  <- tb_num(style$point_size, 2)
   pt_alpha <- tb_num(style$point_alpha, 0.7)
   flat_col <- style$flat_color %||% "#4682B4"
 
-  # ---- Size mapping ----
-  if (size_by == "mean_abundance" && "mean_abundance" %in% names(emb)) {
-    v <- emb$mean_abundance
-    v <- (v - min(v, na.rm = TRUE)) / max(1e-9, diff(range(v, na.rm = TRUE)))
-    marker_size <- pt_size * (2 + 6 * v)
-  } else if (size_by == "variance" && "variance" %in% names(emb)) {
-    v <- emb$variance
-    v <- (v - min(v, na.rm = TRUE)) / max(1e-9, diff(range(v, na.rm = TRUE)))
-    marker_size <- pt_size * (2 + 6 * v)
-  } else {
-    marker_size <- pt_size * 3
-  }
+  # Palettes shared across groups so colors are comparable between panels
+  subloc_levels_all <- results$data$subloc_levels %||% unique(emb$subloc)
+  if (length(subloc_levels_all) == 0) subloc_levels_all <- unique(emb$subloc)
+  subloc_palette <- grDevices::hcl.colors(max(length(subloc_levels_all), 3),
+                                          palette = "Dark 3")
+  names(subloc_palette) <- subloc_levels_all
 
-  # ---- Hover text ----
-  cluster_txt <- if ("cluster" %in% names(emb)) {
-    ifelse(emb$cluster == 0L, "noise", as.character(emb$cluster))
-  } else {
-    rep("—", nrow(emb))
-  }
-  emb$hover_text <- sprintf(
-    "%s\nUniProt: %s\nSubloc: %s\nCluster: %s\nMean abundance: %.2f\nVariance: %.3f",
-    emb$gene_symbol, emb$protein_id, emb$subloc, cluster_txt,
-    emb$mean_abundance, emb$variance
-  )
-
-  # ---- Plotly base ----
-  p <- plotly::plot_ly(
-    type = "scatter", mode = "markers",
-    source = "umap_gene"
-  )
-
-  if (color_by == "subloc") {
-    levels_present <- results$data$subloc_levels %||% unique(emb$subloc)
-    if (length(levels_present) == 0) levels_present <- unique(emb$subloc)
-    # Stable palette over canonical subloc levels
-    palette <- grDevices::hcl.colors(max(length(levels_present), 3), palette = "Dark 3")
-    names(palette) <- levels_present
-    for (lvl in levels_present) {
-      sub_df <- emb[emb$subloc == lvl, , drop = FALSE]
-      if (nrow(sub_df) == 0) next
-      sub_sizes <- marker_size[emb$subloc == lvl]
-      p <- p %>% plotly::add_trace(
-        data = sub_df,
-        x = ~UMAP1, y = ~UMAP2,
-        customdata = ~protein_id,
-        marker = list(color = palette[[lvl]], size = sub_sizes, opacity = pt_alpha,
-                      line = list(color = "#333333", width = 0.2)),
-        text = ~hover_text, hoverinfo = "text",
-        name = lvl
-      )
+  # ---- Per-group rendering helper ----
+  render_one <- function(df_g, group_tag, show_legend) {
+    # Size mapping
+    if (size_by == "mean_abundance" && "mean_abundance" %in% names(df_g)) {
+      v <- df_g$mean_abundance
+      v <- (v - min(v, na.rm = TRUE)) / max(1e-9, diff(range(v, na.rm = TRUE)))
+      msize <- pt_size * (2 + 6 * v)
+    } else if (size_by == "variance" && "variance" %in% names(df_g)) {
+      v <- df_g$variance
+      v <- (v - min(v, na.rm = TRUE)) / max(1e-9, diff(range(v, na.rm = TRUE)))
+      msize <- pt_size * (2 + 6 * v)
+    } else {
+      msize <- pt_size * 3
     }
-  } else if (color_by == "cluster" && "cluster" %in% names(emb)) {
-    cl_levels <- sort(unique(emb$cluster))
-    # Noise = 0 rendered grey
-    for (cl in cl_levels) {
-      sub_df <- emb[emb$cluster == cl, , drop = FALSE]
-      if (nrow(sub_df) == 0) next
-      sub_sizes <- marker_size[emb$cluster == cl]
-      col <- if (cl == 0L) "#BBBBBB" else {
-        grDevices::hcl.colors(max(length(cl_levels), 3), palette = "Dark 3")[match(cl, cl_levels)]
+
+    cluster_txt <- if ("cluster" %in% names(df_g)) {
+      ifelse(df_g$cluster == 0L, "noise", as.character(df_g$cluster))
+    } else {
+      rep("-", nrow(df_g))
+    }
+    df_g$hover_text <- sprintf(
+      "%s\nUniProt: %s\nGroup: %s\nSubloc: %s\nCluster: %s\nMean: %.2f\nVar: %.3f",
+      df_g$gene_symbol, df_g$protein_id, df_g$group, df_g$subloc, cluster_txt,
+      df_g$mean_abundance, df_g$variance
+    )
+
+    p <- plotly::plot_ly(type = "scatter", mode = "markers",
+                         source = paste0("umap_gene_", group_tag))
+
+    if (color_by == "subloc") {
+      for (lvl in subloc_levels_all) {
+        mask <- df_g$subloc == lvl
+        if (!any(mask)) next
+        p <- p %>% plotly::add_trace(
+          data = df_g[mask, , drop = FALSE],
+          x = ~UMAP1, y = ~UMAP2, customdata = ~protein_id,
+          marker = list(color = subloc_palette[[lvl]], size = msize[mask],
+                        opacity = pt_alpha,
+                        line = list(color = "#333333", width = 0.2)),
+          text = ~hover_text, hoverinfo = "text",
+          name = lvl, legendgroup = lvl, showlegend = show_legend
+        )
       }
-      nm <- if (cl == 0L) "noise" else paste0("cluster ", cl)
+    } else if (color_by == "cluster" && "cluster" %in% names(df_g)) {
+      cl_levels <- sort(unique(df_g$cluster))
+      cl_palette <- grDevices::hcl.colors(max(length(cl_levels), 3), palette = "Dark 3")
+      for (i in seq_along(cl_levels)) {
+        cl <- cl_levels[i]
+        mask <- df_g$cluster == cl
+        if (!any(mask)) next
+        col <- if (cl == 0L) "#BBBBBB" else cl_palette[i]
+        nm <- if (cl == 0L) "noise" else paste0("cluster ", cl)
+        p <- p %>% plotly::add_trace(
+          data = df_g[mask, , drop = FALSE],
+          x = ~UMAP1, y = ~UMAP2, customdata = ~protein_id,
+          marker = list(color = col, size = msize[mask], opacity = pt_alpha,
+                        line = list(color = "#333333", width = 0.2)),
+          text = ~hover_text, hoverinfo = "text",
+          name = nm, showlegend = show_legend
+        )
+      }
+    } else {
       p <- p %>% plotly::add_trace(
-        data = sub_df,
-        x = ~UMAP1, y = ~UMAP2,
-        customdata = ~protein_id,
-        marker = list(color = col, size = sub_sizes, opacity = pt_alpha,
+        data = df_g,
+        x = ~UMAP1, y = ~UMAP2, customdata = ~protein_id,
+        marker = list(color = flat_col, size = msize, opacity = pt_alpha,
                       line = list(color = "#333333", width = 0.2)),
-        text = ~hover_text, hoverinfo = "text",
-        name = nm
+        text = ~hover_text, hoverinfo = "text", showlegend = FALSE
       )
     }
-  } else {
-    # flat
-    p <- p %>% plotly::add_trace(
-      data = emb,
-      x = ~UMAP1, y = ~UMAP2,
-      customdata = ~protein_id,
-      marker = list(color = flat_col, size = marker_size, opacity = pt_alpha,
-                    line = list(color = "#333333", width = 0.2)),
-      text = ~hover_text, hoverinfo = "text",
-      showlegend = FALSE
-    )
+
+    if (isTRUE(style$show_labels %||% FALSE) && nrow(df_g) > 0) {
+      top_n <- max(1, min(as.integer(style$label_top_n %||% 10), nrow(df_g)))
+      top_idx <- order(df_g$variance, decreasing = TRUE)[seq_len(top_n)]
+      p <- p %>% plotly::add_annotations(
+        data = df_g[top_idx, , drop = FALSE],
+        x = ~UMAP1, y = ~UMAP2, text = ~gene_symbol,
+        showarrow = FALSE,
+        font = list(size = tb_num(style$label_size, 3) * 3, color = "#000000"),
+        yshift = 10
+      )
+    }
+
+    title_text <- if (group_tag == "combined") "Gene UMAP (all samples)" else paste0("Group: ", group_tag)
+    p %>%
+      plotly::layout(
+        title = list(text = title_text, x = 0.5, font = list(size = 14)),
+        xaxis = list(title = "UMAP1", zeroline = FALSE,
+                     showgrid = TRUE, gridcolor = "#e8e8e8"),
+        yaxis = list(title = "UMAP2", zeroline = FALSE,
+                     showgrid = TRUE, gridcolor = "#e8e8e8"),
+        dragmode = "pan", plot_bgcolor = "white", paper_bgcolor = "white",
+        legend = list(x = 1.02, y = 1, xanchor = "left"),
+        showlegend = show_legend
+      ) %>%
+      plotly::config(displayModeBar = FALSE)
   }
 
-  # ---- Optional top-N variance labels ----
-  if (isTRUE(style$show_labels %||% FALSE)) {
-    top_n <- as.integer(style$label_top_n %||% 10)
-    top_n <- max(1, min(top_n, nrow(emb)))
-    top_idx <- order(emb$variance, decreasing = TRUE)[seq_len(top_n)]
-    lbl_df <- emb[top_idx, , drop = FALSE]
-    p <- p %>% plotly::add_annotations(
-      data = lbl_df,
-      x = ~UMAP1, y = ~UMAP2,
-      text = ~gene_symbol,
-      showarrow = FALSE,
-      font = list(size = tb_num(style$label_size, 3) * 3, color = "#000000"),
-      yshift = 10
-    )
+  groups_present <- unique(emb$group)
+  # Order per results$data$groups if provided, else alphabetically
+  if (length(groups_all) > 0) {
+    groups_present <- intersect(groups_all, groups_present)
+    extras <- setdiff(unique(emb$group), groups_present)
+    groups_present <- c(groups_present, extras)
   }
 
-  p <- p %>%
-    plotly::layout(
-      xaxis = list(title = "UMAP1", zeroline = FALSE,
-                   showgrid = TRUE, gridcolor = "#e8e8e8"),
-      yaxis = list(title = "UMAP2", zeroline = FALSE,
-                   showgrid = TRUE, gridcolor = "#e8e8e8"),
-      dragmode = "pan",
-      plot_bgcolor = "white",
-      paper_bgcolor = "white",
-      legend = list(x = 1.02, y = 1, xanchor = "left")
-    ) %>%
-    plotly::config(displayModeBar = FALSE)
+  if (length(groups_present) <= 1) {
+    # Combined mode (or single-group fallback)
+    g <- groups_present[1] %||% "combined"
+    p <- render_one(emb[emb$group == g, , drop = FALSE], g, show_legend = TRUE)
+    return(list(
+      plots = list(umap_gene = p),
+      tables = list(gene_embedding = emb[, setdiff(names(emb), "hover_text"), drop = FALSE])
+    ))
+  }
 
-  # Strip hover_text col from returned table to keep it clean
-  emb_tbl <- emb[, setdiff(names(emb), "hover_text"), drop = FALSE]
+  # Per-group: one plot per group + one table per group + tabs
+  plots_out <- list()
+  tables_out <- list()
+  for (i in seq_along(groups_present)) {
+    g <- groups_present[i]
+    df_g <- emb[emb$group == g, , drop = FALSE]
+    plots_out[[paste0(g, "_plot")]] <- render_one(df_g, g, show_legend = (i == 1))
+    tables_out[[paste0(g, "_table")]] <- df_g[, setdiff(names(df_g), "hover_text"), drop = FALSE]
+  }
 
   list(
-    plots = list(umap_gene = p),
-    tables = list(gene_embedding = emb_tbl)
+    plots = plots_out,
+    tables = tables_out,
+    tabs = groups_present
   )
 }
 

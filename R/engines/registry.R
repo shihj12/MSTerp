@@ -1911,6 +1911,14 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         analysis_levels = c("protein")
       ),
       params_schema = list(
+        msterp_schema_field("group_mode", "choice", "Group mode",
+                            default = "combined",
+                            choices = c("combined", "per_group"),
+                            choice_labels = c("Combined (one UMAP over all samples)",
+                                              "Per-group (one UMAP per sample group)"),
+                            help = paste("Combined: every sample is a feature dimension;",
+                                         "groups do NOT separate on the plot, they shape the embedding.",
+                                         "Per-group: one independent UMAP per group using only that group's samples.")),
         msterp_schema_field("log_transform", "choice", "Log transform",
                             default = "log2", choices = c("log2", "log10", "none")),
         msterp_schema_field("scale_method", "choice", "Scaling",
