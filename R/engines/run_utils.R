@@ -1987,7 +1987,7 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
 #' @return Character vector of valid engine IDs
 nr_engine_ids <- function() {
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
-    "pca", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
+    "pca", "umap_gene", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
     "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
@@ -2010,7 +2010,7 @@ nr_engine_ids <- function() {
 nr_implemented_engines <- function() {
   # All engines in this list have implementations in R/engines/stats/
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
-    "pca", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
+    "pca", "umap_gene", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
     "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
@@ -2169,6 +2169,7 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "dsilac_ratio_box_peptide"       = stats_dsilac_ratio_box_peptide_run(payload, payload$params, context),
     "dsilac_ratio_box_protein"       = stats_dsilac_ratio_box_protein_run(payload, payload$params, context),
     "pca"           = stats_pca_run(payload, payload$params, context),
+    "umap_gene"     = stats_umap_gene_run(payload, payload$params, context),
     "volcano"       = stats_volcano_run(payload, payload$params, context),
     "ma_plot"       = stats_ma_plot_run(payload, payload$params, context),
     "rankplot"      = stats_rankplot_run(payload, payload$params, context),

@@ -42,7 +42,9 @@ core_cran <- c(
   "progress",
   "scales",
   "shiny",
-  "shinyFiles"
+  "shinyFiles",
+  "uwot",
+  "dbscan"
 )
 
 optional_cran <- c(

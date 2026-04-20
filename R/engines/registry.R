@@ -1896,6 +1896,101 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                          tables = character(0), tabs = NULL)
     ),
 
+    umap_gene = list(
+      engine_id = "umap_gene",
+      label = "Gene UMAP",
+      category = "trends",
+      supported_data_types = c("proteomics"),
+      description = "Per-gene UMAP embedding with subcellular-localization overlay and HDBSCAN clustering.",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein"),
+      requirements = list(
+        min_groups = 1,
+        requires_terpbase = TRUE,
+        required_ids = c(),
+        analysis_levels = c("protein")
+      ),
+      params_schema = list(
+        msterp_schema_field("log_transform", "choice", "Log transform",
+                            default = "log2", choices = c("log2", "log10", "none")),
+        msterp_schema_field("scale_method", "choice", "Scaling",
+                            default = "zscore", choices = c("zscore", "none"),
+                            help = "Per-gene z-score focuses UMAP on pattern not magnitude"),
+        msterp_schema_field("missing_handling", "choice", "Missing value handling",
+                            default = "drop_gene",
+                            choices = c("drop_gene", "min_impute", "zero_impute")),
+        msterp_schema_field("min_valid_fraction", "num", "Min fraction of valid samples",
+                            default = 0.7, min = 0, max = 1, advanced = TRUE,
+                            help = "Drop proteins with fewer valid values than this fraction"),
+        msterp_schema_field("variance_filter_top_n", "int", "Keep top-N by variance",
+                            default = 2000, min = 100, max = 10000,
+                            help = "UMAP on all proteins is slow and noisy; keep most variable"),
+        msterp_schema_field("n_neighbors", "int", "UMAP n_neighbors",
+                            default = 15, min = 2, max = 100,
+                            help = "Lower = local structure; higher = global"),
+        msterp_schema_field("min_dist", "num", "UMAP min_dist",
+                            default = 0.1, min = 0, max = 0.99,
+                            help = "Lower = tighter clusters"),
+        msterp_schema_field("metric", "choice", "Distance metric",
+                            default = "correlation",
+                            choices = c("correlation", "euclidean", "cosine", "manhattan")),
+        msterp_schema_field("seed", "int", "Random seed",
+                            default = 42, min = 0, max = 2147483647, advanced = TRUE),
+        msterp_schema_field("clustering_enabled", "bool", "Post-hoc HDBSCAN clustering",
+                            default = TRUE),
+        msterp_schema_field("cluster_min_size", "int", "HDBSCAN minPts",
+                            default = 15, min = 5, max = 200, advanced = TRUE),
+        msterp_schema_field("cluster_on", "choice", "Cluster on",
+                            default = "embedding", choices = c("embedding", "features"),
+                            advanced = TRUE,
+                            help = "'embedding' uses 2D UMAP coords; 'features' uses pre-UMAP matrix"),
+        msterp_schema_field("id_type", "choice", "Protein ID type",
+                            default = "uniprot", choices = c("uniprot", "gene"),
+                            advanced = TRUE,
+                            help = "Used to match against terpbase gene_meta for subloc annotation")
+      ),
+      style_schema = c(
+        list(
+          msterp_schema_field("point_size", "num", "Point size",
+                              default = 2, min = 0.5, max = 10, advanced = TRUE),
+          msterp_schema_field("point_alpha", "num", "Point opacity",
+                              default = 0.7, min = 0, max = 1, advanced = TRUE),
+          msterp_schema_field("flat_color", "string", "Flat color (hex)",
+                              default = "#4682B4", advanced = TRUE,
+                              help = "Used when Color by = flat"),
+          msterp_schema_field("show_labels", "bool", "Show gene labels",
+                              default = FALSE),
+          msterp_schema_field("label_top_n", "int", "Top-N labels by variance",
+                              default = 10, min = 1, max = 100, advanced = TRUE),
+          msterp_schema_field("label_size", "num", "Label size",
+                              default = 3, min = 1, max = 10, advanced = TRUE)
+        ),
+        mk_style(width = 7, height = 6, axis_text_size = 16)
+      ),
+      viewer_schema = list(
+        msterp_schema_field("color_by", "choice", "Color by",
+                            default = "subloc",
+                            choices = c("subloc", "cluster", "flat"),
+                            choice_labels = c("Subcellular localization", "HDBSCAN cluster", "Flat"),
+                            help = "Recolors existing embedding (UMAP is not recomputed)"),
+        msterp_schema_field("size_by", "choice", "Size by",
+                            default = "flat",
+                            choices = c("flat", "mean_abundance", "variance"),
+                            choice_labels = c("Flat", "Mean abundance", "Variance"),
+                            advanced = TRUE)
+      ),
+      outputs = list(
+        figures = c("umap_gene"),
+        tables = c("gene_embedding"),
+        interactive = TRUE
+      ),
+      render_spec = list(
+        plots = c("umap_gene"),
+        tables = c("gene_embedding"),
+        tabs = NULL
+      )
+    ),
+
     heatmap = list(
       engine_id = "heatmap",
       label = "Targeted Heatmap",

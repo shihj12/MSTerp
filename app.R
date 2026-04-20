@@ -39,6 +39,9 @@ suppressPackageStartupMessages({
 
   library(igraph)
   library(visNetwork)
+
+  library(uwot)
+  library(dbscan)
 })
 
 source_required <- function(path) {
