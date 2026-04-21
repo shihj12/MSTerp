@@ -15296,25 +15296,40 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           res <- tb_load_results(g_dir)
           if (is.null(res) || is.null(res$data)) next
 
-          # Get terms data
-          terms <- res$data$terms %||% NULL
-          if (is.null(terms) || !is.data.frame(terms) || nrow(terms) == 0) next
+          decorate_and_write <- function(terms_df, comp_name = NULL) {
+            if (is.null(terms_df) || !is.data.frame(terms_df) || nrow(terms_df) == 0) return(invisible(NULL))
+            terms_df$source_analysis <- g_label
+            terms_df$parent_analysis <- parent_label
+            if (!is.null(comp_name) && nzchar(comp_name)) {
+              terms_df$comparison <- comp_name
+            }
+            if (nzchar(pairing_context)) {
+              terms_df$direction_context <- pairing_context
+            }
+            if (nzchar(config_name)) {
+              terms_df$config_id <- config_name
+            }
+            terms_df$engine_type <- g_engine
 
-          # Add source context columns to terms
-          terms$source_analysis <- g_label
-          terms$parent_analysis <- parent_label
-          if (nzchar(pairing_context)) {
-            terms$direction_context <- pairing_context
+            base <- if (!is.null(comp_name) && nzchar(comp_name)) {
+              paste0(g_label, " ", comp_name)
+            } else {
+              paste0(parent_label, " ", g_label)
+            }
+            sheet_name <- make_sheet_name(base)
+            openxlsx::addWorksheet(wb, sheet_name)
+            openxlsx::writeData(wb, sheet_name, terms_df)
           }
-          if (nzchar(config_name)) {
-            terms$config_id <- config_name
-          }
-          terms$engine_type <- g_engine
 
-          # BP/MF/CC share a page - all terms from this GO analysis go on one sheet
-          sheet_name <- make_sheet_name(paste0(parent_label, " ", g_label))
-          openxlsx::addWorksheet(wb, sheet_name)
-          openxlsx::writeData(wb, sheet_name, terms)
+          # Standalone multi-comparison FCS stores per-comparison results under data$analyses
+          analyses <- res$data$analyses %||% NULL
+          if (!is.null(analyses) && is.list(analyses) && length(analyses) > 0) {
+            for (comp_name in names(analyses)) {
+              decorate_and_write(analyses[[comp_name]]$terms, comp_name)
+            }
+          } else {
+            decorate_and_write(res$data$terms %||% NULL)
+          }
         }
 
         # --- Heatmap gene lists (heatmap, ftest_heatmap) ---
