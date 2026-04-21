@@ -1674,9 +1674,22 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     rv$ui_log <- character(0)
     rv$run_log_cache <- character(0)
     rv$run_log_waiting <- FALSE
+
+    # Immediate visual feedback so the user doesn't perceive the app as frozen
+    # while validation + payload load happens (a reactive observer flush can lag
+    # ~500ms behind, and the background process takes another ~1-3s to source
+    # engines before its first log line appears).
+    showNotification(
+      "Pipeline starting \u2014 preparing engines\u2026",
+      duration = NULL, id = "pipeline_init", type = "message"
+    )
     session$sendCustomMessage("nr_update_log", list(
       id = "nr_single_log_container",
-      html = "",
+      html = paste0(
+        '<span style="color: var(--text-secondary);">',
+        '<i class="fa fa-spinner fa-spin"></i> ',
+        'Starting pipeline\u2026</span>'
+      ),
       replace = TRUE
     ))
 
@@ -2138,7 +2151,11 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
         rv$run_log_waiting <- TRUE
         session$sendCustomMessage("nr_update_log", list(
           id = "nr_single_log_container",
-          html = '<span style="color: var(--text-secondary);">(waiting for run...)</span>',
+          html = paste0(
+            '<span style="color: var(--text-secondary);">',
+            '<i class="fa fa-spinner fa-spin"></i> ',
+            'Waiting for run\u2026</span>'
+          ),
           replace = TRUE
         ))
       }
@@ -2146,6 +2163,8 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
     }
 
     rv$run_log_waiting <- FALSE
+    # Dismiss the "Pipeline starting" notification as soon as real log lines appear
+    tryCatch(removeNotification("pipeline_init"), error = function(e) NULL)
     all_lines <- utils::tail(all_lines, 200)
     delta <- log_delta(all_lines, rv$run_log_cache)
     if (identical(delta$mode, "noop")) return()

@@ -2424,14 +2424,6 @@ tb_render_subloc <- function(results, style, meta) {
   cm <- style$color_mode %||% "group"
   flat_color <- style$flat_color %||% "#B0B0B0"
 
-  group_colors <- results$data$group_colors %||% NULL
-  if (is.null(group_colors) || length(group_colors) == 0) {
-    n_groups <- nlevels(df$group)
-    group_colors <- scales::hue_pal()(n_groups)
-    names(group_colors) <- levels(df$group)
-  }
-  group_colors <- group_colors[levels(df$group)]
-
   df$bin   <- df$bin   %||% df$Bin   %||% df$Location %||% df$loc %||% df$Loc
   df$group <- df$group %||% df$Group %||% df$SampleGroup %||% df$sample_group
   if (is.null(df$bin) || is.null(df$group)) {
@@ -2450,6 +2442,22 @@ tb_render_subloc <- function(results, style, meta) {
 
   df$bin   <- factor(df$bin)
   df$group <- factor(df$group)
+
+  # Build group_colors AFTER factoring so levels() returns the group names.
+  # Upstream (stats/subloc.R) populates results$data$group_colors as a named
+  # character vector keyed by group; fall back to a default palette if absent
+  # or if levels don't match the stored names.
+  group_colors <- results$data$group_colors %||% NULL
+  if (is.list(group_colors)) group_colors <- unlist(group_colors)
+  group_levels <- levels(df$group)
+  needs_default <- is.null(group_colors) ||
+    length(group_colors) == 0 ||
+    !all(group_levels %in% names(group_colors))
+  if (needs_default) {
+    group_colors <- scales::hue_pal()(length(group_levels))
+    names(group_colors) <- group_levels
+  }
+  group_colors <- group_colors[group_levels]
 
   dodge_width <- 0.8
   dodge <- ggplot2::position_dodge2(width = dodge_width, preserve = "single")
@@ -2512,9 +2520,17 @@ tb_render_subloc <- function(results, style, meta) {
   }
   if (cm == "flat") {
     vals <- stats::setNames(rep(flat_color, nlevels(df$group)), levels(df$group))
-    p <- p + ggplot2::scale_fill_manual(values = vals, guide = "none")
+    p <- p +
+      ggplot2::scale_fill_manual(values = vals, guide = "none") +
+      ggplot2::scale_color_manual(values = vals, guide = "none")
   } else {
-    p <- p + ggplot2::guides(fill = ggplot2::guide_legend(title = NULL))
+    # Single scale_fill_manual with values AND legend guide — avoids the earlier
+    # bug where a second scale call without values overrode the first.
+    p <- p +
+      ggplot2::scale_fill_manual(values = group_colors, drop = FALSE,
+                                 guide = ggplot2::guide_legend(title = NULL)) +
+      ggplot2::scale_color_manual(values = group_colors, drop = FALSE,
+                                  guide = ggplot2::guide_legend(title = NULL))
   }
 
   # Apply label rotation for x-axis (bin/category labels)
@@ -2532,12 +2548,6 @@ tb_render_subloc <- function(results, style, meta) {
         vjust = rotation_vjust
       )
     )
-
-  if (cm != "flat") {
-    p <- p +
-      ggplot2::scale_fill_manual(values = group_colors, drop = FALSE) +
-      ggplot2::scale_color_manual(values = group_colors, drop = FALSE)
-  }
 
   # FIX: Add global mean reference line when show_global_mean is TRUE (style option)
   # FIX: Use customizable color and thickness from style options
@@ -2912,7 +2922,10 @@ tb_render_idquant <- function(results, style, meta) {
   df$level <- factor(level_labels[as.character(df$level)], levels = unique(level_labels))
 
   view_mode <- style$view_mode %||% "combined"
-  if (identical(view_mode, "quantified_only")) {
+  # Back-compat: legacy "quantified_only" maps to new "repro_quant_only"
+  if (identical(view_mode, "quantified_only")) view_mode <- "repro_quant_only"
+
+  if (identical(view_mode, "repro_quant_only")) {
     keep_levels <- levels(df$level)[grepl("reproduc", levels(df$level), ignore.case = TRUE)]
     if (length(keep_levels) == 0) {
       keep_levels <- levels(df$level)[grepl("quant", levels(df$level), ignore.case = TRUE)]
@@ -2980,12 +2993,20 @@ tb_render_idquant <- function(results, style, meta) {
 
   # Build plots and tables lists
   # FIX: Table names must match plot names for res_plot_pick sync to work
-  plots <- list(idquant_group = p_group)
-  tables <- list(idquant_group = df)
+  # view_mode controls which plot(s) are emitted so the picker is just the view selector:
+  #   - combined: both group + replicate
+  #   - quant_only: only the per-replicate quantified plot
+  #   - repro_quant_only: only the group-level reproducibly-quantified plot
+  plots <- list()
+  tables <- list()
+  if (view_mode %in% c("combined", "repro_quant_only")) {
+    plots$idquant_group <- p_group
+    tables$idquant_group <- df
+  }
 
-  # Replicate-level bar plot (new) - hidden in Quantification Only mode
+  # Replicate-level bar plot - shown in combined and quant_only modes
   rep_df <- results$data$replicate_counts
-  if (!identical(view_mode, "quantified_only") &&
+  if (view_mode %in% c("combined", "quant_only") &&
       !is.null(rep_df) && is.data.frame(rep_df) && nrow(rep_df) > 0) {
     if (!"replicate" %in% names(rep_df)) {
       rep_df$replicate <- ave(
@@ -3050,6 +3071,17 @@ tb_render_idquant <- function(results, style, meta) {
     plots$idquant_replicate <- p_rep
     # FIX: Table name must match plot name for res_plot_pick sync to work
     tables$idquant_replicate <- rep_df[, c("group", "replicate", "n"), drop = FALSE]
+  }
+
+  # In combined mode, stack the two plots into a single output so the plot-picker
+  # disappears and view_mode is the only graph selector the user sees.
+  if (identical(view_mode, "combined") &&
+      !is.null(plots$idquant_group) && !is.null(plots$idquant_replicate) &&
+      requireNamespace("patchwork", quietly = TRUE)) {
+    stacked <- patchwork::wrap_plots(plots$idquant_group, plots$idquant_replicate, ncol = 1)
+    plots <- list(idquant_group = stacked)
+    # Keep both tables accessible on the single plot key so table view isn't lost.
+    tables <- list(idquant_group = df)
   }
 
   list(plots = plots, tables = tables)
@@ -6078,19 +6110,26 @@ tb_render_umap_gene <- function(results, style, meta) {
   }
 
   # Per-group: one plot per group + one table per group + tabs
+  # Normalize group name to a safe token (spaces/punct -> underscore) so the
+  # result viewer's tab-keyed plot lookup (regex "(^|_)<tab>(_|$)") matches.
   plots_out <- list()
   tables_out <- list()
+  tab_keys <- character(length(groups_present))
   for (i in seq_along(groups_present)) {
     g <- groups_present[i]
+    g_key <- gsub("[^A-Za-z0-9]+", "_", g)
+    g_key <- gsub("^_+|_+$", "", g_key)
+    if (!nzchar(g_key)) g_key <- sprintf("group%d", i)
+    tab_keys[i] <- g_key
     df_g <- emb[emb$group == g, , drop = FALSE]
-    plots_out[[paste0(g, "_plot")]] <- render_one(df_g, g, show_legend = (i == 1))
-    tables_out[[paste0(g, "_table")]] <- df_g[, setdiff(names(df_g), "hover_text"), drop = FALSE]
+    plots_out[[paste0(g_key, "_plot")]] <- render_one(df_g, g, show_legend = (i == 1))
+    tables_out[[paste0(g_key, "_table")]] <- df_g[, setdiff(names(df_g), "hover_text"), drop = FALSE]
   }
 
   list(
     plots = plots_out,
     tables = tables_out,
-    tabs = groups_present
+    tabs = tab_keys
   )
 }
 
@@ -9980,9 +10019,13 @@ tb_render_gene_barchart <- function(results, style, meta) {
   }
 
   # Y-axis label with proper subscript formatting
+  # Effective log state: user's additional log_transform takes precedence;
+  # otherwise inherit from upstream (e.g., heatmap mat_log is log10-transformed)
+  already_log <- as.character(data$already_log_transform %||% "none")[1]
+  effective_log <- if (log_transform != "none") log_transform else already_log
   y_label <- switch(data_type,
     "zscore" = "Z-score",
-    "raw" = tb_log_axis_label("Intensity", log_transform),
+    "raw" = tb_log_axis_label("Intensity", effective_log),
     "Z-score"
   )
 

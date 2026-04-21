@@ -739,9 +739,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field(
           "view_mode", "choice", "View",
           default = "combined",
-          choices = c("combined", "quantified_only"),
-          choice_labels = c("ID + Quantification", "Quantification Only"),
-          help = "Combined shows both identified and reproducibly quantified bars per group plus the per-replicate identification plot. Quantification Only shows just the reproducibly quantified bars at the group level."
+          choices = c("combined", "quant_only", "repro_quant_only"),
+          choice_labels = c("Combined", "Quant only", "Repro quant only"),
+          help = "Combined shows quantified + reproducibly quantified bars (plus per-replicate plot). Quant only shows the quantified per-replicate plot. Repro quant only shows reproducibly quantified bars at the group level."
         )
       ),
       outputs = list(figures = c("idquant_group", "idquant_replicate"), tables = c("idquant_group", "idquant_replicate"), interactive = TRUE),

@@ -199,7 +199,8 @@ stats_gene_barchart_run <- function(payload, params = NULL, context = NULL) {
       group_annotations = group_annotations,
       significance = significance,
       parent_engine_id = parent_engine_id,
-      entity_label = ctx$entity_label
+      entity_label = ctx$entity_label,
+      already_log_transform = parent_data$already_log_transform %||% "none"
     )
   )
 }

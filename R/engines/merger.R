@@ -183,8 +183,44 @@ msterp_merge_preview <- function(paths, file_ids = NULL) {
   if (!all(levels %in% c("protein", "peptide"))) {
     stop("Only protein or peptide level is supported. Found: ", paste(unique(levels), collapse = ", "))
   }
-  
-  # ID columns must match (same names, same order)
+
+  # Files may use different column NAMES for the same ID role (e.g. one file
+  # calls the peptide primary ID "Peptide", another "Sequence"). Adopt file 1's
+  # names as canonical and rename ID columns in the other files' data sheets to
+  # match so the merge can proceed on content, not on label identity.
+  id_role_keys <- c("id_primary_col", "id_gene_col", "id_protein_col")
+  canonical <- lapply(id_role_keys, function(k) metas[[1]][[k]])
+  names(canonical) <- id_role_keys
+
+  for (i in seq_along(datasets)[-1]) {
+    rename_map <- list()  # from_name -> to_name
+    for (k in id_role_keys) {
+      from <- metas[[i]][[k]]
+      to   <- canonical[[k]]
+      if (is.null(from) || is.null(to)) next
+      if (!nzchar(from) || !nzchar(to)) next
+      if (identical(from, to)) next
+      if (from %in% names(datasets[[i]]$data)) {
+        rename_map[[from]] <- to
+      }
+    }
+    if (length(rename_map) > 0) {
+      d <- datasets[[i]]$data
+      n <- names(d)
+      n <- ifelse(n %in% names(rename_map), unlist(rename_map[n], use.names = FALSE), n)
+      names(datasets[[i]]$data) <- n
+      # Reflect the rename in meta so primary/secondary-col lookups use canonical names
+      for (k in id_role_keys) {
+        if (!is.null(canonical[[k]]) && nzchar(canonical[[k]])) {
+          metas[[i]][[k]] <- canonical[[k]]
+        }
+      }
+    }
+  }
+  # Refresh prims after metadata normalization
+  prims <- lapply(metas, msterp_primary_id_from_meta)
+
+  # After rename, id columns must match (same names, same order)
   id_cols_list <- lapply(metas, msterp_id_cols_from_meta)
   id_sig <- vapply(id_cols_list, function(v) paste(v, collapse = "|"), character(1))
   if (length(unique(id_sig)) != 1) {

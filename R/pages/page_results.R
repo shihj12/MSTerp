@@ -1366,7 +1366,6 @@ page_results_ui <- function() {
           if (!plotId) return;
 
           var container = document.getElementById(plotId);
-          var img = container ? container.querySelector('img') : null;
 
           function showNotification(msg, type) {
             // Use Shiny's notification system
@@ -1377,7 +1376,7 @@ page_results_ui <- function() {
             });
           }
 
-          if (!img || !img.src) {
+          if (!container) {
             showNotification('Plot not ready yet. Try again.', 'error');
             return;
           }
@@ -1387,22 +1386,49 @@ page_results_ui <- function() {
             return;
           }
 
-          fetch(img.src)
-            .then(function(res) { return res.blob(); })
-            .then(function(blob) {
-              var item = new ClipboardItem({ [blob.type]: blob });
-              return navigator.clipboard.write([item]);
-            })
-            .then(function() {
-              var w = img.naturalWidth || 0;
-              var h = img.naturalHeight || 0;
-              var label = (w && h) ? ('Copied plot (' + w + ' x ' + h + ' px).') : 'Copied plot to clipboard.';
-              showNotification(label, 'message');
-            })
-            .catch(function(err) {
-              showNotification('Copy failed. Check browser permissions.', 'error');
-              if (window.console && console.error) console.error(err);
-            });
+          // Prefer <img> (static ggplot/patchwork), fall back to <canvas> (visNetwork / htmlwidget)
+          var img = container.querySelector('img');
+          var canvas = container.querySelector('canvas');
+
+          if (img && img.src) {
+            fetch(img.src)
+              .then(function(res) { return res.blob(); })
+              .then(function(blob) {
+                var item = new ClipboardItem({ [blob.type]: blob });
+                return navigator.clipboard.write([item]);
+              })
+              .then(function() {
+                var w = img.naturalWidth || 0;
+                var h = img.naturalHeight || 0;
+                var label = (w && h) ? ('Copied plot (' + w + ' x ' + h + ' px).') : 'Copied plot to clipboard.';
+                showNotification(label, 'message');
+              })
+              .catch(function(err) {
+                showNotification('Copy failed. Check browser permissions.', 'error');
+                if (window.console && console.error) console.error(err);
+              });
+          } else if (canvas && canvas.toBlob) {
+            canvas.toBlob(function(blob) {
+              if (!blob) {
+                showNotification('Could not capture network image.', 'error');
+                return;
+              }
+              var item = new ClipboardItem({ 'image/png': blob });
+              navigator.clipboard.write([item])
+                .then(function() {
+                  var w = canvas.width || 0;
+                  var h = canvas.height || 0;
+                  var label = (w && h) ? ('Copied network (' + w + ' x ' + h + ' px).') : 'Copied network to clipboard.';
+                  showNotification(label, 'message');
+                })
+                .catch(function(err) {
+                  showNotification('Copy failed. Check browser permissions.', 'error');
+                  if (window.console && console.error) console.error(err);
+                });
+            }, 'image/png');
+          } else {
+            showNotification('Plot not ready yet. Try again.', 'error');
+          }
         });
 
         Shiny.addCustomMessageHandler('res_open_url', function(payload) {
@@ -4903,13 +4929,17 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
   # Observer for Overview button (always present)
   observeEvent(input$res_nav_overview, {
-    # Flush debounced style saves and commit pending changes before switching nodes
+    # Flush debounced style saves and commit pending changes before switching nodes.
+    # Flush TWICE: res_commit_pending_changes() may re-schedule debounced saves
+    # (e.g. merging label maps into style), which must also hit disk before we
+    # switch node identity or changes will be lost.
     .commit_style_debounced$flush()
     if (res_has_pending_changes()) {
       tryCatch(
         res_commit_pending_changes(trigger_source = "node_switch"),
         error = function(e) message("[Node switch commit] Error: ", conditionMessage(e))
       )
+      .commit_style_debounced$flush()
     }
     rv$switching_node <- TRUE  # FIX: Set flag before node switch
     rv$active_node_id <- "overview"
@@ -4940,13 +4970,17 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           node_id <- nid
           btn_id <- paste0("res_nav_", gsub("[^A-Za-z0-9_]", "_", node_id))
           rv$nav_obs[[node_id]] <- observeEvent(input[[btn_id]], {
-            # Flush debounced style saves and commit pending changes before switching nodes
+            # Flush debounced style saves and commit pending changes before switching nodes.
+            # Flush TWICE: res_commit_pending_changes() may re-schedule debounced saves
+            # (e.g. merging label maps into style), which must also hit disk before we
+            # switch node identity or changes will be lost.
             .commit_style_debounced$flush()
             if (res_has_pending_changes()) {
               tryCatch(
                 res_commit_pending_changes(trigger_source = "node_switch"),
                 error = function(e) message("[Node switch commit] Error: ", conditionMessage(e))
               )
+              .commit_style_debounced$flush()
             }
             rv$switching_node <- TRUE  # FIX: Set flag before node switch
             rv$active_node_id <- node_id
@@ -10846,12 +10880,29 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   rv$pending_ppi <- NULL
 
   # Show PPI configuration modal
-  res_show_ppi_modal <- function(proteins, source_label) {
-    rv$pending_ppi <- list(proteins = proteins, source = source_label)
+  # `clusters` (optional): named list mapping cluster label -> character vector of
+  # genes. When provided (and length >= 2), the confirm action spawns ONE PPI
+  # child view per cluster instead of one combined view.
+  res_show_ppi_modal <- function(proteins, source_label, clusters = NULL) {
+    cluster_mode <- !is.null(clusters) && length(clusters) >= 2
+    rv$pending_ppi <- list(
+      proteins = proteins,
+      source = source_label,
+      clusters = clusters,
+      cluster_mode = cluster_mode
+    )
     showModal(modalDialog(
       title = sprintf("Run PPI Network (%s)", source_label),
       tags$div(
         tags$p(sprintf("%d proteins/genes selected from: %s", length(proteins), source_label)),
+        if (cluster_mode) {
+          usable <- sum(vapply(clusters, function(g) length(g) >= 2, logical(1)))
+          tags$p(
+            class = "text-info",
+            sprintf("This will create %d separate PPI child step%s, one per cluster (clusters with <2 genes are skipped).",
+                    usable, if (usable == 1) "" else "s")
+          )
+        },
         if (length(proteins) > 500) {
           tags$p(class = "text-warning",
                  sprintf("Warning: %d proteins exceed recommended limit of 500. Top 500 by input order will be used.", length(proteins)))
@@ -10890,17 +10941,107 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       return()
     }
 
-    # Show progress notification
+    ppi_params <- list(
+      species = input$res_ppi_species %||% "9606",
+      score_threshold = as.integer(input$res_ppi_score %||% 400),
+      network_type = input$res_ppi_network_type %||% "functional",
+      clustering_method = input$res_ppi_clustering %||% "louvain"
+    )
+
+    # Per-cluster branch: spawn one child view per cluster in pending$clusters.
+    if (isTRUE(pending$cluster_mode) && length(pending$clusters) >= 2) {
+      nd <- active_node_dir()
+      if (is.null(nd)) {
+        showNotification("No active node — cannot create PPI child views.", type = "error")
+        rv$pending_ppi <- NULL
+        return()
+      }
+
+      nid <- showNotification(
+        sprintf("Running PPI for %d clusters (querying STRING-DB)...", length(pending$clusters)),
+        type = "message", duration = NULL
+      )
+
+      made <- 0L
+      skipped <- character()
+      errors <- character()
+      ts <- format(Sys.time(), "%Y%m%d%H%M%S")
+
+      for (i in seq_along(pending$clusters)) {
+        cname <- names(pending$clusters)[i] %||% sprintf("Cluster %d", i)
+        genes <- pending$clusters[[i]]
+        genes <- unique(genes[!is.na(genes) & nzchar(as.character(genes))])
+        if (length(genes) < 2) {
+          skipped <- c(skipped, cname)
+          next
+        }
+
+        ppi_result <- tryCatch({
+          stats_ppi_network_run_from_list(
+            proteins = genes,
+            species = ppi_params$species,
+            score_threshold = ppi_params$score_threshold,
+            network_type = ppi_params$network_type,
+            clustering_method = ppi_params$clustering_method
+          )
+        }, error = function(e) {
+          errors <<- c(errors, sprintf("%s: %s", cname, e$message))
+          NULL
+        })
+        if (is.null(ppi_result)) next
+
+        child_label <- sprintf("PPI: %s (%d genes)", cname, length(genes))
+        view_id <- sprintf("ppi_%s_%d", ts, i)
+        view_dir <- tryCatch({
+          tb_create_child_view(
+            parent_dir = nd,
+            view_id = view_id,
+            engine_id = "ppi_network",
+            label = child_label,
+            params = ppi_params,
+            style = list()
+          )
+        }, error = function(e) {
+          errors <<- c(errors, sprintf("%s: %s", cname, e$message))
+          NULL
+        })
+        if (is.null(view_dir)) next
+
+        tryCatch(tb_save_child_results(view_dir, ppi_result), error = function(e) {
+          errors <<- c(errors, sprintf("%s save: %s", cname, e$message))
+        })
+        made <- made + 1L
+      }
+
+      rv$nodes_df <- tb_nodes_df(rv$run_root, rv$manifest, registry = res_registry())
+      removeNotification(nid)
+
+      parts <- sprintf("%d PPI child step%s created.", made, if (made == 1) "" else "s")
+      if (length(skipped) > 0) {
+        parts <- paste(parts, sprintf("Skipped (<2 genes): %s.", paste(skipped, collapse = ", ")))
+      }
+      if (length(errors) > 0) {
+        parts <- paste(parts, sprintf("Errors: %s.", paste(errors, collapse = "; ")))
+        showNotification(parts, type = "warning", duration = 10)
+      } else {
+        showNotification(parts, type = "message", duration = 5)
+      }
+
+      rv$pending_ppi <- NULL
+      return()
+    }
+
+    # Default (single combined) branch
     nid <- showNotification("Running PPI Network analysis (querying STRING-DB)...",
                             type = "message", duration = NULL)
 
     tryCatch({
       ppi_result <- stats_ppi_network_run_from_list(
         proteins = pending$proteins,
-        species = input$res_ppi_species %||% "9606",
-        score_threshold = as.integer(input$res_ppi_score %||% 400),
-        network_type = input$res_ppi_network_type %||% "functional",
-        clustering_method = input$res_ppi_clustering %||% "louvain"
+        species = ppi_params$species,
+        score_threshold = ppi_params$score_threshold,
+        network_type = ppi_params$network_type,
+        clustering_method = ppi_params$clustering_method
       )
 
       # Create child view in results tree
@@ -10908,13 +11049,6 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       if (!is.null(nd)) {
         child_label <- sprintf("PPI: %s", pending$source)
         view_id <- sprintf("ppi_%s", format(Sys.time(), "%Y%m%d%H%M%S"))
-
-        ppi_params <- list(
-          species = input$res_ppi_species %||% "9606",
-          score_threshold = as.integer(input$res_ppi_score %||% 400),
-          network_type = input$res_ppi_network_type %||% "functional",
-          clustering_method = input$res_ppi_clustering %||% "louvain"
-        )
 
         view_dir <- tryCatch({
           tb_create_child_view(
@@ -10984,7 +11118,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       return()
     }
 
-    res_show_ppi_modal(all_genes, sprintf("%d clusters (%d genes)", k, length(all_genes)))
+    # When k >= 2, spawn one PPI child per cluster; k == 1 falls through to the
+    # combined-gene flow via the single-cluster input.
+    clusters <- if (k >= 2) cluster_info$cluster_genes else NULL
+    res_show_ppi_modal(
+      all_genes,
+      sprintf("%d clusters (%d genes)", k, length(all_genes)),
+      clusters = clusters
+    )
   }, ignoreInit = TRUE)
 
   # Trigger PPI from volcano significant proteins
@@ -11176,7 +11317,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       mat = if (data_type == "zscore") res$data$mat_zscore else res$data$mat_log,
       sample_order = res$data$sample_order,
       group_annotations = res$data$group_annotations,
-      group_colors = res$data$group_colors
+      group_colors = res$data$group_colors,
+      already_log_transform = if (data_type == "zscore") "none" else "log10"
     )
 
     # Build params
@@ -11781,7 +11923,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       mat = if (data_type == "zscore") parent_res$data$mat_zscore else parent_res$data$mat_log,
       sample_order = parent_res$data$sample_order,
       group_annotations = parent_res$data$group_annotations,
-      group_colors = parent_res$data$group_colors
+      group_colors = parent_res$data$group_colors,
+      already_log_transform = if (data_type == "zscore") "none" else "log10"
     )
 
     # Build updated params
