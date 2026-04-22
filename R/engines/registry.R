@@ -326,11 +326,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           choice_labels = c("Minutes", "Hours", "Days")
         ),
         msterp_schema_field(
-          "normalize_ratios", "bool", "Median-normalize H/L ratios",
-          default = TRUE,
-          help = "Median-normalize Heavy/Light ratios to correct for unequal SILAC mixing. Caution: median normalization removes global shifts in turnover — disable if a global half-life change is expected."
-        ),
-        msterp_schema_field(
           "ratio_min", "num", "Ratio filter: minimum H/L",
           default = 0.02,
           min = 0,
@@ -730,6 +725,13 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             "sig_text_size", "num", "Significance text size",
             default = 3.5, min = 1, max = 12,
             help = "Text size for significance labels.",
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "label_rotation", "choice", "X-axis label rotation",
+            default = "45",
+            choices = c("0", "45", "90"),
+            choice_labels = c("None", "45 degrees", "Vertical"),
             advanced = TRUE
           )
         ),
@@ -1896,43 +1898,36 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                          tables = character(0), tabs = NULL)
     ),
 
-    umap_gene = list(
-      engine_id = "umap_gene",
-      label = "Gene UMAP",
+    umap = list(
+      engine_id = "umap",
+      label = "UMAP",
       category = "trends",
-      supported_data_types = c("proteomics"),
-      description = "Per-gene UMAP embedding with subcellular-localization overlay and HDBSCAN clustering.",
+      supported_data_types = c("proteomics", "metabolomics"),
+      description = "Sample-level UMAP: one point per replicate, colored by group. Mirrors PCA's scores layout.",
       supports_sequential = FALSE,
-      accepted_input_levels = c("protein"),
+      accepted_input_levels = c("protein", "metabolite"),
       requirements = list(
         min_groups = 1,
-        requires_terpbase = TRUE,
+        requires_terpbase = FALSE,
         required_ids = c(),
-        analysis_levels = c("protein")
+        analysis_levels = c("protein", "metabolite")
       ),
       params_schema = list(
-        msterp_schema_field("group_mode", "choice", "Group mode",
-                            default = "combined",
-                            choices = c("combined", "per_group"),
-                            choice_labels = c("Combined (one UMAP over all samples)",
-                                              "Per-group (one UMAP per sample group)"),
-                            help = paste("Combined: every sample is a feature dimension;",
-                                         "groups do NOT separate on the plot, they shape the embedding.",
-                                         "Per-group: one independent UMAP per group using only that group's samples.")),
         msterp_schema_field("log_transform", "choice", "Log transform",
                             default = "log2", choices = c("log2", "log10", "none")),
         msterp_schema_field("scale_method", "choice", "Scaling",
                             default = "zscore", choices = c("zscore", "none"),
-                            help = "Per-gene z-score focuses UMAP on pattern not magnitude"),
+                            help = "Per-feature z-score across samples"),
         msterp_schema_field("missing_handling", "choice", "Missing value handling",
                             default = "drop_gene",
-                            choices = c("drop_gene", "min_impute", "zero_impute")),
+                            choices = c("drop_gene", "min_impute", "zero_impute"),
+                            choice_labels = c("Drop feature", "Min-impute", "Zero-impute")),
         msterp_schema_field("min_valid_fraction", "num", "Min fraction of valid samples",
                             default = 0.7, min = 0, max = 1, advanced = TRUE,
-                            help = "Drop proteins with fewer valid values than this fraction"),
-        msterp_schema_field("variance_filter_top_n", "int", "Keep top-N by variance",
+                            help = "Drop features with fewer valid values than this fraction"),
+        msterp_schema_field("variance_filter_top_n", "int", "Keep top-N features by variance",
                             default = 2000, min = 100, max = 10000,
-                            help = "UMAP on all proteins is slow and noisy; keep most variable"),
+                            help = "UMAP on all features is slow and noisy; keep most variable"),
         msterp_schema_field("n_neighbors", "int", "UMAP n_neighbors",
                             default = 15, min = 2, max = 100,
                             help = "Lower = local structure; higher = global"),
@@ -1943,58 +1938,33 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                             default = "correlation",
                             choices = c("correlation", "euclidean", "cosine", "manhattan")),
         msterp_schema_field("seed", "int", "Random seed",
-                            default = 42, min = 0, max = 2147483647, advanced = TRUE),
-        msterp_schema_field("clustering_enabled", "bool", "Post-hoc HDBSCAN clustering",
-                            default = TRUE),
-        msterp_schema_field("cluster_min_size", "int", "HDBSCAN minPts",
-                            default = 15, min = 5, max = 200, advanced = TRUE),
-        msterp_schema_field("cluster_on", "choice", "Cluster on",
-                            default = "embedding", choices = c("embedding", "features"),
-                            advanced = TRUE,
-                            help = "'embedding' uses 2D UMAP coords; 'features' uses pre-UMAP matrix"),
-        msterp_schema_field("id_type", "choice", "Protein ID type",
-                            default = "uniprot", choices = c("uniprot", "gene"),
-                            advanced = TRUE,
-                            help = "Used to match against terpbase gene_meta for subloc annotation")
+                            default = 42, min = 0, max = 2147483647, advanced = TRUE)
       ),
       style_schema = c(
         list(
           msterp_schema_field("point_size", "num", "Point size",
-                              default = 2, min = 0.5, max = 10, advanced = TRUE),
+                              default = 3, min = 0.5, max = 10, advanced = TRUE),
           msterp_schema_field("point_alpha", "num", "Point opacity",
-                              default = 0.7, min = 0, max = 1, advanced = TRUE),
-          msterp_schema_field("flat_color", "string", "Flat color (hex)",
-                              default = "#4682B4", advanced = TRUE,
-                              help = "Used when Color by = flat"),
-          msterp_schema_field("show_labels", "bool", "Show gene labels",
+                              default = 0.9, min = 0, max = 1, advanced = TRUE),
+          msterp_schema_field("show_ellipses", "bool", "Show group ellipses",
+                              default = TRUE,
+                              help = "Confidence ellipse for groups with >=4 samples, convex hull for 2-3."),
+          msterp_schema_field("show_sample_labels", "bool", "Show sample labels",
                               default = FALSE),
-          msterp_schema_field("label_top_n", "int", "Top-N labels by variance",
-                              default = 10, min = 1, max = 100, advanced = TRUE),
           msterp_schema_field("label_size", "num", "Label size",
                               default = 3, min = 1, max = 10, advanced = TRUE)
         ),
-        mk_style(width = 7, height = 6, axis_text_size = 16)
+        mk_style(width = 7, height = 5, axis_text_size = 20)
       ),
-      viewer_schema = list(
-        msterp_schema_field("color_by", "choice", "Color by",
-                            default = "subloc",
-                            choices = c("subloc", "cluster", "flat"),
-                            choice_labels = c("Subcellular localization", "HDBSCAN cluster", "Flat"),
-                            help = "Recolors existing embedding (UMAP is not recomputed)"),
-        msterp_schema_field("size_by", "choice", "Size by",
-                            default = "flat",
-                            choices = c("flat", "mean_abundance", "variance"),
-                            choice_labels = c("Flat", "Mean abundance", "Variance"),
-                            advanced = TRUE)
-      ),
+      viewer_schema = list(),
       outputs = list(
-        figures = c("umap_gene"),
-        tables = c("gene_embedding"),
+        figures = c("umap"),
+        tables = c("umap_scores"),
         interactive = TRUE
       ),
       render_spec = list(
-        plots = c("umap_gene"),
-        tables = c("gene_embedding"),
+        plots = c("umap"),
+        tables = c("umap_scores"),
         tabs = NULL
       )
     ),
@@ -2934,6 +2904,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       description = "Scores proteins by peptide heterogeneity and FC disparity; detail view maps peptides to UniProt sequence with domain annotations.",
       supports_sequential = FALSE,
       accepted_input_levels = c("peptide"),
+      # Hidden from Add Steps picker — must be invoked as a child of peptide_analysis
+      picker_hidden = TRUE,
       requirements = list(
         min_groups = 1,
         requires_terpbase = FALSE,

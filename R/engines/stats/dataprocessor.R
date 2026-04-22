@@ -492,6 +492,115 @@ stats_dataprocessor_run <- function(payload, params = NULL, context = NULL) {
     }
 
     # =====================================================
+    # normalize_global: Per-sample (column) normalization
+    # =====================================================
+    else if (op == "normalize_global") {
+      method <- tolower(as.character(opts$method %||% "median"))
+      if (!method %in% c("mean", "median", "quantile")) {
+        add_log("WARN", sprintf("Unknown normalization method '%s'; defaulting to median", method))
+        method <- "median"
+      }
+      log_first <- isTRUE(opts$log_transform_first %||% TRUE)
+      na_action <- tolower(as.character(opts$na_action %||% "ignore"))
+      na_rm <- !identical(na_action, "propagate")
+
+      n_cols <- ncol(mat)
+      if (n_cols < 1) {
+        add_log("WARN", "normalize_global: no columns to normalize; skipping")
+      } else {
+        if (log_first) {
+          n_nonpos <- sum(mat <= 0, na.rm = TRUE)
+          if (n_nonpos > 0) {
+            add_log("INFO", sprintf("  log2: %d non-positive cell(s) set to NA before log", n_nonpos))
+            mat[mat <= 0] <- NA_real_
+          }
+          mat <- log2(mat)
+          add_log("INFO", "Applied log2 transform before normalization")
+        }
+
+        if (method == "mean") {
+          col_stats <- apply(mat, 2, mean, na.rm = na_rm)
+          valid <- is.finite(col_stats)
+          if (!any(valid)) {
+            add_log("WARN", "normalize_global (mean): no finite column means; skipping")
+          } else {
+            grand <- mean(col_stats[valid])
+            for (j in seq_len(n_cols)) {
+              if (valid[j] && col_stats[j] != 0) {
+                mat[, j] <- mat[, j] / col_stats[j] * grand
+              }
+            }
+            add_log("INFO", sprintf("Mean-normalized %d columns (grand mean = %.4g)",
+                                    sum(valid), grand))
+          }
+
+        } else if (method == "median") {
+          col_stats <- apply(mat, 2, stats::median, na.rm = na_rm)
+          valid <- is.finite(col_stats)
+          if (!any(valid)) {
+            add_log("WARN", "normalize_global (median): no finite column medians; skipping")
+          } else {
+            grand <- stats::median(col_stats[valid])
+            for (j in seq_len(n_cols)) {
+              if (valid[j] && col_stats[j] != 0) {
+                mat[, j] <- mat[, j] / col_stats[j] * grand
+              }
+            }
+            add_log("INFO", sprintf("Median-normalized %d columns (grand median = %.4g)",
+                                    sum(valid), grand))
+          }
+
+        } else if (method == "quantile") {
+          # Classic quantile normalization: replace each column's sorted values
+          # with the per-rank average across columns. Handles NAs by ranking only
+          # finite values within each column and mapping back by rank index.
+          sorted_cols <- vector("list", n_cols)
+          rank_cols <- vector("list", n_cols)
+          for (j in seq_len(n_cols)) {
+            x <- mat[, j]
+            finite_idx <- which(is.finite(x))
+            if (length(finite_idx) == 0) {
+              sorted_cols[[j]] <- numeric(0)
+              rank_cols[[j]] <- integer(0)
+              next
+            }
+            ord <- order(x[finite_idx])
+            sorted_cols[[j]] <- x[finite_idx][ord]
+            rank_cols[[j]] <- finite_idx[ord]
+          }
+          lens <- vapply(sorted_cols, length, integer(1))
+          max_len <- max(lens)
+          if (max_len < 1) {
+            add_log("WARN", "normalize_global (quantile): no finite values; skipping")
+          } else {
+            # For each rank index 1..max_len, average across columns (na.rm)
+            row_means <- numeric(max_len)
+            for (k in seq_len(max_len)) {
+              vals <- numeric(0)
+              for (j in seq_len(n_cols)) {
+                if (lens[j] >= k) vals <- c(vals, sorted_cols[[j]][k])
+              }
+              row_means[k] <- if (length(vals) > 0) mean(vals) else NA_real_
+            }
+            # Scatter back: row r of col j = row_means[rank_of_that_finite_value]
+            out <- mat
+            for (j in seq_len(n_cols)) {
+              if (lens[j] == 0) next
+              ranks_j <- rank_cols[[j]]
+              # Within finite subset of col j, rank position k → row_means[k]
+              for (k in seq_along(ranks_j)) {
+                out[ranks_j[k], j] <- row_means[k]
+              }
+            }
+            mat <- out
+            add_log("INFO", sprintf("Quantile-normalized %d columns (max rank = %d)",
+                                    sum(lens > 0), max_len))
+          }
+        }
+      }
+    }
+
+    # =====================================================
     # Unknown operation
     # =====================================================
     else {

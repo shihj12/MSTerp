@@ -75,13 +75,11 @@ stats_half_life_run <- function(payload, params = NULL, context = NULL) {
   # Extract params
   time_value <- as.numeric(params$time_value %||% 24)
   time_unit  <- as.character(params$time_unit %||% "hour")
-  normalize_ratios <- if (is.null(params$normalize_ratios)) TRUE else isTRUE(params$normalize_ratios)
   ratio_min  <- as.numeric(params$ratio_min %||% 0.02)
   ratio_max  <- as.numeric(params$ratio_max %||% 100)
 
   add_log("INFO", sprintf("Input: %d features x %d columns", nrow(mat), ncol(mat)))
   add_log("INFO", sprintf("Pulse time: %g %s", time_value, time_unit))
-  add_log("INFO", sprintf("Median normalization: %s", ifelse(normalize_ratios, "ON", "OFF")))
   add_log("INFO", sprintf("Ratio filter: [%.4g, %.4g]", ratio_min, ratio_max))
 
   # Identify H/L pairs by (group_name, replicate)
@@ -160,20 +158,6 @@ stats_half_life_run <- function(payload, params = NULL, context = NULL) {
   colnames(ratio_mat) <- pair_labels
   rownames(ratio_mat) <- rownames(mat)
 
-  # Optional median normalization (per replicate column)
-  if (normalize_ratios && n_pairs > 0) {
-    for (j in seq_len(ncol(ratio_mat))) {
-      med <- median(ratio_mat[, j], na.rm = TRUE)
-      if (!is.na(med) && med > 0) {
-        ratio_mat[, j] <- ratio_mat[, j] / med
-        add_log("INFO", sprintf("  Normalized %s: median H/L = %.4f", pair_labels[j], med))
-      } else {
-        add_log("WARN", sprintf("  Could not normalize %s: median H/L = %s",
-                                pair_labels[j], ifelse(is.na(med), "NA", as.character(med))))
-      }
-    }
-  }
-
   # Compute half-lives: t_half = t * ln(2) / ln(1 + H/L)
   halflife_mat <- time_value * log(2) / log(1 + ratio_mat)
 
@@ -213,13 +197,12 @@ stats_half_life_run <- function(payload, params = NULL, context = NULL) {
 
   # Build summary log table for results viewer
   half_life_log <- data.frame(
-    Metric = c("Pulse Time", "Time Unit", "Median Normalized",
+    Metric = c("Pulse Time", "Time Unit",
                "Ratio Filter Min", "Ratio Filter Max",
                "Input Columns", "Output Replicates", "Features",
                "Valid Values", "Percent Valid"),
     Value = c(
       as.character(time_value), time_unit,
-      ifelse(normalize_ratios, "Yes", "No"),
       as.character(ratio_min), as.character(ratio_max),
       as.character(ncol(mat)), as.character(n_pairs),
       as.character(nrow(halflife_mat)),

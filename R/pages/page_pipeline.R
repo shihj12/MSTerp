@@ -519,7 +519,8 @@ tf_dp_ops <- function() {
     "Average rows by identifier" = "average_rows",
     "Contaminants tag and remove" = "tag_remove_contaminants",
     "Imputation" = "impute",
-    "Filter by % missing (group \u2192 N/A)" = "filter_pct_missing"
+    "Filter by % missing (group \u2192 N/A)" = "filter_pct_missing",
+    "Normalize (global)" = "normalize_global"
   )
 }
 
@@ -965,6 +966,25 @@ tf_dp_substep_ui <- function(step_id, i, dp_state, open_state = TRUE, parent_con
         condition = sprintf("input['%s'] == 'filter_pct_missing'", op_id),
         numericInput(mkid("pct_min"), "Minimum % present", value = dp_state$substeps[[i]]$opts$min_pct_present %||% 50, min = 0, max = 100, step = 5),
         div(class = "tf-note", "Per sample group: if fewer than this % of replicates have a value, set the group\u2019s values to N/A for that row.")
+      ),
+
+      conditionalPanel(
+        condition = sprintf("input['%s'] == 'normalize_global'", op_id),
+        selectInput(
+          mkid("norm_method"), "Method",
+          choices = c("Mean" = "mean", "Median" = "median", "Quantile" = "quantile"),
+          selected = dp_state$substeps[[i]]$opts$method %||% "median"
+        ),
+        checkboxInput(
+          mkid("norm_log2"), "Log2-transform before normalizing",
+          value = isTRUE(dp_state$substeps[[i]]$opts$log_transform_first %||% TRUE)
+        ),
+        selectInput(
+          mkid("norm_na"), "Missing values",
+          choices = c("Ignore (na.rm = TRUE)" = "ignore", "Propagate" = "propagate"),
+          selected = dp_state$substeps[[i]]$opts$na_action %||% "ignore"
+        ),
+        div(class = "tf-note", "Normalizes across all data columns (per-sample).")
       )
     )
   )
@@ -1983,6 +2003,16 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
       } else if (op == "filter_pct_missing") {
         if (!is.null(isolate(input[[mkid("pct_min")]]))) opts$min_pct_present <- isolate(input[[mkid("pct_min")]])
         opts$min_pct_present <- opts$min_pct_present %||% 50
+
+      } else if (op == "normalize_global") {
+        if (!is.null(isolate(input[[mkid("norm_method")]]))) opts$method <- isolate(input[[mkid("norm_method")]])
+        if (!is.null(isolate(input[[mkid("norm_log2")]])))   opts$log_transform_first <- isTRUE(isolate(input[[mkid("norm_log2")]]))
+        if (!is.null(isolate(input[[mkid("norm_na")]])))     opts$na_action <- isolate(input[[mkid("norm_na")]])
+        opts$method <- opts$method %||% "median"
+        if (!opts$method %in% c("mean", "median", "quantile")) opts$method <- "median"
+        if (is.null(opts$log_transform_first)) opts$log_transform_first <- TRUE
+        opts$na_action <- opts$na_action %||% "ignore"
+        if (!opts$na_action %in% c("ignore", "propagate")) opts$na_action <- "ignore"
       }
       
       plan$substeps[[k]]$opts <- opts

@@ -2966,12 +2966,21 @@ tb_render_idquant <- function(results, style, meta) {
   value_label_size <- tb_num(style$value_label_size, 3.5)
   y_expand_mult <- if (show_values) c(0, 0.15) else c(0, 0.05)
 
+  # X-axis label rotation (applies to both group and replicate plots)
+  rotation_angle <- suppressWarnings(as.numeric(style$label_rotation %||% "45"))
+  if (!is.finite(rotation_angle)) rotation_angle <- 45
+  rotation_hjust <- if (rotation_angle %in% c(45, 90)) 1 else 0.5
+  rotation_vjust <- if (rotation_angle == 45) 1 else if (rotation_angle == 90) 0.5 else 1
+
   p_group <- ggplot2::ggplot(df, ggplot2::aes(x = group, y = n, fill = level)) +
     ggplot2::geom_col(position = "dodge", color = outline_color, linewidth = outline_lw) +
     ggplot2::scale_fill_manual(values = color_map) +
     ggplot2::scale_y_continuous(labels = format_k_suffix, expand = ggplot2::expansion(mult = y_expand_mult)) +
     ggplot2::labs(x = NULL, y = "Count") +
     tb_theme_base(tb_num(style$axis_text_size, 20), axis_style = style$axis_style %||% "clean") +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(
+      angle = rotation_angle, hjust = rotation_hjust, vjust = rotation_vjust
+    )) +
     ggplot2::guides(fill = ggplot2::guide_legend(title = NULL))
 
   if (show_values) {
@@ -3050,7 +3059,9 @@ tb_render_idquant <- function(results, style, meta) {
       ggplot2::scale_y_continuous(labels = format_k_suffix, expand = ggplot2::expansion(mult = rep_y_expand)) +
       ggplot2::labs(x = NULL, y = rep_label) +
       tb_theme_base(tb_num(style$axis_text_size, 20), axis_style = style$axis_style %||% "clean") +
-      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 10)) +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(
+        angle = rotation_angle, hjust = rotation_hjust, vjust = rotation_vjust, size = 10
+      )) +
       ggplot2::theme(legend.position = "none")
 
     if (show_values) {
@@ -5956,182 +5967,230 @@ tb_render_pca <- function(results, style, meta) {
 }
 
 # ============================================================
-# Gene UMAP renderer (interactive plotly scatter)
+# UMAP renderer (sample-level scatter; one point per replicate)
 # ------------------------------------------------------------
-# Each point = one protein/gene. Position computed by stats
-# engine (uwot::umap on log-abundance patterns across samples).
-# Recoloring / resizing via viewer_schema fields never triggers
-# a UMAP recompute — we just re-render from results$data$embedding.
+# Mirrors PCA's scores plot: color by group, optional confidence
+# ellipse (>=4 samples) or convex-hull ellipse (2-3 samples).
 # ============================================================
-tb_render_umap_gene <- function(results, style, meta) {
-  tb_require_pkg("plotly")
+tb_render_umap <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
 
-  emb <- results$data$embedding
-  groups_all <- results$data$groups %||% unique(emb$group %||% "combined")
-
-  if (is.null(emb) || !is.data.frame(emb) || nrow(emb) == 0) {
-    p_empty <- plotly::plot_ly(type = "scatter", mode = "markers") %>%
-      plotly::layout(
-        title = list(text = "No embedding available", x = 0.5),
-        xaxis = list(visible = FALSE),
-        yaxis = list(visible = FALSE)
-      )
-    return(list(plots = list(umap_gene = p_empty),
-                tables = list(gene_embedding = emb %||% data.frame())))
+  scores <- results$data$scores
+  if (is.null(scores) || !is.data.frame(scores) || nrow(scores) == 0) {
+    stop("umap results$data$scores missing or empty.")
   }
 
-  if (!"group" %in% names(emb)) emb$group <- "combined"
+  if (!"group" %in% names(scores)) {
+    scores$group <- sub("_.*$", "", scores$sample)
+  }
+  scores$group <- factor(scores$group)
 
-  color_by <- style$color_by %||% "subloc"
-  size_by  <- style$size_by %||% "flat"
-  pt_size  <- tb_num(style$point_size, 2)
-  pt_alpha <- tb_num(style$point_alpha, 0.7)
-  flat_col <- style$flat_color %||% "#4682B4"
+  # ---- Axis bounds (expand for ellipses) ----
+  x_range <- range(scores$UMAP1, na.rm = TRUE)
+  y_range <- range(scores$UMAP2, na.rm = TRUE)
 
-  # Palettes shared across groups so colors are comparable between panels
-  subloc_levels_all <- results$data$subloc_levels %||% unique(emb$subloc)
-  if (length(subloc_levels_all) == 0) subloc_levels_all <- unique(emb$subloc)
-  subloc_palette <- grDevices::hcl.colors(max(length(subloc_levels_all), 3),
-                                          palette = "Dark 3")
-  names(subloc_palette) <- subloc_levels_all
+  show_ellipses <- isTRUE(style$show_ellipses %||% TRUE)
+  if (show_ellipses) {
+    group_counts <- table(scores$group)
+    ellipse_level <- 0.95
 
-  # ---- Per-group rendering helper ----
-  render_one <- function(df_g, group_tag, show_legend) {
-    # Size mapping
-    if (size_by == "mean_abundance" && "mean_abundance" %in% names(df_g)) {
-      v <- df_g$mean_abundance
-      v <- (v - min(v, na.rm = TRUE)) / max(1e-9, diff(range(v, na.rm = TRUE)))
-      msize <- pt_size * (2 + 6 * v)
-    } else if (size_by == "variance" && "variance" %in% names(df_g)) {
-      v <- df_g$variance
-      v <- (v - min(v, na.rm = TRUE)) / max(1e-9, diff(range(v, na.rm = TRUE)))
-      msize <- pt_size * (2 + 6 * v)
-    } else {
-      msize <- pt_size * 3
+    compute_ellipse_bounds <- function(x, y, level) {
+      valid <- !is.na(x) & !is.na(y)
+      x <- x[valid]; y <- y[valid]
+      n <- length(x)
+      if (n < 4) return(NULL)
+      tryCatch({
+        center <- c(mean(x), mean(y))
+        cov_mat <- stats::cov(cbind(x, y))
+        if (any(!is.finite(cov_mat))) return(NULL)
+        chol_decomp <- tryCatch(chol(cov_mat), error = function(e) NULL)
+        if (is.null(chol_decomp)) return(NULL)
+        radius <- sqrt(2 * stats::qf(level, 2, n - 1))
+        theta <- seq(0, 2 * pi, length.out = 100)
+        unit_circle <- cbind(cos(theta), sin(theta))
+        ellipse_pts <- unit_circle %*% (radius * chol_decomp)
+        ellipse_pts[, 1] <- ellipse_pts[, 1] + center[1]
+        ellipse_pts[, 2] <- ellipse_pts[, 2] + center[2]
+        list(x = range(ellipse_pts[, 1]), y = range(ellipse_pts[, 2]))
+      }, error = function(e) NULL)
     }
 
-    cluster_txt <- if ("cluster" %in% names(df_g)) {
-      ifelse(df_g$cluster == 0L, "noise", as.character(df_g$cluster))
-    } else {
-      rep("-", nrow(df_g))
+    groups_with_ellipse <- names(group_counts[group_counts >= 4])
+    for (grp in groups_with_ellipse) {
+      grp_data <- scores[scores$group == grp, , drop = FALSE]
+      bounds <- compute_ellipse_bounds(grp_data$UMAP1, grp_data$UMAP2, ellipse_level)
+      if (!is.null(bounds)) {
+        x_range <- range(c(x_range, bounds$x), na.rm = TRUE)
+        y_range <- range(c(y_range, bounds$y), na.rm = TRUE)
+      }
     }
-    df_g$hover_text <- sprintf(
-      "%s\nUniProt: %s\nGroup: %s\nSubloc: %s\nCluster: %s\nMean: %.2f\nVar: %.3f",
-      df_g$gene_symbol, df_g$protein_id, df_g$group, df_g$subloc, cluster_txt,
-      df_g$mean_abundance, df_g$variance
+
+    groups_with_hull <- names(group_counts[group_counts >= 2 & group_counts < 4])
+    if (length(groups_with_hull) > 0) {
+      pt_size <- tb_num(style$point_size, 3)
+      data_range <- max(diff(range(scores$UMAP1)), diff(range(scores$UMAP2)))
+      point_radius <- ((pt_size + 0.3) / 2) * (data_range * 0.01)
+
+      for (grp in groups_with_hull) {
+        grp_data <- scores[scores$group == grp, , drop = FALSE]
+        n_pts <- nrow(grp_data)
+        if (n_pts >= 2) {
+          cx <- mean(grp_data$UMAP1)
+          cy <- mean(grp_data$UMAP2)
+          centered_x <- grp_data$UMAP1 - cx
+          centered_y <- grp_data$UMAP2 - cy
+          cov_matrix <- matrix(c(
+            sum(centered_x^2), sum(centered_x * centered_y),
+            sum(centered_x * centered_y), sum(centered_y^2)
+          ), nrow = 2) / n_pts
+          eig <- eigen(cov_matrix)
+          angle <- atan2(eig$vectors[2, 1], eig$vectors[1, 1])
+          cos_a <- cos(-angle); sin_a <- sin(-angle)
+          rotated_x <- centered_x * cos_a - centered_y * sin_a
+          rotated_y <- centered_x * sin_a + centered_y * cos_a
+          a <- max(abs(rotated_x)) + point_radius
+          b <- max(abs(rotated_y)) + point_radius
+          min_b <- a * 0.15
+          if (b < min_b) b <- min_b
+          theta <- seq(0, 2 * pi, length.out = 100)
+          ellipse_x <- a * cos(theta) * cos(angle) - b * sin(theta) * sin(angle)
+          ellipse_y <- a * cos(theta) * sin(angle) + b * sin(theta) * cos(angle)
+          x_range <- range(c(x_range, cx + ellipse_x), na.rm = TRUE)
+          y_range <- range(c(y_range, cy + ellipse_y), na.rm = TRUE)
+        }
+      }
+    }
+  }
+
+  x_pad <- diff(x_range) * 0.1
+  y_pad <- diff(y_range) * 0.1
+  fixed_xlim <- c(x_range[1] - x_pad, x_range[2] + x_pad)
+  fixed_ylim <- c(y_range[1] - y_pad, y_range[2] + y_pad)
+
+  # ---- Group colors ----
+  group_colors <- results$data$group_colors %||% NULL
+  if (is.null(group_colors) || length(group_colors) == 0) {
+    n_groups <- nlevels(scores$group)
+    group_colors <- scales::hue_pal()(n_groups)
+    names(group_colors) <- levels(scores$group)
+  } else {
+    missing <- levels(scores$group)[!levels(scores$group) %in% names(group_colors)]
+    if (length(missing) > 0) {
+      auto_colors <- grDevices::hcl.colors(length(missing), palette = "Dark 3")
+      names(auto_colors) <- missing
+      group_colors <- c(group_colors, auto_colors)
+    }
+  }
+  group_colors <- group_colors[levels(scores$group)]
+
+  scores$hover_text <- sprintf(
+    "%s\nGroup: %s\nUMAP1: %.3f\nUMAP2: %.3f",
+    scores$sample, scores$group, scores$UMAP1, scores$UMAP2
+  )
+
+  point_stroke <- 0.3
+  p <- ggplot2::ggplot(scores, ggplot2::aes(x = UMAP1, y = UMAP2, text = hover_text)) +
+    ggplot2::geom_point(
+      ggplot2::aes(fill = group),
+      shape = 21,
+      size = tb_num(style$point_size, 3),
+      alpha = tb_num(style$point_alpha, 0.9),
+      color = "black",
+      stroke = point_stroke
+    ) +
+    ggplot2::scale_color_manual(values = group_colors) +
+    ggplot2::scale_fill_manual(values = group_colors) +
+    ggplot2::labs(x = "UMAP1", y = "UMAP2") +
+    tb_theme_base(tb_num(style$axis_text_size, 20), axis_style = style$axis_style %||% "clean") +
+    ggplot2::theme(
+      panel.border = ggplot2::element_rect(color = "black", fill = NA,
+        linewidth = if (tolower(style$axis_style %||% "clean") == "bold") 1.5 else 0.5),
+      axis.line = ggplot2::element_blank()
+    ) +
+    ggplot2::guides(fill = ggplot2::guide_legend(title = NULL), color = "none")
+
+  # ---- Ellipse / hull layers ----
+  if (show_ellipses) {
+    group_counts <- table(scores$group)
+    ellipse_alpha <- 0.25
+
+    groups_with_ellipse <- names(group_counts[group_counts >= 4])
+    groups_with_hull <- names(group_counts[group_counts >= 2 & group_counts < 4])
+
+    if (length(groups_with_ellipse) > 0) {
+      scores_for_ellipse <- scores[scores$group %in% groups_with_ellipse, , drop = FALSE]
+      if (nrow(scores_for_ellipse) > 0) {
+        tryCatch({
+          p <- p + ggplot2::stat_ellipse(
+            data = scores_for_ellipse,
+            ggplot2::aes(x = UMAP1, y = UMAP2, color = group, fill = group),
+            type = "norm", level = 0.95,
+            linewidth = 0.8, linetype = "solid",
+            alpha = ellipse_alpha, geom = "polygon",
+            show.legend = FALSE, inherit.aes = FALSE
+          )
+        }, error = function(e) NULL)
+      }
+    }
+
+    if (length(groups_with_hull) > 0) {
+      pt_size <- tb_num(style$point_size, 3)
+      data_range <- max(diff(range(scores$UMAP1)), diff(range(scores$UMAP2)))
+      point_radius <- ((pt_size + point_stroke) / 2) * (data_range * 0.01)
+
+      for (grp in groups_with_hull) {
+        grp_data <- scores[scores$group == grp, , drop = FALSE]
+        n_pts <- nrow(grp_data)
+        if (n_pts >= 2) {
+          cx <- mean(grp_data$UMAP1); cy <- mean(grp_data$UMAP2)
+          centered_x <- grp_data$UMAP1 - cx
+          centered_y <- grp_data$UMAP2 - cy
+          cov_matrix <- matrix(c(
+            sum(centered_x^2), sum(centered_x * centered_y),
+            sum(centered_x * centered_y), sum(centered_y^2)
+          ), nrow = 2) / n_pts
+          eig <- eigen(cov_matrix)
+          angle <- atan2(eig$vectors[2, 1], eig$vectors[1, 1])
+          cos_a <- cos(-angle); sin_a <- sin(-angle)
+          rotated_x <- centered_x * cos_a - centered_y * sin_a
+          rotated_y <- centered_x * sin_a + centered_y * cos_a
+          a <- max(abs(rotated_x)) + point_radius
+          b <- max(abs(rotated_y)) + point_radius
+          min_b <- a * 0.15
+          if (b < min_b) b <- min_b
+          theta <- seq(0, 2 * pi, length.out = 101)
+          ellipse_x <- cx + a * cos(theta) * cos(angle) - b * sin(theta) * sin(angle)
+          ellipse_y <- cy + a * cos(theta) * sin(angle) + b * sin(theta) * cos(angle)
+          ellipse_data <- data.frame(
+            UMAP1 = ellipse_x, UMAP2 = ellipse_y, group = grp,
+            stringsAsFactors = FALSE
+          )
+          ellipse_data$group <- factor(ellipse_data$group, levels = levels(scores$group))
+          p <- p + ggplot2::geom_polygon(
+            data = ellipse_data,
+            ggplot2::aes(x = UMAP1, y = UMAP2, fill = group, color = group),
+            alpha = ellipse_alpha, linewidth = 0.8,
+            show.legend = FALSE, inherit.aes = FALSE
+          )
+        }
+      }
+    }
+  }
+
+  # ---- Optional sample labels ----
+  if (isTRUE(style$show_sample_labels %||% FALSE)) {
+    p <- p + ggplot2::geom_text(
+      ggplot2::aes(label = sample),
+      size = tb_num(style$label_size, 3),
+      vjust = -1.2, show.legend = FALSE, inherit.aes = TRUE
     )
-
-    p <- plotly::plot_ly(type = "scatter", mode = "markers",
-                         source = paste0("umap_gene_", group_tag))
-
-    if (color_by == "subloc") {
-      for (lvl in subloc_levels_all) {
-        mask <- df_g$subloc == lvl
-        if (!any(mask)) next
-        p <- p %>% plotly::add_trace(
-          data = df_g[mask, , drop = FALSE],
-          x = ~UMAP1, y = ~UMAP2, customdata = ~protein_id,
-          marker = list(color = subloc_palette[[lvl]], size = msize[mask],
-                        opacity = pt_alpha,
-                        line = list(color = "#333333", width = 0.2)),
-          text = ~hover_text, hoverinfo = "text",
-          name = lvl, legendgroup = lvl, showlegend = show_legend
-        )
-      }
-    } else if (color_by == "cluster" && "cluster" %in% names(df_g)) {
-      cl_levels <- sort(unique(df_g$cluster))
-      cl_palette <- grDevices::hcl.colors(max(length(cl_levels), 3), palette = "Dark 3")
-      for (i in seq_along(cl_levels)) {
-        cl <- cl_levels[i]
-        mask <- df_g$cluster == cl
-        if (!any(mask)) next
-        col <- if (cl == 0L) "#BBBBBB" else cl_palette[i]
-        nm <- if (cl == 0L) "noise" else paste0("cluster ", cl)
-        p <- p %>% plotly::add_trace(
-          data = df_g[mask, , drop = FALSE],
-          x = ~UMAP1, y = ~UMAP2, customdata = ~protein_id,
-          marker = list(color = col, size = msize[mask], opacity = pt_alpha,
-                        line = list(color = "#333333", width = 0.2)),
-          text = ~hover_text, hoverinfo = "text",
-          name = nm, showlegend = show_legend
-        )
-      }
-    } else {
-      p <- p %>% plotly::add_trace(
-        data = df_g,
-        x = ~UMAP1, y = ~UMAP2, customdata = ~protein_id,
-        marker = list(color = flat_col, size = msize, opacity = pt_alpha,
-                      line = list(color = "#333333", width = 0.2)),
-        text = ~hover_text, hoverinfo = "text", showlegend = FALSE
-      )
-    }
-
-    if (isTRUE(style$show_labels %||% FALSE) && nrow(df_g) > 0) {
-      top_n <- max(1, min(as.integer(style$label_top_n %||% 10), nrow(df_g)))
-      top_idx <- order(df_g$variance, decreasing = TRUE)[seq_len(top_n)]
-      p <- p %>% plotly::add_annotations(
-        data = df_g[top_idx, , drop = FALSE],
-        x = ~UMAP1, y = ~UMAP2, text = ~gene_symbol,
-        showarrow = FALSE,
-        font = list(size = tb_num(style$label_size, 3) * 3, color = "#000000"),
-        yshift = 10
-      )
-    }
-
-    title_text <- if (group_tag == "combined") "Gene UMAP (all samples)" else paste0("Group: ", group_tag)
-    p %>%
-      plotly::layout(
-        title = list(text = title_text, x = 0.5, font = list(size = 14)),
-        xaxis = list(title = "UMAP1", zeroline = FALSE,
-                     showgrid = TRUE, gridcolor = "#e8e8e8"),
-        yaxis = list(title = "UMAP2", zeroline = FALSE,
-                     showgrid = TRUE, gridcolor = "#e8e8e8"),
-        dragmode = "pan", plot_bgcolor = "white", paper_bgcolor = "white",
-        legend = list(x = 1.02, y = 1, xanchor = "left"),
-        showlegend = show_legend
-      ) %>%
-      plotly::config(displayModeBar = FALSE)
   }
 
-  groups_present <- unique(emb$group)
-  # Order per results$data$groups if provided, else alphabetically
-  if (length(groups_all) > 0) {
-    groups_present <- intersect(groups_all, groups_present)
-    extras <- setdiff(unique(emb$group), groups_present)
-    groups_present <- c(groups_present, extras)
-  }
-
-  if (length(groups_present) <= 1) {
-    # Combined mode (or single-group fallback)
-    g <- groups_present[1] %||% "combined"
-    p <- render_one(emb[emb$group == g, , drop = FALSE], g, show_legend = TRUE)
-    return(list(
-      plots = list(umap_gene = p),
-      tables = list(gene_embedding = emb[, setdiff(names(emb), "hover_text"), drop = FALSE])
-    ))
-  }
-
-  # Per-group: one plot per group + one table per group + tabs
-  # Normalize group name to a safe token (spaces/punct -> underscore) so the
-  # result viewer's tab-keyed plot lookup (regex "(^|_)<tab>(_|$)") matches.
-  plots_out <- list()
-  tables_out <- list()
-  tab_keys <- character(length(groups_present))
-  for (i in seq_along(groups_present)) {
-    g <- groups_present[i]
-    g_key <- gsub("[^A-Za-z0-9]+", "_", g)
-    g_key <- gsub("^_+|_+$", "", g_key)
-    if (!nzchar(g_key)) g_key <- sprintf("group%d", i)
-    tab_keys[i] <- g_key
-    df_g <- emb[emb$group == g, , drop = FALSE]
-    plots_out[[paste0(g_key, "_plot")]] <- render_one(df_g, g, show_legend = (i == 1))
-    tables_out[[paste0(g_key, "_table")]] <- df_g[, setdiff(names(df_g), "hover_text"), drop = FALSE]
-  }
+  p <- p + ggplot2::coord_cartesian(xlim = fixed_xlim, ylim = fixed_ylim)
 
   list(
-    plots = plots_out,
-    tables = tables_out,
-    tabs = tab_keys
+    plots = list(umap = p),
+    tables = list(umap_scores = scores[, setdiff(names(scores), "hover_text"), drop = FALSE])
   )
 }
 
@@ -12611,7 +12670,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "dsilac_ratio_box_peptide" = tb_render_dsilac_ratio_box_peptide(results, style, meta),
     "dsilac_ratio_box_protein" = tb_render_dsilac_ratio_box_protein(results, style, meta),
     "pca"      = tb_render_pca(results, style, meta),
-    "umap_gene" = tb_render_umap_gene(results, style, meta),
+    "umap"     = tb_render_umap(results, style, meta),
     "heatmap"  = tb_render_heatmap(results, style, meta),
     "ftest_heatmap" = tb_render_ftest_heatmap(results, style, meta),
     "fc_heatmap" = tb_render_fc_heatmap(results, style, meta),
