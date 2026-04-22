@@ -527,21 +527,8 @@ stats_1dgofcs_run <- function(payload, params = NULL, context = NULL) {
         terms_df$neglog10_fdr <- -log10(pmax(terms_df$fdr, 1e-300))
         terms_df <- terms_df[terms_df$fdr <= fdr_cutoff, , drop = FALSE]
         terms_df <- terms_df[order(terms_df$fdr, -abs(terms_df$score)), , drop = FALSE]
-        # Limit to max_terms PER ONTOLOGY (not globally)
-        if ("ontology" %in% names(terms_df) && nrow(terms_df) > 0) {
-          ontologies <- unique(terms_df$ontology)
-          terms_list <- lapply(ontologies, function(ont) {
-            ont_df <- terms_df[terms_df$ontology == ont, , drop = FALSE]
-            if (nrow(ont_df) > max_terms) {
-              ont_df <- ont_df[1:max_terms, , drop = FALSE]
-            }
-            ont_df
-          })
-          terms_df <- do.call(rbind, terms_list)
-          terms_df <- terms_df[order(terms_df$fdr, -abs(terms_df$score)), , drop = FALSE]
-        } else if (nrow(terms_df) > max_terms) {
-          terms_df <- terms_df[1:max_terms, , drop = FALSE]
-        }
+        # max_terms is applied at render time (tb_render_1dgofcs) so users can
+        # increase "Terms to show" without re-running the analysis.
         terms_df <- terms_df[, c("term_id", "term_name", "ontology", "fdr", "neglog10_fdr", "score", "n_genes", "protein_ids"), drop = FALSE]
         rownames(terms_df) <- NULL
 
@@ -715,21 +702,8 @@ stats_1dgofcs_run <- function(payload, params = NULL, context = NULL) {
   terms_df <- terms_df[terms_df$fdr <= fdr_cutoff, , drop = FALSE]
   terms_df <- terms_df[order(terms_df$fdr, -abs(terms_df$score)), , drop = FALSE]
 
-  # Limit to max_terms PER ONTOLOGY (not globally)
-  if ("ontology" %in% names(terms_df) && nrow(terms_df) > 0) {
-    ontologies <- unique(terms_df$ontology)
-    terms_list <- lapply(ontologies, function(ont) {
-      ont_df <- terms_df[terms_df$ontology == ont, , drop = FALSE]
-      if (nrow(ont_df) > max_terms) {
-        ont_df <- ont_df[1:max_terms, , drop = FALSE]
-      }
-      ont_df
-    })
-    terms_df <- do.call(rbind, terms_list)
-    terms_df <- terms_df[order(terms_df$fdr, -abs(terms_df$score)), , drop = FALSE]
-  } else if (nrow(terms_df) > max_terms) {
-    terms_df <- terms_df[1:max_terms, , drop = FALSE]
-  }
+  # max_terms is applied at render time (tb_render_1dgofcs) so users can change
+  # "Terms to show" without re-running the analysis.
 
   terms_df <- terms_df[, c("term_id", "term_name", "ontology", "fdr", "neglog10_fdr", "score", "n_genes", "protein_ids"), drop = FALSE]
   rownames(terms_df) <- NULL

@@ -496,13 +496,27 @@ stats_dataprocessor_run <- function(payload, params = NULL, context = NULL) {
     # =====================================================
     else if (op == "normalize_global") {
       method <- tolower(as.character(opts$method %||% "median"))
-      if (!method %in% c("mean", "median", "quantile")) {
+      valid_methods <- c("mean", "median", "trimmed_mean", "total_intensity",
+                         "quantile", "vsn", "cyclic_loess")
+      if (!method %in% valid_methods) {
         add_log("WARN", sprintf("Unknown normalization method '%s'; defaulting to median", method))
         method <- "median"
       }
       log_first <- isTRUE(opts$log_transform_first %||% TRUE)
       na_action <- tolower(as.character(opts$na_action %||% "ignore"))
       na_rm <- !identical(na_action, "propagate")
+
+      # Methods that override log2 behavior:
+      #   total_intensity — sums are meaningful only on raw scale; skip log2.
+      #   vsn             — vsn::justvsn applies its own glog2 transform; skip log2.
+      #   cyclic_loess    — expects log-scale data; warn if log2 was disabled.
+      if (method %in% c("total_intensity", "vsn") && log_first) {
+        add_log("WARN", sprintf("normalize_global (%s): log2 pre-transform is incompatible with this method; skipping log2", method))
+        log_first <- FALSE
+      }
+      if (method == "cyclic_loess" && !log_first) {
+        add_log("WARN", "normalize_global (cyclic_loess): recommended on log-scale data; running on raw values as requested")
+      }
 
       n_cols <- ncol(mat)
       if (n_cols < 1) {
@@ -595,6 +609,73 @@ stats_dataprocessor_run <- function(payload, params = NULL, context = NULL) {
             mat <- out
             add_log("INFO", sprintf("Quantile-normalized %d columns (max rank = %d)",
                                     sum(lens > 0), max_len))
+          }
+
+        } else if (method == "trimmed_mean") {
+          trim <- suppressWarnings(as.numeric(opts$trim %||% 0.1))
+          if (!is.finite(trim)) trim <- 0.1
+          trim <- max(0, min(0.49, trim))
+          col_stats <- apply(mat, 2, function(x) mean(x, trim = trim, na.rm = na_rm))
+          valid <- is.finite(col_stats)
+          if (!any(valid)) {
+            add_log("WARN", "normalize_global (trimmed_mean): no finite column trimmed means; skipping")
+          } else {
+            grand <- mean(col_stats[valid], trim = trim)
+            for (j in seq_len(n_cols)) {
+              if (valid[j] && col_stats[j] != 0) {
+                mat[, j] <- mat[, j] / col_stats[j] * grand
+              }
+            }
+            add_log("INFO", sprintf("Trimmed-mean-normalized %d columns (trim=%.2f, grand mean = %.4g)",
+                                    sum(valid), trim, grand))
+          }
+
+        } else if (method == "total_intensity") {
+          col_stats <- apply(mat, 2, sum, na.rm = na_rm)
+          valid <- is.finite(col_stats) & col_stats != 0
+          if (!any(valid)) {
+            add_log("WARN", "normalize_global (total_intensity): no finite non-zero column sums; skipping")
+          } else {
+            grand <- mean(col_stats[valid])
+            for (j in seq_len(n_cols)) {
+              if (valid[j]) {
+                mat[, j] <- mat[, j] / col_stats[j] * grand
+              }
+            }
+            add_log("INFO", sprintf("Total-intensity-normalized %d columns (grand sum = %.4g)",
+                                    sum(valid), grand))
+          }
+
+        } else if (method == "vsn") {
+          if (!requireNamespace("vsn", quietly = TRUE)) {
+            add_log("ERROR", "normalize_global (vsn): package 'vsn' is required. Install with BiocManager::install(\"vsn\"); skipping")
+          } else {
+            n_nonpos <- sum(mat <= 0, na.rm = TRUE)
+            if (n_nonpos > 0) {
+              add_log("INFO", sprintf("  vsn: %d non-positive cell(s) set to NA before fitting", n_nonpos))
+              mat[mat <= 0] <- NA_real_
+            }
+            vsn_res <- tryCatch(vsn::justvsn(mat), error = function(e) e)
+            if (inherits(vsn_res, "error")) {
+              add_log("ERROR", sprintf("normalize_global (vsn): %s; skipping", conditionMessage(vsn_res)))
+            } else {
+              mat <- as.matrix(vsn_res)
+              add_log("INFO", sprintf("VSN-normalized %d columns via vsn::justvsn (glog2 scale)", n_cols))
+            }
+          }
+
+        } else if (method == "cyclic_loess") {
+          if (!requireNamespace("limma", quietly = TRUE)) {
+            add_log("ERROR", "normalize_global (cyclic_loess): package 'limma' is required. Install with BiocManager::install(\"limma\"); skipping")
+          } else {
+            cl_res <- tryCatch(limma::normalizeCyclicLoess(mat, method = "fast"),
+                               error = function(e) e)
+            if (inherits(cl_res, "error")) {
+              add_log("ERROR", sprintf("normalize_global (cyclic_loess): %s; skipping", conditionMessage(cl_res)))
+            } else {
+              mat <- as.matrix(cl_res)
+              add_log("INFO", sprintf("Cyclic-loess-normalized %d columns (method=fast)", n_cols))
+            }
           }
         }
       }

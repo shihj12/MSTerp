@@ -247,14 +247,8 @@ stats_msea_run <- function(payload, params = NULL, context = NULL) {
   results_df <- results_df[order(results_df$fdr, -results_df$fold_enrichment), , drop = FALSE]
 
   # Limit results per pathway type if "all" databases selected
-  # Limit per pathway_type to keep balance across databases
-  final_results <- list()
-  for (pt in unique(results_df$pathway_type)) {
-    pt_df <- results_df[results_df$pathway_type == pt, , drop = FALSE]
-    pt_df <- head(pt_df, max_terms)
-    final_results <- c(final_results, list(pt_df))
-  }
-  results_df <- do.call(rbind, final_results)
+  # max_terms is applied at render time (tb_render_msea) so users can change
+  # "Max terms per database" without re-running the analysis.
 
   add_log("INFO", sprintf("MSEA complete: %d significant pathways found", nrow(results_df)))
 

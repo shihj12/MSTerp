@@ -53,30 +53,20 @@ tb_is_equal <- function(a, b) {
 }
 
 tb_fdr_palette <- function(n = 100) {
-  grDevices::colorRampPalette(c("black", "#2727d6", "#881bff", "#ff7ab0", "yellow"))(n)
+  msterp_palette_colors("yellow_cap", n = n, direction = -1)
 }
 
-# Convenience wrapper: tb_fdr_color_scale(palette, type)
-# Maps "continuous" -> "color" for tb_fdr_scale compatibility
 tb_fdr_color_scale <- function(palette = "yellow_cap", type = "color") {
   scale_type <- if (type == "continuous") "color" else type
   tb_fdr_scale(type = scale_type, palette = palette)
 }
 
-# Helper to create FDR color scale that properly scales to input data and shows a legend
-# Returns a ggplot2 scale_color_* or scale_fill_* layer
-# type: "color" or "fill"
-# fdr_values: vector of FDR values to scale to (uses data range if provided)
-# palette: "yellow_cap" (default, low FDR = yellow) or "blue_red" (low FDR = #2e66a0, high = #d14f58)
+# Builds a ggplot2 scale_{color,fill}_gradientn for FDR values on a log10 axis.
+# Palette stops are ordered low-FDR -> high-FDR so the "significant" color sits
+# at pal_colors[1]. msterp_palette_stops() returns low->high by convention,
+# which matches that expectation for every palette in the shared set.
 tb_fdr_scale <- function(type = "color", fdr_values = NULL, flat_color = NULL, palette = "yellow_cap") {
-  # Two palette options:
-  # "yellow_cap" (default): black -> blue -> purple -> pink -> yellow (low FDR = significant = yellow)
-  # "blue_red": #d14f58 (red, high FDR) -> #2e66a0 (blue, low FDR/significant)
-  if (palette == "blue_red") {
-    pal_colors <- c("#2e66a0", "#6a8ab8", "#b0b0b0", "#c88080", "#d14f58")  # low FDR (blue) to high FDR (red)
-  } else {
-    pal_colors <- c("yellow", "#ff7ab0", "#881bff", "#2727d6", "black")  # low FDR (significant) to high FDR
-  }
+  pal_colors <- msterp_palette_stops(palette)
 
   if (!is.null(flat_color)) {
     # Flat color mode - no legend
@@ -2695,6 +2685,17 @@ tb_render_go_tab <- function(tab_name, tab_data, style, plot_type = "bar", meta 
     df_plot <- df_all[!(df_all$term_id %in% hidden_terms) & !(df_all$term_original %in% hidden_terms), , drop = FALSE]
   } else {
     df_plot <- df_all[!(df_all$term_original %in% hidden_terms), , drop = FALSE]
+  }
+
+  # max_terms is a view-time limit applied to the PLOT only; the table
+  # (df_display, derived from df_all) still shows every significant term so
+  # the user can un-hide or search through the full list. Stats engines used
+  # to slice here; the limit now lives in the style schema so users can
+  # change "Terms to show" without re-running.
+  max_terms_view <- suppressWarnings(as.integer(style$max_terms %||% NA_integer_))
+  if (length(max_terms_view) == 1 && is.finite(max_terms_view) && max_terms_view > 0 &&
+      nrow(df_plot) > max_terms_view) {
+    df_plot <- df_plot[seq_len(max_terms_view), , drop = FALSE]
   }
 
   # FIX: Apply custom term labels FIRST (before GO ID suffix)
@@ -6564,6 +6565,15 @@ tb_render_2dgofcs_scatter_xy <- function(df, style, meta, x_label, y_label, plot
   }
   df_plot <- df_all[!(df_all$term %in% hidden_terms), , drop = FALSE]
 
+  # max_terms is a render-time limit on the scatter plot only; df_all (used
+  # for the table) keeps every significant term so the user can un-hide or
+  # search. Change "Terms to show" in style to re-slice without re-running.
+  max_terms_view <- suppressWarnings(as.integer(style$max_terms %||% NA_integer_))
+  if (length(max_terms_view) == 1 && is.finite(max_terms_view) && max_terms_view > 0 &&
+      nrow(df_plot) > max_terms_view) {
+    df_plot <- df_plot[seq_len(max_terms_view), , drop = FALSE]
+  }
+
   # Apply custom term labels to plot data
   if (length(term_labels) > 0 && nrow(df_plot) > 0) {
     df_plot$term_original <- df_plot$term
@@ -7012,6 +7022,21 @@ tb_render_msea <- function(results, style, meta) {
   df_all <- df
   df_plot <- df_all[!(df_all$pathway_id %in% hidden_terms) & !(df_all$pathway_name_original %in% hidden_terms), , drop = FALSE]
 
+  # max_terms is a view-time slice per pathway database, applied to the plot
+  # only. Table (df_all) keeps every significant pathway.
+  max_terms_view <- suppressWarnings(as.integer(style$max_terms %||% NA_integer_))
+  if (length(max_terms_view) == 1 && is.finite(max_terms_view) && max_terms_view > 0 &&
+      nrow(df_plot) > 0) {
+    if ("pathway_type" %in% names(df_plot)) {
+      df_plot <- do.call(rbind, lapply(split(df_plot, df_plot$pathway_type), function(x) {
+        if (nrow(x) > max_terms_view) x[seq_len(max_terms_view), , drop = FALSE] else x
+      }))
+      rownames(df_plot) <- NULL
+    } else if (nrow(df_plot) > max_terms_view) {
+      df_plot <- df_plot[seq_len(max_terms_view), , drop = FALSE]
+    }
+  }
+
   # Apply custom labels
   if (length(term_labels) > 0 && nrow(df_plot) > 0) {
     for (i in seq_len(nrow(df_plot))) {
@@ -7371,6 +7396,21 @@ tb_render_pathway_fcs <- function(results, style, meta) {
 
   df_all <- df
   df_plot <- df_all[!(df_all$pathway_id %in% hidden_terms) & !(df_all$pathway_name_original %in% hidden_terms), , drop = FALSE]
+
+  # max_terms is a view-time slice per pathway database, applied to the plot
+  # only. Table (df_all) keeps every significant pathway.
+  max_terms_view <- suppressWarnings(as.integer(style$max_terms %||% NA_integer_))
+  if (length(max_terms_view) == 1 && is.finite(max_terms_view) && max_terms_view > 0 &&
+      nrow(df_plot) > 0) {
+    if ("pathway_type" %in% names(df_plot)) {
+      df_plot <- do.call(rbind, lapply(split(df_plot, df_plot$pathway_type), function(x) {
+        if (nrow(x) > max_terms_view) x[seq_len(max_terms_view), , drop = FALSE] else x
+      }))
+      rownames(df_plot) <- NULL
+    } else if (nrow(df_plot) > max_terms_view) {
+      df_plot <- df_plot[seq_len(max_terms_view), , drop = FALSE]
+    }
+  }
 
   # Apply custom labels
   if (length(term_labels) > 0 && nrow(df_plot) > 0) {
@@ -8698,32 +8738,7 @@ tb_render_heatmap <- function(results, style, context = NULL) {
   if (!is.finite(height) || height <= 0) height <- 8
 
   palette_name <- as.character(style$color_palette %||% "viridis")[1]
-  get_palette <- function(name, n = 100) {
-    name <- as.character(name %||% "viridis")[1]
-    if (identical(name, "viridis")) {
-      if (requireNamespace("viridisLite", quietly = TRUE)) {
-        return(viridisLite::viridis(n))
-      }
-      return(grDevices::colorRampPalette(c("#440154", "#21908C", "#FDE725"))(n))
-    }
-    # Convention: blue = low, red = high for signed diverging palettes
-    if (identical(name, "RdBu")) {
-      return(grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n))
-    }
-    if (identical(name, "RdYlBu")) {
-      return(grDevices::colorRampPalette(c("#4575B4", "#FFFFBF", "#D73027"))(n))
-    }
-    if (identical(name, "Blues")) {
-      return(grDevices::colorRampPalette(c("#EFF3FF", "#2171B5"))(n))
-    }
-    if (identical(name, "Reds")) {
-      return(grDevices::colorRampPalette(c("#FEE0D2", "#A50F15"))(n))
-    }
-    if (identical(name, "PuOr")) {
-      return(grDevices::colorRampPalette(c("#542788", "#F7F7F7", "#B35806"))(n))
-    }
-    grDevices::colorRampPalette(c("#2c7bb6", "#ffffbf", "#d7191c"))(n)
-  }
+  get_palette <- function(name, n = 100) msterp_palette_colors(name, n = n)
 
   group_annotations <- data$group_annotations
   group_colors <- data$group_colors
@@ -9554,25 +9569,7 @@ tb_render_fc_heatmap <- function(results, style, context = NULL) {
   if (!is.finite(height) || height <= 0) height <- 8
 
   palette_name <- as.character(style$color_palette %||% "RdBu")[1]
-  get_palette <- function(name, n = 100) {
-    name <- as.character(name %||% "RdBu")[1]
-    if (identical(name, "viridis")) {
-      if (requireNamespace("viridisLite", quietly = TRUE)) {
-        return(viridisLite::viridis(n))
-      }
-      return(grDevices::colorRampPalette(c("#440154", "#21908C", "#FDE725"))(n))
-    }
-    if (identical(name, "RdBu")) {
-      return(grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n))
-    }
-    if (identical(name, "RdYlBu")) {
-      return(grDevices::colorRampPalette(c("#4575B4", "#FFFFBF", "#D73027"))(n))
-    }
-    if (identical(name, "PuOr")) {
-      return(grDevices::colorRampPalette(c("#542788", "#F7F7F7", "#B35806"))(n))
-    }
-    grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n)
-  }
+  get_palette <- function(name, n = 100) msterp_palette_colors(name, n = n)
 
   # For FC heatmaps, columns are comparisons (not samples), so no group annotation bar
   if (transpose) {
@@ -9808,25 +9805,7 @@ tb_render_pathway_fc_heatmap <- function(results, style, context = NULL) {
   if (!is.finite(height) || height <= 0) height <- 8
 
   palette_name <- as.character(style$color_palette %||% "RdBu")[1]
-  get_palette <- function(name, n = 100) {
-    name <- as.character(name %||% "RdBu")[1]
-    if (identical(name, "viridis")) {
-      if (requireNamespace("viridisLite", quietly = TRUE)) {
-        return(viridisLite::viridis(n))
-      }
-      return(grDevices::colorRampPalette(c("#440154", "#21908C", "#FDE725"))(n))
-    }
-    if (identical(name, "RdBu")) {
-      return(grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n))
-    }
-    if (identical(name, "RdYlBu")) {
-      return(grDevices::colorRampPalette(c("#4575B4", "#FFFFBF", "#D73027"))(n))
-    }
-    if (identical(name, "PuOr")) {
-      return(grDevices::colorRampPalette(c("#542788", "#F7F7F7", "#B35806"))(n))
-    }
-    grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(n)
-  }
+  get_palette <- function(name, n = 100) msterp_palette_colors(name, n = n)
 
   # Transpose if requested
   if (transpose) {

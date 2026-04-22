@@ -12902,12 +12902,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
           # Source required files
           source(file.path(app_root, "R", "00_init.R"), local = FALSE)
+          # utils first: registry.R (loaded via engines) depends on palettes.R
+          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
+          for (f in utils_files) source(f, local = FALSE)
           engine_files <- list.files(file.path(app_root, "R", "engines"), pattern = "\\.R$", full.names = TRUE)
           for (f in engine_files) source(f, local = FALSE)
           stats_files <- list.files(file.path(app_root, "R", "engines", "stats"), pattern = "\\.R$", full.names = TRUE)
           for (f in stats_files) source(f, local = FALSE)
-          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
-          for (f in utils_files) source(f, local = FALSE)
 
           cluster_info <- goora_input$cluster_info
           res <- goora_input$res

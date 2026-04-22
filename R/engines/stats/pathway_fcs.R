@@ -192,14 +192,8 @@ pathway_fcs_core <- function(scores, metabobase, params, add_log) {
   # Sort by absolute score (most enriched/depleted first), then by FDR
   results_df <- results_df[order(-abs(results_df$score), results_df$fdr), , drop = FALSE]
 
-  # Limit per pathway_type to keep balance across databases
-  final_results <- list()
-  for (pt in unique(results_df$pathway_type)) {
-    pt_df <- results_df[results_df$pathway_type == pt, , drop = FALSE]
-    pt_df <- head(pt_df, max_terms)
-    final_results <- c(final_results, list(pt_df))
-  }
-  results_df <- do.call(rbind, final_results)
+  # max_terms is applied at render time (tb_render_pathway_fcs) so users can
+  # change "Max terms per database" without re-running the analysis.
 
   add_log("INFO", sprintf("Pathway FCS: %d significant pathways found", nrow(results_df)))
 

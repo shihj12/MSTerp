@@ -1852,6 +1852,11 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
             "complexbase.R", "metabobase.R", "terpbook_io.R",
             "pubchem_resolver.R"
           )
+          # Palettes helper must load before registry.R (which calls
+          # msterp_palette_choices() when defining engine schemas).
+          palettes_fp <- file.path(app_root, "R", "utils", "palettes.R")
+          if (file.exists(palettes_fp)) source(palettes_fp, local = FALSE)
+
           engine_dir <- file.path(app_root, "R", "engines")
           for (f in engine_allowlist) {
             fp <- file.path(engine_dir, f)
@@ -2566,6 +2571,9 @@ page_new_run_server <- function(input, output, session, app_state = NULL, state 
           "pubchem_resolver.R"
         )
         engine_dir <- file.path(app_root, "R", "engines")
+        # Palettes helper must load before registry.R.
+        palettes_fp <- file.path(app_root, "R", "utils", "palettes.R")
+        if (file.exists(palettes_fp)) source(palettes_fp, local = FALSE)
         for (f in engine_allowlist) {
           fp <- file.path(engine_dir, f)
           if (file.exists(fp)) source(fp, local = FALSE)

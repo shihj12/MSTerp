@@ -209,8 +209,8 @@ stats_class_enrichment_run <- function(payload, params = NULL, context = NULL) {
   # Sort by FDR, then by fold_enrichment
   results_df <- results_df[order(results_df$fdr, -results_df$fold_enrichment), , drop = FALSE]
 
-  # Limit results
-  results_df <- head(results_df, max_terms)
+  # max_terms is applied at render time (tb_render_class_enrichment) so users
+  # can change "Max terms" without re-running the analysis.
 
   add_log("INFO", sprintf("Class enrichment complete: %d significant classes found", nrow(results_df)))
 

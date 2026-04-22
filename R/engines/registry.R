@@ -2016,7 +2016,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field(
             "color_palette", "choice", "Color palette",
             default = "PuOr",
-            choices = c("viridis", "RdBu", "RdYlBu", "Blues", "Reds", "PuOr"),
+            choices = msterp_palette_choices("heatmap"),
             advanced = TRUE
           ),
           msterp_schema_field(
@@ -2169,7 +2169,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field(
           "color_palette", "choice", "Color palette",
           default = "PuOr",
-          choices = c("viridis", "RdBu", "RdYlBu", "Blues", "Reds", "PuOr"),
+          choices = msterp_palette_choices("heatmap"),
           advanced = TRUE
         ),
         msterp_schema_field(
@@ -2319,7 +2319,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field(
             "color_palette", "choice", "Color palette",
             default = "RdBu",
-            choices = c("viridis", "RdBu", "RdYlBu", "PuOr"),
+            choices = msterp_palette_choices("heatmap"),
             advanced = TRUE
           ),
           msterp_schema_field(
@@ -2461,7 +2461,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field(
             "color_palette", "choice", "Color palette",
             default = "RdBu",
-            choices = c("viridis", "RdBu", "RdYlBu", "PuOr"),
+            choices = msterp_palette_choices("heatmap"),
             advanced = TRUE
           ),
           msterp_schema_field(
@@ -2640,7 +2640,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field(
           "color_palette", "choice", "Color palette",
           default = "RdBu",
-          choices = c("viridis", "RdBu", "RdYlBu", "PuOr"),
+          choices = msterp_palette_choices("heatmap"),
           advanced = TRUE
         ),
         msterp_schema_field(
@@ -3518,7 +3518,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                             help = "Minimum proteins in database annotated to a GO term (filters small terms)"),
         msterp_schema_field("min_overlap", "int", "Min overlap", default = 3, min = 1,
                             help = "Minimum query proteins that must overlap with a GO term (filters weak hits)"),
-        msterp_schema_field("max_terms", "int", "Terms to show", default = 20, min = 1, max = 200),
         msterp_schema_field(
           "ontology", "choice", "Ontology",
           default = "ALL", choices = c("ALL", "BP", "MF", "CC"),
@@ -3528,6 +3527,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       style_schema = c(
         list(
+          msterp_schema_field("max_terms", "int", "Terms to show", default = 20, min = 1, max = 200,
+                              help = "Applied at render time — change without re-running analysis."),
           msterp_schema_field(
             "plot_type", "choice", "Plot type",
             default = "bar", choices = c("bar", "dot"), advanced = TRUE
@@ -3538,8 +3539,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           ),
           msterp_schema_field(
             "fdr_palette", "choice", "FDR color palette",
-            default = "yellow_cap", choices = c("yellow_cap", "blue_red"),
-            choice_labels = c("Yellow (significant)", "Blue-Red"), advanced = TRUE
+            default = "yellow_cap", choices = msterp_palette_choices("fdr"), advanced = TRUE
           ),
           msterp_schema_field("flat_color", "string", "Flat color (hex)", default = "#B0B0B0", advanced = TRUE),
           msterp_schema_field("alpha", "num", "Opacity", default = 0.8, min = 0, max = 1, advanced = TRUE),
@@ -3618,7 +3618,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field("min_term_size", "int", "Min term size", default = 5, min = 1),
         msterp_schema_field("min_overlap", "int", "Min overlap", default = 5, min = 1,
                             help = "Minimum query proteins that must overlap with a GO term (filters weak hits)"),
-        msterp_schema_field("max_terms", "int", "Terms to show", default = 20, min = 1, max = 200),
         msterp_schema_field(
           "ontology", "choice", "Ontology",
           default = "ALL", choices = c("ALL", "BP", "MF", "CC"),
@@ -3634,6 +3633,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       style_schema = c(
         list(
+          msterp_schema_field("max_terms", "int", "Terms to show", default = 20, min = 1, max = 200,
+                              help = "Applied at render time — change without re-running analysis."),
           msterp_schema_field(
             "plot_type", "choice", "Plot type",
             default = "bar", choices = c("bar", "dot"), advanced = TRUE
@@ -3644,8 +3645,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           ),
           msterp_schema_field(
             "fdr_palette", "choice", "FDR color palette",
-            default = "yellow_cap", choices = c("yellow_cap", "blue_red"),
-            choice_labels = c("Yellow (significant)", "Blue-Red"), advanced = TRUE
+            default = "yellow_cap", choices = msterp_palette_choices("fdr"), advanced = TRUE
           ),
           msterp_schema_field("flat_color", "string", "Flat color (hex)", default = "#B0B0B0", advanced = TRUE),
           msterp_schema_field("alpha", "num", "Opacity", default = 0.8, min = 0, max = 1, advanced = TRUE),
@@ -3717,7 +3717,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field("min_term_size", "int", "Min term size", default = 5, min = 1),
         msterp_schema_field("min_overlap", "int", "Min overlap", default = 5, min = 1,
                             help = "Minimum query proteins that must overlap with a GO term (filters weak hits)"),
-        msterp_schema_field("max_terms", "int", "Terms to show", default = 20, min = 1, max = 200),
         msterp_schema_field(
           "ontology", "choice", "Ontology",
           default = "ALL", choices = c("ALL", "BP", "MF", "CC"),
@@ -3733,14 +3732,15 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       style_schema = c(
         list(
+          msterp_schema_field("max_terms", "int", "Terms to show", default = 20, min = 1, max = 200,
+                              help = "Applied at render time — change without re-running analysis."),
           msterp_schema_field(
             "color_mode", "choice", "Coloring",
             default = "fdr", choices = c("fdr", "flat"), advanced = TRUE
           ),
           msterp_schema_field(
             "fdr_palette", "choice", "FDR color palette",
-            default = "yellow_cap", choices = c("yellow_cap", "blue_red"),
-            choice_labels = c("Yellow (significant)", "Blue-Red"), advanced = TRUE
+            default = "yellow_cap", choices = msterp_palette_choices("fdr"), advanced = TRUE
           ),
           msterp_schema_field("flat_color", "string", "Flat color (hex)",
                               default = "#B0B0B0", advanced = TRUE),
@@ -4163,12 +4163,13 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                             default = 3, min = 1, max = 100),
         msterp_schema_field("min_overlap", "int", "Min overlap",
                             default = 2, min = 1, max = 50,
-                            help = "Minimum number of query metabolites in pathway"),
-        msterp_schema_field("max_terms", "int", "Max terms per database",
-                            default = 20, min = 1, max = 200)
+                            help = "Minimum number of query metabolites in pathway")
         # PubChem resolver is now always-on (no opt-in needed)
       ),
       style_schema = list(
+        msterp_schema_field("max_terms", "int", "Max terms per database",
+                            default = 20, min = 1, max = 200,
+                            help = "Applied at render time — change without re-running analysis."),
         msterp_schema_field("plot_type", "choice", "Plot type",
                             default = "bar",
                             choices = c("bar", "dot"),
@@ -4179,8 +4180,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                             choice_labels = c("FDR value", "Flat color")),
         msterp_schema_field(
           "fdr_palette", "choice", "FDR color palette",
-          default = "yellow_cap", choices = c("yellow_cap", "blue_red"),
-          choice_labels = c("Yellow (significant)", "Blue-Red"), advanced = TRUE
+          default = "yellow_cap", choices = msterp_palette_choices("fdr"), advanced = TRUE
         ),
         msterp_schema_field("flat_color", "string", "Flat color (hex)",
                             default = "#4A90D9", advanced = TRUE),
@@ -4305,11 +4305,12 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field("min_pathway_size", "int", "Min pathway size",
                             default = 5, min = 1, max = 100),
         msterp_schema_field("min_overlap", "int", "Min overlap",
-                            default = 3, min = 1, max = 50),
-        msterp_schema_field("max_terms", "int", "Max terms per database",
-                            default = 20, min = 1, max = 200)
+                            default = 3, min = 1, max = 50)
       ),
       style_schema = list(
+        msterp_schema_field("max_terms", "int", "Max terms per database",
+                            default = 20, min = 1, max = 200,
+                            help = "Applied at render time — change without re-running analysis."),
         msterp_schema_field("plot_type", "choice", "Plot type",
                             default = "bar",
                             choices = c("bar", "dot"),
@@ -4320,8 +4321,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                             choice_labels = c("Enrichment score", "FDR value", "Flat color")),
         msterp_schema_field(
           "fdr_palette", "choice", "FDR color palette",
-          default = "yellow_cap", choices = c("yellow_cap", "blue_red"),
-          choice_labels = c("Yellow (significant)", "Blue-Red"), advanced = TRUE
+          default = "yellow_cap", choices = msterp_palette_choices("fdr"), advanced = TRUE
         ),
         msterp_schema_field("flat_color", "string", "Flat color (hex)",
                             default = "#20B2AA", advanced = TRUE),

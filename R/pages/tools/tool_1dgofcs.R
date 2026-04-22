@@ -133,20 +133,22 @@ tools_1dgofcs_ui <- function() {
             value = params_defaults$min_overlap %||% 5,
             min = 1,
             step = 1
-          ),
-          numericInput(
-            "tools_1dgofcs_max_terms",
-            "Terms to show (per ontology)",
-            value = params_defaults$max_terms %||% 20,
-            min = 1,
-            max = 200,
-            step = 1
           )
         ),
         tools_collapse_section_ui(
           "tools_1dgofcs_plot_section",
           "Plot Options",
           open = FALSE,
+          numericInput(
+            "tools_1dgofcs_max_terms",
+            "Terms to show (per ontology)",
+            value = style_defaults$max_terms %||% 20,
+            min = 1,
+            max = 200,
+            step = 1
+          ),
+          tags$p(class = "text-muted", style = "font-size: 11px; margin-top: -6px;",
+                 "Style changes re-render the current plot instantly — no re-run needed."),
           selectInput(
             "tools_1dgofcs_plot_type",
             "Plot type",
@@ -164,7 +166,7 @@ tools_1dgofcs_ui <- function() {
             selectInput(
               "tools_1dgofcs_fdr_palette",
               "FDR color palette",
-              choices = c("yellow_cap" = "Yellow (significant)", "blue_red" = "Blue-Red"),
+              choices = msterp_palette_choices("fdr"),
               selected = style_defaults$fdr_palette %||% "yellow_cap"
             )
           ),
@@ -300,7 +302,7 @@ tools_1dgofcs_server <- function(input, output, session, app_state, rv_1dgofcs, 
     updateNumericInput(session, "tools_1dgofcs_fdr_cutoff", value = defs_1dgofcs$params$fdr_cutoff %||% 0.03)
     updateNumericInput(session, "tools_1dgofcs_min_term_size", value = defs_1dgofcs$params$min_term_size %||% 5)
     updateNumericInput(session, "tools_1dgofcs_min_overlap", value = defs_1dgofcs$params$min_overlap %||% 5)
-    updateNumericInput(session, "tools_1dgofcs_max_terms", value = defs_1dgofcs$params$max_terms %||% 20)
+    updateNumericInput(session, "tools_1dgofcs_max_terms", value = defs_1dgofcs$style$max_terms %||% 20)
     updateTextAreaInput(session, "tools_1dgofcs_genes", value = "")
   }, ignoreInit = TRUE)
 
@@ -452,15 +454,16 @@ tools_1dgofcs_server <- function(input, output, session, app_state, rv_1dgofcs, 
     scores <- parsed$scores
     names(scores) <- parsed$genes
 
-    # Collect params and style from inputs (lightweight)
+    # Params drive the stats engine — changing them requires a re-run.
+    # max_terms, palette, fonts etc. live in style and re-render instantly.
     params <- list(
       fdr_cutoff = safe_num(input$tools_1dgofcs_fdr_cutoff, defs_1dgofcs$params$fdr_cutoff %||% 0.03),
       min_term_size = safe_int(input$tools_1dgofcs_min_term_size, defs_1dgofcs$params$min_term_size %||% 5),
-      min_overlap = safe_int(input$tools_1dgofcs_min_overlap, defs_1dgofcs$params$min_overlap %||% 5),
-      max_terms = safe_int(input$tools_1dgofcs_max_terms, defs_1dgofcs$params$max_terms %||% 20)
+      min_overlap = safe_int(input$tools_1dgofcs_min_overlap, defs_1dgofcs$params$min_overlap %||% 5)
     )
 
     style <- list(
+      max_terms = safe_int(input$tools_1dgofcs_max_terms, defs_1dgofcs$style$max_terms %||% 20),
       plot_type = input$tools_1dgofcs_plot_type %||% defs_1dgofcs$style$plot_type %||% "bar",
       color_mode = input$tools_1dgofcs_color_mode %||% defs_1dgofcs$style$color_mode %||% "fdr",
       fdr_palette = input$tools_1dgofcs_fdr_palette %||% defs_1dgofcs$style$fdr_palette %||% "yellow_cap",
@@ -508,12 +511,13 @@ tools_1dgofcs_server <- function(input, output, session, app_state, rv_1dgofcs, 
 
           # Source all required files (same pattern as new_run page)
           source(file.path(app_root, "R", "00_init.R"), local = FALSE)
+          # utils first: registry.R (loaded via engines) depends on palettes.R
+          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
+          for (f in utils_files) source(f, local = FALSE)
           engine_files <- list.files(file.path(app_root, "R", "engines"), pattern = "\\.R$", full.names = TRUE)
           for (f in engine_files) source(f, local = FALSE)
           stats_files <- list.files(file.path(app_root, "R", "engines", "stats"), pattern = "\\.R$", full.names = TRUE)
           for (f in stats_files) source(f, local = FALSE)
-          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
-          for (f in utils_files) source(f, local = FALSE)
 
           write_prog("Preparing GO mappings...", 10)
 
@@ -673,9 +677,11 @@ tools_1dgofcs_server <- function(input, output, session, app_state, rv_1dgofcs, 
     ar <- w_in / h_in
 
     tagList(
-      # Export buttons
+      # Export / action buttons
       div(
         class = "tool-export-buttons",
+        actionButton("tools_1dgofcs_rerender", "Re-render", class = "btn btn-sm btn-default", icon = icon("arrows-rotate"),
+                     title = "Re-render the plot from cached results using current style settings. Does not re-run analysis."),
         actionButton("tools_1dgofcs_download_png", "Download PNG", class = "btn btn-sm btn-default", icon = icon("download")),
         actionButton("tools_1dgofcs_download_pdf", "Download PDF", class = "btn btn-sm btn-default", icon = icon("file-pdf")),
         actionButton("tools_1dgofcs_copy_plot", "Copy Plot", class = "btn btn-sm btn-default", icon = icon("copy")),
@@ -693,9 +699,16 @@ tools_1dgofcs_server <- function(input, output, session, app_state, rv_1dgofcs, 
     )
   })
 
-  # Build current style from inputs (reactive helper)
+  observeEvent(input$tools_1dgofcs_rerender, {
+    rv_1dgofcs$rerender_tick <- (rv_1dgofcs$rerender_tick %||% 0L) + 1L
+  }, ignoreInit = TRUE)
+
+  # Build current style from inputs (reactive helper). rv_1dgofcs$rerender_tick
+  # is read so the explicit "Re-render" button forces invalidation.
   current_1dgofcs_style <- reactive({
+    rv_1dgofcs$rerender_tick
     list(
+      max_terms = safe_int(input$tools_1dgofcs_max_terms, defs_1dgofcs$style$max_terms %||% 20),
       plot_type = input$tools_1dgofcs_plot_type %||% defs_1dgofcs$style$plot_type %||% "bar",
       color_mode = input$tools_1dgofcs_color_mode %||% defs_1dgofcs$style$color_mode %||% "fdr",
       fdr_palette = input$tools_1dgofcs_fdr_palette %||% defs_1dgofcs$style$fdr_palette %||% "yellow_cap",

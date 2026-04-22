@@ -156,20 +156,28 @@ tools_2dgofcs_ui <- function() {
             value = params_defaults$min_overlap %||% 5,
             min = 1,
             step = 1
-          ),
-          numericInput(
-            "tools_2dgofcs_max_terms",
-            "Terms to show (per ontology)",
-            value = params_defaults$max_terms %||% 20,
-            min = 1,
-            max = 200,
-            step = 1
           )
         ),
         tools_collapse_section_ui(
           "tools_2dgofcs_plot_section",
           "Plot Options",
           open = FALSE,
+          selectInput(
+            "tools_2dgofcs_view_mode",
+            "Viewer mode",
+            choices = c("Export preview" = "export_preview", "Interactive" = "interactive"),
+            selected = style_defaults$view_mode %||% "export_preview"
+          ),
+          numericInput(
+            "tools_2dgofcs_max_terms",
+            "Terms to show (per ontology)",
+            value = style_defaults$max_terms %||% 20,
+            min = 1,
+            max = 200,
+            step = 1
+          ),
+          tags$p(class = "text-muted", style = "font-size: 11px; margin-top: -6px;",
+                 "Style changes re-render the current plot instantly — no re-run needed."),
           selectInput(
             "tools_2dgofcs_color_mode",
             "Coloring",
@@ -181,7 +189,7 @@ tools_2dgofcs_ui <- function() {
             selectInput(
               "tools_2dgofcs_fdr_palette",
               "FDR color palette",
-              choices = c("yellow_cap" = "Yellow (significant)", "blue_red" = "Blue-Red"),
+              choices = msterp_palette_choices("fdr"),
               selected = style_defaults$fdr_palette %||% "yellow_cap"
             )
           ),
@@ -325,7 +333,7 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
     updateNumericInput(session, "tools_2dgofcs_fdr_cutoff", value = defs_2dgofcs$params$fdr_cutoff %||% 0.03)
     updateNumericInput(session, "tools_2dgofcs_min_term_size", value = defs_2dgofcs$params$min_term_size %||% 5)
     updateNumericInput(session, "tools_2dgofcs_min_overlap", value = defs_2dgofcs$params$min_overlap %||% 5)
-    updateNumericInput(session, "tools_2dgofcs_max_terms", value = defs_2dgofcs$params$max_terms %||% 20)
+    updateNumericInput(session, "tools_2dgofcs_max_terms", value = defs_2dgofcs$style$max_terms %||% 20)
     updateTextAreaInput(session, "tools_2dgofcs_genes_x", value = "")
     updateTextAreaInput(session, "tools_2dgofcs_genes_y", value = "")
     updateTextInput(session, "tools_2dgofcs_x_label", value = "List X")
@@ -506,12 +514,13 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
     scores_y <- parsed$scores_y
     names(scores_y) <- parsed$genes
 
-    # Collect params and style from inputs (lightweight)
+    # Params drive the stats engine — they require a re-run when changed.
+    # max_terms, palette, fonts etc. live in style and re-render from cached
+    # results without re-running.
     params <- list(
       fdr_cutoff = safe_num(input$tools_2dgofcs_fdr_cutoff, defs_2dgofcs$params$fdr_cutoff %||% 0.03),
       min_term_size = safe_int(input$tools_2dgofcs_min_term_size, defs_2dgofcs$params$min_term_size %||% 5),
-      min_overlap = safe_int(input$tools_2dgofcs_min_overlap, defs_2dgofcs$params$min_overlap %||% 5),
-      max_terms = safe_int(input$tools_2dgofcs_max_terms, defs_2dgofcs$params$max_terms %||% 20)
+      min_overlap = safe_int(input$tools_2dgofcs_min_overlap, defs_2dgofcs$params$min_overlap %||% 5)
     )
 
     # Get axis labels from input
@@ -519,6 +528,8 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
     y_label <- input$tools_2dgofcs_y_label %||% "Score Y"
 
     style <- list(
+      view_mode = input$tools_2dgofcs_view_mode %||% defs_2dgofcs$style$view_mode %||% "export_preview",
+      max_terms = safe_int(input$tools_2dgofcs_max_terms, defs_2dgofcs$style$max_terms %||% 20),
       color_mode = input$tools_2dgofcs_color_mode %||% defs_2dgofcs$style$color_mode %||% "fdr",
       fdr_palette = input$tools_2dgofcs_fdr_palette %||% defs_2dgofcs$style$fdr_palette %||% "yellow_cap",
       flat_color = if (nzchar(input$tools_2dgofcs_flat_color %||% "")) {
@@ -563,12 +574,13 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
 
           # Source all required files (same pattern as new_run page)
           source(file.path(app_root, "R", "00_init.R"), local = FALSE)
+          # utils first: registry.R (loaded via engines) depends on palettes.R
+          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
+          for (f in utils_files) source(f, local = FALSE)
           engine_files <- list.files(file.path(app_root, "R", "engines"), pattern = "\\.R$", full.names = TRUE)
           for (f in engine_files) source(f, local = FALSE)
           stats_files <- list.files(file.path(app_root, "R", "engines", "stats"), pattern = "\\.R$", full.names = TRUE)
           for (f in stats_files) source(f, local = FALSE)
-          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
-          for (f in utils_files) source(f, local = FALSE)
 
           write_prog("Preparing GO mappings...", 10)
 
@@ -735,11 +747,20 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
     h_in <- safe_num(input$tools_2dgofcs_height, defs_2dgofcs$style$height %||% 6)
     ar <- w_in / h_in
 
-    # 2D GO-FCS typically shows a single scatter plot
+    is_interactive <- identical(tolower(input$tools_2dgofcs_view_mode %||% "export_preview"), "interactive")
+
+    plot_widget <- if (is_interactive && requireNamespace("plotly", quietly = TRUE)) {
+      plotly::plotlyOutput("tools_2dgofcs_plotly", height = "100%")
+    } else {
+      plotOutput("tools_2dgofcs_plot", height = "100%")
+    }
+
     tagList(
-      # Export buttons
+      # Export / action buttons
       div(
         class = "tool-export-buttons",
+        actionButton("tools_2dgofcs_rerender", "Re-render", class = "btn btn-sm btn-default", icon = icon("arrows-rotate"),
+                     title = "Re-render the plot from cached results using current style settings. Does not re-run analysis."),
         actionButton("tools_2dgofcs_download_png", "Download PNG", class = "btn btn-sm btn-default", icon = icon("download")),
         actionButton("tools_2dgofcs_download_pdf", "Download PDF", class = "btn btn-sm btn-default", icon = icon("file-pdf")),
         actionButton("tools_2dgofcs_copy_plot", "Copy Plot", class = "btn btn-sm btn-default", icon = icon("copy")),
@@ -748,7 +769,7 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
       div(
         class = "tool-plot-box",
         style = sprintf("--tool-plot-ar:%s;", format(ar, scientific = FALSE, trim = TRUE)),
-        plotOutput("tools_2dgofcs_plot", height = "100%")
+        plot_widget
       ),
       div(
         class = "tool-table-wrap",
@@ -757,9 +778,14 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
     )
   })
 
-  # Build current style from inputs (reactive helper)
+  # Build current style from inputs (reactive helper). Depending on
+  # rv_2dgofcs$rerender_tick forces a re-render when the user clicks the
+  # explicit "Re-render" button.
   current_2dgofcs_style <- reactive({
+    rv_2dgofcs$rerender_tick
     list(
+      view_mode = input$tools_2dgofcs_view_mode %||% defs_2dgofcs$style$view_mode %||% "export_preview",
+      max_terms = safe_int(input$tools_2dgofcs_max_terms, defs_2dgofcs$style$max_terms %||% 20),
       color_mode = input$tools_2dgofcs_color_mode %||% defs_2dgofcs$style$color_mode %||% "fdr",
       fdr_palette = input$tools_2dgofcs_fdr_palette %||% defs_2dgofcs$style$fdr_palette %||% "yellow_cap",
       flat_color = if (nzchar(input$tools_2dgofcs_flat_color %||% "")) {
@@ -777,6 +803,12 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
       ontology_filter = input$tools_2dgofcs_ontology_view %||% "BP"
     )
   })
+
+  # Explicit Re-render button: bumps a tick so current_2dgofcs_style() and
+  # downstream plot reactives invalidate even if no style input changed.
+  observeEvent(input$tools_2dgofcs_rerender, {
+    rv_2dgofcs$rerender_tick <- (rv_2dgofcs$rerender_tick %||% 0L) + 1L
+  }, ignoreInit = TRUE)
 
   # Get current ggplot object for export
   current_2dgofcs_plot <- reactive({
@@ -814,6 +846,86 @@ tools_2dgofcs_server <- function(input, output, session, app_state, rv_2dgofcs, 
   height = function() plot_dims_px_2dgofcs()$h,
   res = 150
   )
+
+  # Interactive (plotly) renderer — only populated when view_mode = "interactive".
+  # Mirrors the pipeline viewer at page_results.R:8115-8200 but uses tool-local
+  # session state (no disk persistence for label drags).
+  output$tools_2dgofcs_plotly <- plotly::renderPlotly({
+    res <- rv_2dgofcs$results
+    if (is.null(res)) return(NULL)
+
+    style <- current_2dgofcs_style()
+    if (!identical(tolower(style$view_mode %||% "export_preview"), "interactive")) return(NULL)
+
+    hidden_terms <- rv_2dgofcs$hidden_terms %||% character()
+    term_labels <- rv_2dgofcs$term_labels %||% list()
+    visibility <- list(hidden_terms = hidden_terms, term_labels = term_labels)
+
+    ont <- tolower(input$tools_2dgofcs_ontology_view %||% "BP")
+    plot_key <- paste0(ont, "_plot")
+
+    plotly_state <- rv_2dgofcs$plotly_state %||% list()
+    state <- tb_build_2dgofcs_plot_state(res, style, visibility = visibility,
+                                         plot_key = plot_key, plotly_state = plotly_state)
+    if (is.null(state)) return(NULL)
+
+    x_label <- input$tools_2dgofcs_x_label %||% "Score X"
+    y_label <- input$tools_2dgofcs_y_label %||% "Score Y"
+
+    tb_2dgofcs_plotly(
+      df_plot = state$df_plot,
+      style = style,
+      meta = list(visibility = visibility, plotly = plotly_state),
+      xlim = state$xlim,
+      ylim = state$ylim,
+      labs = state$labs,
+      saved = state$saved,
+      x_label = x_label,
+      y_label = y_label,
+      plot_key = plot_key
+    )
+  })
+
+  # Capture label drags so they persist across re-renders within the session.
+  observeEvent(plotly::event_data("plotly_relayout", source = "tools_2dgofcs_plotly"), {
+    ev <- plotly::event_data("plotly_relayout", source = "tools_2dgofcs_plotly")
+    if (is.null(ev)) return()
+    # Extract annotation position changes (keys like annotations[0].x, annotations[0].y)
+    nms <- names(ev)
+    ann_idx <- grep("^annotations\\[(\\d+)\\]\\.(x|y)$", nms)
+    if (length(ann_idx) == 0) return()
+
+    state <- rv_2dgofcs$plotly_state %||% list()
+    ont <- tolower(input$tools_2dgofcs_ontology_view %||% "BP")
+    plot_key <- paste0(ont, "_plot")
+    labels_by_plot <- state$labels_by_plot %||% list()
+    labels <- labels_by_plot[[plot_key]] %||% list()
+
+    # Map annotation index -> term_id via the current labs order
+    res <- rv_2dgofcs$results
+    visibility <- list(hidden_terms = rv_2dgofcs$hidden_terms %||% character(),
+                       term_labels = rv_2dgofcs$term_labels %||% list())
+    built <- tb_build_2dgofcs_plot_state(res, current_2dgofcs_style(), visibility = visibility,
+                                         plot_key = plot_key, plotly_state = state)
+    if (is.null(built)) return()
+    term_ids <- as.character(built$df_plot$term_id %||% built$df_plot$term_original %||% built$df_plot$term)
+
+    for (k in nms[ann_idx]) {
+      m <- regmatches(k, regexec("^annotations\\[(\\d+)\\]\\.(x|y)$", k))[[1]]
+      if (length(m) < 3) next
+      i <- as.integer(m[2]) + 1L  # plotly indexes from 0
+      axis <- m[3]
+      if (i < 1 || i > length(term_ids)) next
+      tid <- term_ids[[i]]
+      cur <- labels[[tid]] %||% list()
+      cur[[axis]] <- suppressWarnings(as.numeric(ev[[k]]))
+      labels[[tid]] <- cur
+    }
+
+    labels_by_plot[[plot_key]] <- labels
+    state$labels_by_plot <- labels_by_plot
+    rv_2dgofcs$plotly_state <- state
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
   # Clear filters button handler
   observeEvent(input$tools_2dgofcs_filter_clear, {

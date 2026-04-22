@@ -972,8 +972,24 @@ tf_dp_substep_ui <- function(step_id, i, dp_state, open_state = TRUE, parent_con
         condition = sprintf("input['%s'] == 'normalize_global'", op_id),
         selectInput(
           mkid("norm_method"), "Method",
-          choices = c("Mean" = "mean", "Median" = "median", "Quantile" = "quantile"),
+          choices = c(
+            "Mean" = "mean",
+            "Median" = "median",
+            "Trimmed Mean" = "trimmed_mean",
+            "Total Intensity (Sum)" = "total_intensity",
+            "Quantile" = "quantile",
+            "VSN" = "vsn",
+            "Cyclic Loess" = "cyclic_loess"
+          ),
           selected = dp_state$substeps[[i]]$opts$method %||% "median"
+        ),
+        conditionalPanel(
+          condition = sprintf("input['%s'] == 'trimmed_mean'", mkid("norm_method")),
+          numericInput(
+            mkid("norm_trim"), "Trim fraction (each tail)",
+            value = dp_state$substeps[[i]]$opts$trim %||% 0.1,
+            min = 0, max = 0.49, step = 0.05
+          )
         ),
         checkboxInput(
           mkid("norm_log2"), "Log2-transform before normalizing",
@@ -984,7 +1000,7 @@ tf_dp_substep_ui <- function(step_id, i, dp_state, open_state = TRUE, parent_con
           choices = c("Ignore (na.rm = TRUE)" = "ignore", "Propagate" = "propagate"),
           selected = dp_state$substeps[[i]]$opts$na_action %||% "ignore"
         ),
-        div(class = "tf-note", "Normalizes across all data columns (per-sample).")
+        div(class = "tf-note", "Normalizes across all data columns (per-sample). VSN and Cyclic Loess require Bioconductor packages (vsn, limma); Total Intensity and VSN run on raw scale (log2 toggle is ignored).")
       )
     )
   )
@@ -2008,11 +2024,16 @@ page_pipeline_server <- function(input, output, session, app_state = NULL, state
         if (!is.null(isolate(input[[mkid("norm_method")]]))) opts$method <- isolate(input[[mkid("norm_method")]])
         if (!is.null(isolate(input[[mkid("norm_log2")]])))   opts$log_transform_first <- isTRUE(isolate(input[[mkid("norm_log2")]]))
         if (!is.null(isolate(input[[mkid("norm_na")]])))     opts$na_action <- isolate(input[[mkid("norm_na")]])
+        if (!is.null(isolate(input[[mkid("norm_trim")]])))   opts$trim <- isolate(input[[mkid("norm_trim")]])
         opts$method <- opts$method %||% "median"
-        if (!opts$method %in% c("mean", "median", "quantile")) opts$method <- "median"
+        if (!opts$method %in% c("mean", "median", "trimmed_mean", "total_intensity",
+                                "quantile", "vsn", "cyclic_loess")) opts$method <- "median"
         if (is.null(opts$log_transform_first)) opts$log_transform_first <- TRUE
         opts$na_action <- opts$na_action %||% "ignore"
         if (!opts$na_action %in% c("ignore", "propagate")) opts$na_action <- "ignore"
+        trim_val <- suppressWarnings(as.numeric(opts$trim %||% 0.1))
+        if (!is.finite(trim_val)) trim_val <- 0.1
+        opts$trim <- max(0, min(0.49, trim_val))
       }
       
       plan$substeps[[k]]$opts <- opts

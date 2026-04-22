@@ -81,9 +81,11 @@ source_required(file.path("R", "00_init.R"))
 source_required(file.path("R", "ui_notifications.R"))
 source_required(file.path("R", "ui_shell.R"))
 source_required(file.path("R", "state_app.R"))
+# utils must load before engines: registry.R uses msterp_palette_choices() from
+# R/utils/palettes.R when defining engine schemas.
+source_dir_r(file.path("R", "utils"))
 source_dir_r(file.path("R", "engines"))
 source_dir_r(file.path("R", "engines", "stats"))
-source_dir_r(file.path("R", "utils"))
 source_dir_r(file.path("R", "pages"))
 
 

@@ -342,20 +342,22 @@ tools_pathway_fcs_ui <- function() {
             value = params_defaults$min_overlap %||% 3,
             min = 1,
             step = 1
-          ),
-          numericInput(
-            "tools_pathway_fcs_max_terms",
-            "Terms to show (per database)",
-            value = params_defaults$max_terms %||% 20,
-            min = 1,
-            max = 200,
-            step = 1
           )
         ),
         tools_collapse_section_ui(
           "tools_pathway_fcs_plot_section",
           "Plot Options",
           open = FALSE,
+          numericInput(
+            "tools_pathway_fcs_max_terms",
+            "Terms to show (per database)",
+            value = style_defaults$max_terms %||% 20,
+            min = 1,
+            max = 200,
+            step = 1
+          ),
+          tags$p(class = "text-muted", style = "font-size: 11px; margin-top: -6px;",
+                 "Style changes re-render the current plot instantly — no re-run needed."),
           selectInput(
             "tools_pathway_fcs_plot_type",
             "Plot type",
@@ -373,7 +375,7 @@ tools_pathway_fcs_ui <- function() {
             selectInput(
               "tools_pathway_fcs_fdr_palette",
               "FDR color palette",
-              choices = c("yellow_cap" = "Yellow (significant)", "blue_red" = "Blue-Red"),
+              choices = msterp_palette_choices("fdr"),
               selected = style_defaults$fdr_palette %||% "yellow_cap"
             )
           ),
@@ -551,7 +553,7 @@ tools_pathway_fcs_server <- function(input, output, session, app_state, rv, defs
     updateNumericInput(session, "tools_pathway_fcs_fdr_cutoff", value = defs_pfcs$params$fdr_cutoff %||% 0.03)
     updateNumericInput(session, "tools_pathway_fcs_min_pathway_size", value = defs_pfcs$params$min_pathway_size %||% 5)
     updateNumericInput(session, "tools_pathway_fcs_min_overlap", value = defs_pfcs$params$min_overlap %||% 3)
-    updateNumericInput(session, "tools_pathway_fcs_max_terms", value = defs_pfcs$params$max_terms %||% 20)
+    updateNumericInput(session, "tools_pathway_fcs_max_terms", value = defs_pfcs$style$max_terms %||% 20)
     updateTextAreaInput(session, "tools_pathway_fcs_metabolites", value = "")
   }, ignoreInit = TRUE)
 
@@ -744,16 +746,17 @@ tools_pathway_fcs_server <- function(input, output, session, app_state, rv, defs
     scores <- parsed$scores
     names(scores) <- parsed$metabolites
 
-    # Collect params and style from inputs
+    # Params drive the stats engine — changing them requires a re-run.
+    # max_terms, palette, fonts etc. live in style and re-render instantly.
     params <- list(
       pathway_db = input$tools_pathway_fcs_pathway_db %||% defs_pfcs$params$pathway_db %||% "all",
       fdr_cutoff = safe_num(input$tools_pathway_fcs_fdr_cutoff, defs_pfcs$params$fdr_cutoff %||% 0.03),
       min_pathway_size = safe_int(input$tools_pathway_fcs_min_pathway_size, defs_pfcs$params$min_pathway_size %||% 5),
-      min_overlap = safe_int(input$tools_pathway_fcs_min_overlap, defs_pfcs$params$min_overlap %||% 3),
-      max_terms = safe_int(input$tools_pathway_fcs_max_terms, defs_pfcs$params$max_terms %||% 20)
+      min_overlap = safe_int(input$tools_pathway_fcs_min_overlap, defs_pfcs$params$min_overlap %||% 3)
     )
 
     style <- list(
+      max_terms = safe_int(input$tools_pathway_fcs_max_terms, defs_pfcs$style$max_terms %||% 20),
       plot_type = input$tools_pathway_fcs_plot_type %||% defs_pfcs$style$plot_type %||% "bar",
       color_mode = input$tools_pathway_fcs_color_mode %||% defs_pfcs$style$color_mode %||% "score",
       fdr_palette = input$tools_pathway_fcs_fdr_palette %||% defs_pfcs$style$fdr_palette %||% "yellow_cap",
@@ -799,12 +802,13 @@ tools_pathway_fcs_server <- function(input, output, session, app_state, rv, defs
 
           # Source all required files
           source(file.path(app_root, "R", "00_init.R"), local = FALSE)
+          # utils first: registry.R (loaded via engines) depends on palettes.R
+          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
+          for (f in utils_files) source(f, local = FALSE)
           engine_files <- list.files(file.path(app_root, "R", "engines"), pattern = "\\.R$", full.names = TRUE)
           for (f in engine_files) source(f, local = FALSE)
           stats_files <- list.files(file.path(app_root, "R", "engines", "stats"), pattern = "\\.R$", full.names = TRUE)
           for (f in stats_files) source(f, local = FALSE)
-          utils_files <- list.files(file.path(app_root, "R", "utils"), pattern = "\\.R$", full.names = TRUE)
-          for (f in utils_files) source(f, local = FALSE)
 
           write_prog("Running pathway functional class scoring...", 30)
 
@@ -937,9 +941,11 @@ tools_pathway_fcs_server <- function(input, output, session, app_state, rv, defs
     ar <- w_in / h_in
 
     tagList(
-      # Export buttons
+      # Export / action buttons
       div(
         class = "tool-export-buttons",
+        actionButton("tools_pathway_fcs_rerender", "Re-render", class = "btn btn-sm btn-default", icon = icon("arrows-rotate"),
+                     title = "Re-render the plot from cached results using current style settings. Does not re-run analysis."),
         actionButton("tools_pathway_fcs_download_png", "Download PNG", class = "btn btn-sm btn-default", icon = icon("download")),
         actionButton("tools_pathway_fcs_download_pdf", "Download PDF", class = "btn btn-sm btn-default", icon = icon("file-pdf")),
         actionButton("tools_pathway_fcs_copy_plot", "Copy Plot", class = "btn btn-sm btn-default", icon = icon("copy")),
@@ -957,9 +963,16 @@ tools_pathway_fcs_server <- function(input, output, session, app_state, rv, defs
     )
   })
 
-  # Build current style from inputs (reactive helper)
+  observeEvent(input$tools_pathway_fcs_rerender, {
+    rv$rerender_tick <- (rv$rerender_tick %||% 0L) + 1L
+  }, ignoreInit = TRUE)
+
+  # Build current style from inputs (reactive helper). rv$rerender_tick is
+  # read so the explicit "Re-render" button forces invalidation.
   current_pfcs_style <- reactive({
+    rv$rerender_tick
     list(
+      max_terms = safe_int(input$tools_pathway_fcs_max_terms, defs_pfcs$style$max_terms %||% 20),
       plot_type = input$tools_pathway_fcs_plot_type %||% defs_pfcs$style$plot_type %||% "bar",
       color_mode = input$tools_pathway_fcs_color_mode %||% defs_pfcs$style$color_mode %||% "score",
       fdr_palette = input$tools_pathway_fcs_fdr_palette %||% defs_pfcs$style$fdr_palette %||% "yellow_cap",
