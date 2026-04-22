@@ -999,8 +999,7 @@ tf_dp_substep_ui <- function(step_id, i, dp_state, open_state = TRUE, parent_con
           mkid("norm_na"), "Missing values",
           choices = c("Ignore (na.rm = TRUE)" = "ignore", "Propagate" = "propagate"),
           selected = dp_state$substeps[[i]]$opts$na_action %||% "ignore"
-        ),
-        div(class = "tf-note", "Normalizes across all data columns (per-sample). VSN and Cyclic Loess require Bioconductor packages (vsn, limma); Total Intensity and VSN run on raw scale (log2 toggle is ignored).")
+        )
       )
     )
   )
