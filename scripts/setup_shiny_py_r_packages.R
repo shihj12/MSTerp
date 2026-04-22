@@ -71,7 +71,8 @@ if (!requireNamespace("BiocManager", quietly = TRUE)) {
 
 bioc_failures <- character()
 if (requireNamespace("BiocManager", quietly = TRUE)) {
-  bioc_missing <- c("limma")[!vapply(c("limma"), requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
+  bioc_pkgs <- c("limma", "vsn")
+  bioc_missing <- bioc_pkgs[!vapply(bioc_pkgs, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
   if (length(bioc_missing) > 0) {
     BiocManager::install(bioc_missing, ask = FALSE, update = FALSE, quiet = TRUE)
     bioc_failures <- bioc_missing[!vapply(bioc_missing, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
