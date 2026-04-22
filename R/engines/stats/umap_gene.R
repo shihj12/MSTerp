@@ -167,12 +167,19 @@
         }
         idx <- match(query, lookup_key)
         raw_loc <- as.character(gene_meta$subcell_location)[idx]
-        mapped <- .map_subloc_bucket(raw_loc)
+
+        mapped_gs <- if ("gene_symbol" %in% names(gene_meta)) {
+          as.character(gene_meta$gene_symbol)[idx]
+        } else {
+          rep(NA_character_, length(idx))
+        }
+
+        mapped <- .map_subloc_bucket(raw_loc, gene_symbol = mapped_gs)
         mapped[is.na(mapped)] <- "Other/Unknown"
         subloc_vec <- mapped
 
         if ("gene_symbol" %in% names(gene_meta)) {
-          gs <- as.character(gene_meta$gene_symbol)[idx]
+          gs <- mapped_gs
           miss <- is.na(gs) | !nzchar(gs)
           gs[miss] <- protein_ids[miss]
           gene_symbol_vec <- gs

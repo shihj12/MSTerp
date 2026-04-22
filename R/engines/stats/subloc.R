@@ -17,41 +17,51 @@
 # =========================================================
 
 SUBLOC_LEVELS <- c(
-  "Nucleus", "Cytoplasm", "Cell membrane", "Mitochondria",
+  "Nucleus", "Cytoplasm", "Ribosome", "Cell membrane", "Mitochondria",
   "Endoplasmic reticulum", "Golgi", "Lysosome", "Endosome",
   "Peroxisome", "Cytoskeleton", "Synapse",
-  "Extracellular membrane", "Secreted",
+  "Extracellular",
   "Other/Unknown"
 )
 
 #' Map raw subcellular location strings to canonical buckets (vectorized)
 #' @param x Character vector of raw subcellular location strings
+#' @param gene_symbol Optional character vector of gene symbols, aligned with x.
+#'   Used for bins where UniProt SL free-text is unreliable (notably Ribosome).
 #' @return Character vector of canonical bucket names
-.map_subloc_bucket <- function(x) {
+.map_subloc_bucket <- function(x, gene_symbol = NULL) {
   x <- as.character(x)
   s <- tolower(x)
   s[is.na(s)] <- ""
+  gs <- toupper(as.character(gene_symbol %||% rep("", length(s))))
+  gs[is.na(gs)] <- ""
   out <- rep(NA_character_, length(s))
 
-  pick <- function(pattern, label) {
-    mask <- is.na(out) & grepl(pattern, s)
+  pick <- function(mask, label) {
+    mask <- is.na(out) & mask
     out[mask] <<- label
   }
 
+  # Ribosome FIRST: UniProt SL for RPL*/RPS* is usually "Cytoplasm, cytosol", so
+  # gene-symbol pattern is the reliable signal. Covers cytosolic and mitoribosomal.
+  ribo_mask <- grepl("^(RPL|RPS|RPLP|MRPL|MRPS)\\d", gs) |
+               gs %in% c("RACK1", "FAU") |
+               grepl("ribosom", s)
+  pick(ribo_mask, "Ribosome")
+
   # Order matters: more specific patterns first
-  pick("mitochond", "Mitochondria")
-  pick("nucleus|nucleol|nucleoplasm|chromatin|chromosome|centromere|kinetochore|pml body|cajal body|nuclear speck|nuclear body|nucleus membrane|nucleus envelope|nucleus lamina|nucleus matrix", "Nucleus")
-  pick("synap|presynap|postsynap|synaptosome|postsynaptic density", "Synapse")
-  pick("lysosom", "Lysosome")
-  pick("endosom|phagosome|multivesicular body", "Endosome")
-  pick("cytoskeleton|microtubule|actin cytoskeleton|intermediate filament|sarcomere|myofibril|stress fiber|spindle|centrosome|centriole|axoneme|cilium|flagellum|microvillus|stereocilium", "Cytoskeleton")
-  pick("endoplasmic reticulum|sarcoplasmic reticulum|microsome", "Endoplasmic reticulum")
-  pick("golgi", "Golgi")
-  pick("exosome|extracellular vesicle|blood microparticle|virion", "Extracellular membrane")
-  pick("secreted|extracellular space|extracellular region|extracellular matrix|basement membrane|collagen-containing extracellular matrix", "Secreted")
-  pick("plasma membrane|cell membrane|sarcolemma|cell surface|apical plasma membrane|basolateral plasma membrane|lateral plasma membrane|membrane raft|postsynaptic density membrane|presynaptic membrane|synaptic membrane|apical membrane|basal membrane|basolateral cell membrane|lateral cell membrane|apical cell membrane|basal cell membrane", "Cell membrane")
-  pick("cytoplasm|cytosol|p-body|p body|stress granule|ribonucleoprotein granule|perinuclear region|cell cortex|perikaryon", "Cytoplasm")
-  pick("peroxisom", "Peroxisome")
+  pick(grepl("mitochond", s), "Mitochondria")
+  pick(grepl("nucleus|nucleol|nucleoplasm|chromatin|chromosome|centromere|kinetochore|pml body|cajal body|nuclear speck|nuclear body|nucleus membrane|nucleus envelope|nucleus lamina|nucleus matrix", s), "Nucleus")
+  pick(grepl("synap|presynap|postsynap|synaptosome|postsynaptic density", s), "Synapse")
+  pick(grepl("lysosom", s), "Lysosome")
+  pick(grepl("endosom|phagosome|multivesicular body", s), "Endosome")
+  pick(grepl("cytoskeleton|microtubule|actin cytoskeleton|intermediate filament|sarcomere|myofibril|stress fiber|spindle|centrosome|centriole|axoneme|cilium|flagellum|microvillus|stereocilium", s), "Cytoskeleton")
+  pick(grepl("endoplasmic reticulum|sarcoplasmic reticulum|microsome", s), "Endoplasmic reticulum")
+  pick(grepl("golgi", s), "Golgi")
+  pick(grepl("exosome|extracellular vesicle|blood microparticle|virion|secreted|extracellular space|extracellular region|extracellular matrix|basement membrane|collagen-containing extracellular matrix", s), "Extracellular")
+  pick(grepl("plasma membrane|cell membrane|sarcolemma|cell surface|apical plasma membrane|basolateral plasma membrane|lateral plasma membrane|membrane raft|postsynaptic density membrane|presynaptic membrane|synaptic membrane|apical membrane|basal membrane|basolateral cell membrane|lateral cell membrane|apical cell membrane|basal cell membrane", s), "Cell membrane")
+  pick(grepl("cytoplasm|cytosol|p-body|p body|stress granule|ribonucleoprotein granule|perinuclear region|cell cortex|perikaryon", s), "Cytoplasm")
+  pick(grepl("peroxisom", s), "Peroxisome")
 
   out
 }
@@ -288,8 +298,16 @@ stats_subloc_run <- function(payload, params = NULL, context = NULL) {
   match_idx <- match(protein_ids_norm, lookup_key)
   subloc_raw <- ifelse(is.na(match_idx), NA_character_, lookup_loc[match_idx])
 
+  # Gene-symbol vector aligned with protein_ids, used for Ribosome detection.
+  gene_symbols_col <- if ("gene_symbol" %in% names(gene_meta)) {
+    as.character(gene_meta$gene_symbol)
+  } else {
+    rep(NA_character_, length(lookup_key))
+  }
+  mapped_gene_symbol <- ifelse(is.na(match_idx), NA_character_, gene_symbols_col[match_idx])
+
   # Map raw locations to canonical buckets (vectorized)
-  buckets <- .map_subloc_bucket(subloc_raw)
+  buckets <- .map_subloc_bucket(subloc_raw, gene_symbol = mapped_gene_symbol)
   buckets[is.na(buckets) | !nzchar(buckets)] <- "Other/Unknown"
 
   n_mapped <- sum(!is.na(match_idx))

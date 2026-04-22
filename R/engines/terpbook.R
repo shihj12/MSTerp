@@ -2433,12 +2433,14 @@ tb_render_subloc <- function(results, style, meta) {
   # Store all bin levels before filtering
   all_bins <- unique(as.character(df$bin))
 
-  # Filter hidden bins based on visibility settings (reversible hide/show)
-  hidden_bins <- character(0)
+  # Filter hidden bins based on visibility settings (reversible hide/show).
+  # Default: hide "Other/Unknown" on first render. User toggling either direction
+  # sets meta$visibility$hidden_bins explicitly, overriding this default.
+  hidden_bins <- c("Other/Unknown")
   if (!is.null(meta) && !is.null(meta$visibility) && !is.null(meta$visibility$hidden_bins)) {
     hidden_bins <- meta$visibility$hidden_bins
-    df <- df[!df$bin %in% hidden_bins, , drop = FALSE]
   }
+  df <- df[!df$bin %in% hidden_bins, , drop = FALSE]
 
   df$bin   <- factor(df$bin)
   df$group <- factor(df$group)
