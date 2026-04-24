@@ -63,6 +63,10 @@ stats_replicate_clustering_run <- function(payload, params = NULL, context = NUL
   linkage_method <- params$linkage_method %||% "complete"
   log_transform <- params$log_transform %||% "log10"
 
+  # Mask any non-finite values carried over from earlier steps so complete.cases
+  # can remove them (it catches NA/NaN but not Inf).
+  mat[!is.finite(mat)] <- NA
+
   # Apply log transform
   if (log_transform == "log10") {
     add_log("INFO", "Applying log10 transformation...")
@@ -100,7 +104,35 @@ stats_replicate_clustering_run <- function(payload, params = NULL, context = NUL
   dist_mat <- if (distance_method == "euclidean") {
     dist(t(mat_complete))
   } else {
-    cor_mat <- cor(mat_complete, method = distance_method, use = "pairwise.complete.obs")
+    cor_mat <- suppressWarnings(
+      cor(mat_complete, method = distance_method, use = "pairwise.complete.obs")
+    )
+    # cor() returns NaN for zero-variance columns (e.g. a sample with a single
+    # unique value after complete.cases) — surface the offending column instead
+    # of letting hclust abort with "NA/NaN/Inf in foreign function call (arg 10)".
+    if (any(!is.finite(cor_mat))) {
+      col_vars <- apply(mat_complete, 2, stats::var, na.rm = TRUE)
+      bad <- colnames(mat_complete)[!is.finite(col_vars) | col_vars == 0]
+      if (!length(bad)) {
+        # No obvious zero-variance source; report every column that has any NaN
+        # in its correlations.
+        bad <- colnames(cor_mat)[apply(cor_mat, 2, function(c) any(!is.finite(c)))]
+      }
+      msg <- sprintf(
+        "Correlation matrix has NaN/Inf. Offending sample(s) with zero variance after complete.cases: %s. This often means the source column was misread as logical (first ~1000 rows were blank) or filtered down to a single unique value.",
+        paste(bad, collapse = ", ")
+      )
+      add_log("ERROR", msg)
+      log_df <- do.call(rbind, lapply(log_entries, function(e) {
+        data.frame(time = e$time, level = e$level, message = e$message,
+                   stringsAsFactors = FALSE)
+      }))
+      return(list(
+        engine_id = "replicate_clustering",
+        params = params,
+        data = list(hc = NULL, log = log_df)
+      ))
+    }
     # Clamp to [-1, 1] to avoid floating-point issues
     cor_mat[cor_mat > 1] <- 1
     cor_mat[cor_mat < -1] <- -1

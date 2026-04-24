@@ -207,7 +207,7 @@ msterp_merge_preview <- function(paths, file_ids = NULL) {
     if (length(rename_map) > 0) {
       d <- datasets[[i]]$data
       n <- names(d)
-      n <- ifelse(n %in% names(rename_map), unlist(rename_map[n], use.names = FALSE), n)
+      n <- vapply(n, function(x) if (x %in% names(rename_map)) rename_map[[x]] else x, character(1), USE.NAMES = FALSE)
       names(datasets[[i]]$data) <- n
       # Reflect the rename in meta so primary/secondary-col lookups use canonical names
       for (k in id_role_keys) {
@@ -466,7 +466,24 @@ msterp_merge_execute <- function(preview, mapping_df, out_path, progress = NULL)
     
     meas_i <- df[, c(primary_col, src_cols), drop = FALSE]
     meas_i <- meas_i[!is.na(meas_i[[primary_col]]) & nzchar(as.character(meas_i[[primary_col]])), , drop = FALSE]
-    
+
+    # Measurement columns must be numeric. readxl can infer a column as logical
+    # when leading rows are blank, and any non-numeric type propagates through
+    # the pipeline and is written by openxlsx as "TRUE"/"FALSE" text. Force
+    # numeric here and warn so the upstream cause is visible.
+    non_num <- src_cols[!vapply(meas_i[src_cols], is.numeric, logical(1))]
+    if (length(non_num) > 0) {
+      classes <- vapply(meas_i[non_num], function(x) class(x)[1], character(1))
+      warning(sprintf(
+        "File '%s' has non-numeric measurement columns (coercing to numeric): %s",
+        fid, paste0(non_num, " [", classes, "]", collapse = ", ")
+      ))
+      for (.c in non_num) {
+        v <- meas_i[[.c]]
+        meas_i[[.c]] <- suppressWarnings(as.numeric(if (is.logical(v)) v else as.character(v)))
+      }
+    }
+
     if (anyDuplicated(meas_i[[primary_col]]) > 0) {
       warning(sprintf(
         "File '%s' has duplicated primary IDs in '%s'. Collapsing duplicates by first non-NA per data column.",

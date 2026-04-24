@@ -88,7 +88,7 @@ tools_id_reconcile_server <- function(input, output, session, app_state, rv) {
         rv$status_level <- "error"
         return()
       }
-      df <- as.data.frame(readxl::read_excel(path))
+      df <- as.data.frame(readxl::read_excel(path, guess_max = Inf))
       if (ncol(df) == 0) {
         rv$status_msg <- "Uploaded file has no columns."
         rv$status_level <- "error"

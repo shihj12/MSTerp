@@ -25,7 +25,7 @@ msterp_read_raw_file <- function(path, sheet = NULL) {
     sheets <- readxl::excel_sheets(path)
     if (length(sheets) == 0) stop("No sheets found in Excel file: ", path)
     if (is.null(sheet)) sheet <- sheets[[1]]
-    df <- readxl::read_excel(path, sheet = sheet)
+    df <- readxl::read_excel(path, sheet = sheet, guess_max = Inf)
     df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
     return(list(data = df, source = list(path = path, ext = ext, sheet = sheet, sheets = sheets)))
   }
@@ -152,7 +152,7 @@ msterp_read_formatted_xlsx <- function(path) {
   is_multi_dataset <- has_multi_data && !has_single_data
 
   # Read design sheet
-  design_df <- readxl::read_excel(path, sheet = sheets[match("design", sheets_l)])
+  design_df <- readxl::read_excel(path, sheet = sheets[match("design", sheets_l)], guess_max = Inf)
   design_df <- as.data.frame(design_df, stringsAsFactors = FALSE, check.names = FALSE)
 
   # Coerce common cols if present
@@ -169,10 +169,10 @@ msterp_read_formatted_xlsx <- function(path) {
 
   if (is_multi_dataset) {
     # Multi-dataset format: read data_a and data_b separately
-    data_a <- readxl::read_excel(path, sheet = sheets[match("data_a", sheets_l)])
+    data_a <- readxl::read_excel(path, sheet = sheets[match("data_a", sheets_l)], guess_max = Inf)
     data_a <- as.data.frame(data_a, stringsAsFactors = FALSE, check.names = FALSE)
 
-    data_b <- readxl::read_excel(path, sheet = sheets[match("data_b", sheets_l)])
+    data_b <- readxl::read_excel(path, sheet = sheets[match("data_b", sheets_l)], guess_max = Inf)
     data_b <- as.data.frame(data_b, stringsAsFactors = FALSE, check.names = FALSE)
 
     list(
@@ -185,7 +185,7 @@ msterp_read_formatted_xlsx <- function(path) {
     )
   } else {
     # Single-dataset format
-    data_df <- readxl::read_excel(path, sheet = sheets[match("data", sheets_l)])
+    data_df <- readxl::read_excel(path, sheet = sheets[match("data", sheets_l)], guess_max = Inf)
     data_df <- as.data.frame(data_df, stringsAsFactors = FALSE, check.names = FALSE)
 
     list(path = path, data = data_df, design = design_df, is_multi_dataset = FALSE)

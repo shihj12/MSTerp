@@ -734,7 +734,7 @@ page_format_server <- function(input, output, session, app_state) {
         stop("Package 'readxl' is required to read .xlsx files.")
       }
       sheet <- input$fmt_sheet %||% (up$sheets[[1]] %||% 1)
-      df <- readxl::read_excel(up$path, sheet = sheet)
+      df <- readxl::read_excel(up$path, sheet = sheet, guess_max = Inf)
       df <- as.data.frame(df, check.names = FALSE, stringsAsFactors = FALSE)
     } else {
       res <- msterp_read_raw_file(up$path)  # expected to return list(data=...)
@@ -1952,7 +1952,6 @@ page_format_server <- function(input, output, session, app_state) {
         class = "fmt-panel fmt-panel-right",
         tags$h4("Status"),
         uiOutput("fmt_merge_summary_ui"),
-        verbatimTextOutput("merge_status"),
         hr(),
         tags$h4("Preview"),
         uiOutput("merge_bins_preview"),
@@ -1983,7 +1982,8 @@ page_format_server <- function(input, output, session, app_state) {
             downloadButton("fmt_sample_merge", "Sample formatted .xlsx", class = "btn btn-default btn-sm")
           ),
           uiOutput("merge_file_inputs"),
-          actionButton("merge_load", "Load & preview", class = "btn-primary", width = "100%")
+          actionButton("merge_load", "Load & preview", class = "btn-primary", width = "100%"),
+          verbatimTextOutput("merge_status")
         ),
         if (has_preview) fmt_step_ui(
           "2",
@@ -2087,10 +2087,21 @@ page_format_server <- function(input, output, session, app_state) {
     }
 
     busy_step(TRUE, "Reading workbooks…", 10)
-    prev <- tryCatch(msterp_merge_preview(mp$paths, file_ids = mp$labels), error = function(e) e)
+    warn_msgs <- character(0)
+    prev <- tryCatch(
+      withCallingHandlers(
+        msterp_merge_preview(mp$paths, file_ids = mp$labels),
+        warning = function(w) {
+          warn_msgs <<- c(warn_msgs, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }
+      ),
+      error = function(e) e
+    )
     busy_step(FALSE)
 
     if (inherits(prev, "error")) {
+      message("msterp_merge_preview failed: ", conditionMessage(prev))
       merge_preview(NULL)
       merge_map(NULL)
       output$merge_status <- renderText(paste("Error:", prev$message))
@@ -2100,10 +2111,16 @@ page_format_server <- function(input, output, session, app_state) {
     merge_preview(prev)
     merge_map(prev$mapping)
 
-    output$merge_status <- renderText(sprintf(
+    status_txt <- sprintf(
       "Loaded %d files. Level: %s. Primary ID: %s.",
       length(prev$file_ids), prev$level, prev$primary_col
-    ))
+    )
+    if (length(warn_msgs) > 0) {
+      status_txt <- paste0(
+        status_txt, "\n\nWarnings:\n- ", paste(warn_msgs, collapse = "\n- ")
+      )
+    }
+    output$merge_status <- renderText(status_txt)
   }, ignoreInit = TRUE)
 
   observeEvent(input$merge_reset, {
@@ -2376,27 +2393,40 @@ page_format_server <- function(input, output, session, app_state) {
                                               "\nHas:", paste(names(m), collapse = ", ")))
       return()
     }
+    warn_msgs <- character(0)
     res <- tryCatch({
       busy_step(TRUE, "Merging files…", 10)
-      msterp_merge_execute(
-        prev,
-        m[, merge_need, drop = FALSE],
-        tmp,
-        progress = function(msg, pct) busy_step(TRUE, msg, pct)
+      withCallingHandlers(
+        msterp_merge_execute(
+          prev,
+          m[, merge_need, drop = FALSE],
+          tmp,
+          progress = function(msg, pct) busy_step(TRUE, msg, pct)
+        ),
+        warning = function(w) {
+          warn_msgs <<- c(warn_msgs, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }
       )
       tmp
     }, error = function(e) e)
-    
+
     busy_step(FALSE)
-    
+
     if (inherits(res, "error")) {
       merge_built_path(NULL)
       output$merge_status <- renderText(paste("Merge error:", res$message))
       return()
     }
-    
+
     merge_built_path(res)
-    output$merge_status <- renderText("Merged workbook built. You can download it now.")
+    status_txt <- "Merged workbook built. You can download it now."
+    if (length(warn_msgs) > 0) {
+      status_txt <- paste0(
+        status_txt, "\n\nWarnings:\n- ", paste(warn_msgs, collapse = "\n- ")
+      )
+    }
+    output$merge_status <- renderText(status_txt)
   }, ignoreInit = TRUE)
   
   output$merge_download <- downloadHandler(

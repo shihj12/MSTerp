@@ -3004,11 +3004,10 @@ tb_render_idquant <- function(results, style, meta) {
   }
 
   # Build plots and tables lists
-  # FIX: Table names must match plot names for res_plot_pick sync to work
-  # view_mode controls which plot(s) are emitted so the picker is just the view selector:
-  #   - combined: both group + replicate
-  #   - quant_only: only the per-replicate quantified plot
-  #   - repro_quant_only: only the group-level reproducibly-quantified plot
+  # view_mode emits exactly one plot so the view selector is the only graph picker:
+  #   - combined: group-level plot with Quantified + Reproducibly Quantified dodged
+  #   - quant_only: per-replicate quantified plot
+  #   - repro_quant_only: group-level plot filtered to Reproducibly Quantified only
   plots <- list()
   tables <- list()
   if (view_mode %in% c("combined", "repro_quant_only")) {
@@ -3016,9 +3015,9 @@ tb_render_idquant <- function(results, style, meta) {
     tables$idquant_group <- df
   }
 
-  # Replicate-level bar plot - shown in combined and quant_only modes
+  # Replicate-level bar plot - shown in quant_only mode only
   rep_df <- results$data$replicate_counts
-  if (view_mode %in% c("combined", "quant_only") &&
+  if (identical(view_mode, "quant_only") &&
       !is.null(rep_df) && is.data.frame(rep_df) && nrow(rep_df) > 0) {
     if (!"replicate" %in% names(rep_df)) {
       rep_df$replicate <- ave(
@@ -3085,17 +3084,6 @@ tb_render_idquant <- function(results, style, meta) {
     plots$idquant_replicate <- p_rep
     # FIX: Table name must match plot name for res_plot_pick sync to work
     tables$idquant_replicate <- rep_df[, c("group", "replicate", "n"), drop = FALSE]
-  }
-
-  # In combined mode, stack the two plots into a single output so the plot-picker
-  # disappears and view_mode is the only graph selector the user sees.
-  if (identical(view_mode, "combined") &&
-      !is.null(plots$idquant_group) && !is.null(plots$idquant_replicate) &&
-      requireNamespace("patchwork", quietly = TRUE)) {
-    stacked <- patchwork::wrap_plots(plots$idquant_group, plots$idquant_replicate, ncol = 1)
-    plots <- list(idquant_group = stacked)
-    # Keep both tables accessible on the single plot key so table view isn't lost.
-    tables <- list(idquant_group = df)
   }
 
   list(plots = plots, tables = tables)

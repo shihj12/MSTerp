@@ -743,7 +743,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           default = "combined",
           choices = c("combined", "quant_only", "repro_quant_only"),
           choice_labels = c("Combined", "Quant only", "Repro quant only"),
-          help = "Combined shows quantified + reproducibly quantified bars (plus per-replicate plot). Quant only shows the quantified per-replicate plot. Repro quant only shows reproducibly quantified bars at the group level."
+          help = "Combined shows Quantified and Reproducibly Quantified bars side-by-side at the group level. Quant only shows the per-replicate quantified plot. Repro quant only shows the reproducibly-quantified bars only at the group level."
         )
       ),
       outputs = list(figures = c("idquant_group", "idquant_replicate"), tables = c("idquant_group", "idquant_replicate"), interactive = TRUE),
