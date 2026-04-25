@@ -3216,6 +3216,11 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field("point_size", "num", "Point size", default = 3, min = 0.5, max = 10, advanced = TRUE),
           # FIX: Add label font size control for volcano feature labels
           msterp_schema_field("label_font_size", "int", "Label font size", default = 12, min = 6, max = 30, advanced = TRUE),
+          msterp_schema_field(
+            "label_top_n", "int", "Auto-label top N significant",
+            default = 0, min = 0, max = 200, advanced = TRUE,
+            help = "Automatically label the N most significant points (by p-value, ties broken by |log2FC|). Combined with the manual label list. Set to 0 to disable."
+          ),
 
           msterp_schema_field("col_sig_up", "string", "Color: significant up (hex)", default = "#FF4242", advanced = TRUE),
           msterp_schema_field("col_sig_down", "string", "Color: significant down (hex)", default = "#4245FF", advanced = TRUE),
@@ -3236,11 +3241,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         )
       ),
       viewer_schema = list(
-        msterp_schema_field(
-          "view_mode", "choice", "Viewer mode",
-          default = "export_preview", choices = c("export_preview", "interactive"),
-          choice_labels = c("Export preview", "Interactive")
-        ),
         # Flip FC direction: negates log2fc values per-plot (swap numerator/denominator interpretation)
         msterp_schema_field(
           "flip_fc", "bool", "Flip fold change direction",
@@ -3263,7 +3263,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         figures = c("volcano_plot"),
         tables = c("volcano_summary"),
         interactive = TRUE,
-        plotly_allowed = TRUE,
+        plotly_allowed = FALSE,
         default_plot_mode = "ggplot",
         click_target = "target"
       ),
@@ -3459,11 +3459,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       ),
       viewer_schema = list(
         msterp_schema_field(
-          "view_mode", "choice", "Viewer mode",
-          default = "export_preview", choices = c("export_preview", "interactive"),
-          choice_labels = c("Export preview", "Interactive")
-        ),
-        msterp_schema_field(
           "selected_group", "choice", "Group",
           default = "", choices = c(""),
           help = "Select which group to display."
@@ -3481,7 +3476,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         figures = c("rankplot"),
         tables = character(0),
         interactive = TRUE,
-        plotly_allowed = TRUE,
+        plotly_allowed = FALSE,
         default_plot_mode = "ggplot",
         click_target = "target"
       ),

@@ -855,6 +855,7 @@ tb_render_spearman <- tb_render_scatter_correlation
 .tb_volcano_single_plot <- function(df, style, meta, comparison_name = "", apply_fdr = TRUE,
                                     fc_threshold = NULL, p_threshold = NULL) {
   tb_require_pkg("ggplot2")
+  tb_require_pkg("ggiraph")
 
   # FIX: Prefer gene_symbol; fall back to gene_id, then legacy gene fields.
 
@@ -938,17 +939,21 @@ tb_render_spearman <- tb_render_scatter_correlation
   if (length(ylim) != 2 || any(!is.finite(ylim))) ylim <- c(0, max(df$neglog10p, na.rm = TRUE))
   ylim <- sort(ylim)
 
-  # FIX: Add hover text for plotly with correct FC/p-value data (use displayed p-value)
-  df$hover_text <- sprintf(
+  # Tooltip text for the girafe viewer (silently ignored in static export)
+  df$tooltip_text <- sprintf(
     "%s\nlog2FC: %.3f\n%s: %.2e",
     df$gene,
     df$log2fc,
     hover_p_label,
     df$pval_display
   )
+  df$data_id_val <- df$gene
 
-  p <- ggplot2::ggplot(df, ggplot2::aes(x = log2fc, y = neglog10p, text = hover_text)) +
-    ggplot2::geom_point(ggplot2::aes(color = sig), size = tb_num(style$point_size, 3), alpha = 0.9) +
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = log2fc, y = neglog10p)) +
+    ggiraph::geom_point_interactive(
+      ggplot2::aes(color = sig, tooltip = .data$tooltip_text, data_id = .data$data_id_val),
+      size = tb_num(style$point_size, 3), alpha = 0.9
+    ) +
     ggplot2::scale_color_manual(values = c(up = col_up, down = col_dn, nonsig = col_ns))
 
   # ---- Highlight Groups Rendering ----
@@ -997,11 +1002,22 @@ tb_render_spearman <- tb_render_scatter_correlation
       df_hl$highlight_group <- factor(group_name, levels = group_name)
       groups_with_data <- c(groups_with_data, group_name)
 
+      df_hl$tooltip_text <- sprintf(
+        "%s\nGroup: %s\nlog2FC: %.3f\n%s: %.2e",
+        df_hl$gene,
+        group_name,
+        df_hl$log2fc,
+        hover_p_label,
+        df_hl$pval_display
+      )
+      df_hl$data_id_val <- df_hl$gene
+
       if (has_outline) {
         # Shape 21 = filled circle with border
-        p <- p + ggplot2::geom_point(
+        p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
-          ggplot2::aes(x = log2fc, y = neglog10p, fill = highlight_group),
+          ggplot2::aes(x = log2fc, y = neglog10p, fill = highlight_group,
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = tb_num(style$point_size, 3) + 0.5,
           color = "black",
@@ -1010,9 +1026,10 @@ tb_render_spearman <- tb_render_scatter_correlation
         )
       } else {
         # No outline - use fill color as border too
-        p <- p + ggplot2::geom_point(
+        p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
-          ggplot2::aes(x = log2fc, y = neglog10p, fill = highlight_group),
+          ggplot2::aes(x = log2fc, y = neglog10p, fill = highlight_group,
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = tb_num(style$point_size, 3) + 0.5,
           color = fill_color,
@@ -1069,10 +1086,6 @@ tb_render_spearman <- tb_render_scatter_correlation
   # FIX: Use dynamic y-axis label based on apply_fdr setting
   axis_text_size <- tb_num(style$axis_text_size, 20)
   axis_style <- style$axis_style %||% "clean"
-  if (identical(tolower(style$view_mode %||% ""), "interactive")) {
-    axis_text_size <- 12
-    axis_style <- "clean"
-  }
 
   p <- p +
     ggplot2::scale_y_continuous(labels = format_k_suffix, expand = ggplot2::expansion(mult = c(0, 0.05))) +
@@ -1081,78 +1094,51 @@ tb_render_spearman <- tb_render_scatter_correlation
     tb_theme_base(axis_text_size, axis_style = axis_style) +
     ggplot2::theme(plot.margin = ggplot2::margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
 
-  # Get per-plot gene labels from label_genes_map (JSON map: plot_name -> labels)
+  # Label set = manual list (label_genes_map) ∪ top-N most significant
+  plot_key <- if (nzchar(comparison_name)) comparison_name else "volcano_plot"
   label_map_json <- style$label_genes_map %||% "{}"
   label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
-  # Use comparison_name to look up labels; fall back to generic "volcano_plot" for single-plot case
-  plot_key <- if (nzchar(comparison_name)) comparison_name else "volcano_plot"
-  labs <- label_map[[plot_key]] %||% ""
-  labs <- trimws(unlist(strsplit(as.character(labs), "\n", fixed = TRUE)))
-  labs <- labs[nzchar(labs)]
-  labs <- intersect(labs, df$gene)
+  manual_labs <- label_map[[plot_key]] %||% ""
+  manual_labs <- trimws(unlist(strsplit(as.character(manual_labs), "\n", fixed = TRUE)))
+  manual_labs <- manual_labs[nzchar(manual_labs)]
+  manual_labs <- intersect(manual_labs, df$gene)
 
-  # Saved plotly label positions (reflected in ggplot)
-  saved <- meta$plotly$labels_by_plot[[plot_key]] %||%
-    meta$plotly$labels_by_plot$default %||%
-    meta$plotly$labels %||% list()
+  top_n <- suppressWarnings(as.integer(style$label_top_n %||% 0))
+  if (!is.finite(top_n) || top_n < 0) top_n <- 0
+  topn_labs <- character()
+  if (top_n > 0) {
+    df_sig <- df[df$sig != "nonsig", , drop = FALSE]
+    if (nrow(df_sig) > 0) {
+      ord <- order(df_sig$pval_display, -abs(df_sig$log2fc))
+      df_sig <- df_sig[ord, , drop = FALSE]
+      topn_labs <- as.character(df_sig$gene[seq_len(min(top_n, nrow(df_sig)))])
+    }
+  }
+
+  labs <- unique(c(manual_labs, topn_labs))
 
   if (length(labs) > 0) {
     df_lab <- df[df$gene %in% labs, , drop = FALSE]
-
-    if (nrow(df_lab) > 0) {
-      if (identical(style$label_mode %||% "color_sig", "hide_nonsig")) {
-        df_lab <- df_lab[df_lab$sig != "nonsig", , drop = FALSE]
-      }
+    if (nrow(df_lab) > 0 && identical(style$label_mode %||% "color_sig", "hide_nonsig")) {
+      df_lab <- df_lab[df_lab$sig != "nonsig", , drop = FALSE]
     }
-
     if (nrow(df_lab) > 0) {
-      df_lab$lx <- NA_real_
-      df_lab$ly <- NA_real_
-
-      for (i in seq_len(nrow(df_lab))) {
-        id <- as.character(df_lab$gene[[i]])
-        s <- saved[[id]] %||% list()
-
-        pos <- .tb_label_xy_from_state(s, x_range = xlim, y_range = ylim)
-
-        lx <- pos$x
-        ly <- pos$y
-
-        if (!is.finite(lx)) lx <- df_lab$log2fc[[i]]
-        if (!is.finite(ly)) ly <- df_lab$neglog10p[[i]]
-
-        if (is.finite(lx) && is.finite(ly) && is.null(s$x_range) && is.null(s$y_range)) {
-          # If the label has no saved position (or it's invalid), give a small default offset.
-          # (Normalized saved positions will already be placed by .tb_label_xy_from_state.)
-          if (is.null(s$x) || is.null(s$y) || !is.finite(suppressWarnings(as.numeric(s$x))) || !is.finite(suppressWarnings(as.numeric(s$y)))) {
-            lx <- df_lab$log2fc[[i]] + ifelse(df_lab$log2fc[[i]] < 0, -0.5, 0.5)
-            ly <- df_lab$neglog10p[[i]] + 0.5
-          }
-        }
-
-        # Clamp to visible plot window so labels can't "disappear" via clipping
-        lx <- max(xlim[[1]], min(xlim[[2]], lx))
-        ly <- max(ylim[[1]], min(ylim[[2]], ly))
-
-        df_lab$lx[[i]] <- lx
-        df_lab$ly[[i]] <- ly
-      }
-
-      # FIX: Use label_font_size style parameter for gene label size
+      tb_require_pkg("ggrepel")
       label_font_size <- suppressWarnings(as.numeric(style$label_font_size %||% 12))
       if (!is.finite(label_font_size) || label_font_size <= 0) label_font_size <- 12
       label_size <- label_font_size / 3  # Convert points to ggplot mm scale
-      p <- p +
-        ggplot2::geom_segment(
-          data = df_lab,
-          ggplot2::aes(x = log2fc, y = neglog10p, xend = lx, yend = ly),
-          linewidth = 0.3, color = "black"
-        ) +
-        ggplot2::geom_text(
-          data = df_lab,
-          ggplot2::aes(x = lx, y = ly, label = gene),
-          size = label_size, color = "black", hjust = 0.5, vjust = 0
-        )
+      p <- p + ggrepel::geom_text_repel(
+        data = df_lab,
+        ggplot2::aes(x = log2fc, y = neglog10p, label = gene),
+        size = label_size,
+        color = "black",
+        max.overlaps = Inf,
+        box.padding = 0.4,
+        segment.size = 0.3,
+        segment.color = "grey40",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      )
     }
   }
 
@@ -1164,322 +1150,9 @@ tb_render_spearman <- tb_render_scatter_correlation
 }
 
 # ============================================================
-# Plotly-based interactive volcano plot for label editing
-# - Click on point: triggers uniprot search (handled by Shiny)
-# - Drag annotations: repositions labels (captured via relayout events)
-# - Exports to ggplot for final output
+# (Removed) Plotly-based interactive volcano plot. Single-mode rendering via
+# ggiraph + ggrepel now drives both static export and the interactive viewer.
 # ============================================================
-tb_volcano_plotly <- function(df, style, meta, xlim, ylim, labs, saved, comparison_name = "", apply_fdr = TRUE,
-                              fc_threshold = NULL, p_threshold = NULL) {
-  tb_require_pkg("plotly")
-
-  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
-    return(NULL)
-  }
-
-  # Normalize gene column
-  if (is.null(df$gene)) {
-    df$gene <- df$gene_symbol %||% df$gene_id %||% df$id %||% df$Gene %||% ""
-  }
-  df$gene <- as.character(df$gene)
-
-  # Flip FC direction if enabled (per-plot, viewer-only)
-  # This negates log2fc to swap up/down interpretation
-  flip_fc <- isTRUE(style$flip_fc %||% FALSE)
-  if (flip_fc && !is.null(df$log2fc)) {
-    df$log2fc <- -df$log2fc
-    # Also flip the xlim to keep same visual range
-    xlim <- -rev(xlim)
-  }
-
-  # Thresholds
-  fc_thr <- suppressWarnings(as.numeric(fc_threshold %||% c(-1, 1)))
-  if (length(fc_thr) != 2 || any(!is.finite(fc_thr))) fc_thr <- c(-1, 1)
-
-  p_thr <- suppressWarnings(as.numeric(p_threshold %||% 0.05))
-  if (!is.finite(p_thr) || p_thr <= 0) p_thr <- 0.05
-
-  # Colors
-  col_up <- style$col_sig_up %||% "#FF4242"
-  col_dn <- style$col_sig_down %||% "#4242FF"
-  col_ns <- style$col_nonsig %||% "#B0B0B0"
-
-  # P-value column based on apply_fdr
-  if (isTRUE(apply_fdr) && !is.null(df$padj)) {
-    pvec <- df$padj
-    hover_p_label <- "p-adj"
-  } else {
-    pvec <- df$pval %||% df$p %||% df$padj
-    hover_p_label <- "p-value"
-  }
-  pvec <- suppressWarnings(as.numeric(pvec))
-  pvec <- pmax(pvec, 1e-300)
-  pvec[!is.finite(pvec)] <- 1
-  df$pval_display <- pvec
-  df$neglog10p <- -log10(df$pval_display)
-
-  # Significance coloring
-  df$sig <- "nonsig"
-  df$sig[df$log2fc >= max(fc_thr) & df$pval_display <= p_thr] <- "up"
-  df$sig[df$log2fc <= min(fc_thr) & df$pval_display <= p_thr] <- "down"
-
-  # Apply hide_ids filter
-  hide_ids <- unique(as.character(meta$visibility$hide_ids %||% character()))
-  hide_ids <- hide_ids[nzchar(hide_ids)]
-  if (length(hide_ids) > 0) df <- df[!(df$gene %in% hide_ids), , drop = FALSE]
-
-  # Map significance to colors
-  color_map <- c(up = col_up, down = col_dn, nonsig = col_ns)
-  df$color <- color_map[df$sig]
-
-  # Build annotations and shapes for labels
-  annotations <- list()
-  shapes <- list()
-  label_size <- suppressWarnings(as.numeric(style$label_font_size %||% 12))
-  if (!is.finite(label_size) || label_size <= 0) label_size <- 12
-
-  if (length(labs) > 0) {
-    df_lab <- df[df$gene %in% labs, , drop = FALSE]
-
-    if (nrow(df_lab) > 0) {
-      if (identical(style$label_mode %||% "color_sig", "hide_nonsig")) {
-        df_lab <- df_lab[df_lab$sig != "nonsig", , drop = FALSE]
-      }
-    }
-
-    if (nrow(df_lab) > 0) {
-      for (i in seq_len(nrow(df_lab))) {
-        id <- as.character(df_lab$gene[[i]])
-        s <- saved[[id]] %||% list()
-
-        # Get saved position or compute default
-        lx <- suppressWarnings(as.numeric(s$x %||% NA_real_))
-        ly <- suppressWarnings(as.numeric(s$y %||% NA_real_))
-
-        # Apply range-normalized positions if available
-        if (!is.null(s$x_range) && !is.null(s$y_range)) {
-          pos <- .tb_label_xy_from_state(s, x_range = xlim, y_range = ylim)
-          lx <- pos$x
-          ly <- pos$y
-        }
-
-        if (!is.finite(lx)) lx <- df_lab$log2fc[[i]]
-        if (!is.finite(ly)) ly <- df_lab$neglog10p[[i]]
-
-        # Default offset if no saved position
-        if (is.null(s$x) || is.null(s$y) || !is.finite(suppressWarnings(as.numeric(s$x))) ||
-            !is.finite(suppressWarnings(as.numeric(s$y)))) {
-          if (is.null(s$x_range) && is.null(s$y_range)) {
-            x_offset <- ifelse(df_lab$log2fc[[i]] < 0, -0.5, 0.5) * diff(xlim) / 7
-            y_offset <- 0.5 * diff(ylim) / 10
-            lx <- df_lab$log2fc[[i]] + x_offset
-            ly <- df_lab$neglog10p[[i]] + y_offset
-          }
-        }
-
-        # Clamp to visible plot window
-        lx <- max(xlim[[1]], min(xlim[[2]], lx))
-        ly <- max(ylim[[1]], min(ylim[[2]], ly))
-
-        # Connector line (as a shape)
-        shapes <- c(shapes, list(list(
-          type = "line",
-          x0 = df_lab$log2fc[[i]],
-          y0 = df_lab$neglog10p[[i]],
-          x1 = lx,
-          y1 = ly,
-          xref = "x",
-          yref = "y",
-          line = list(color = "#333333", width = 1)
-        )))
-
-        # Label annotation (draggable) - add small Y offset to separate from line endpoint
-        label_y_offset <- 0.02 * diff(ylim)
-        annotations <- c(annotations, list(list(
-          x = lx,
-          y = ly + label_y_offset,
-          text = id,
-          xref = "x",
-          yref = "y",
-          showarrow = FALSE,
-          font = list(size = label_size, color = "#000000"),
-          xanchor = "center",
-          yanchor = "bottom",
-          captureevents = TRUE,
-          name = id
-        )))
-      }
-    }
-  }
-
-  # Threshold lines (if enabled)
-  show_cut_lines <- isTRUE(style$show_cut_lines %||% FALSE)
-  if (show_cut_lines) {
-    # Vertical fold-change thresholds
-    shapes <- c(shapes, list(
-      list(type = "line", x0 = min(fc_thr), x1 = min(fc_thr), y0 = ylim[[1]], y1 = ylim[[2]],
-           xref = "x", yref = "y", line = list(color = "gray", width = 1, dash = "dash")),
-      list(type = "line", x0 = max(fc_thr), x1 = max(fc_thr), y0 = ylim[[1]], y1 = ylim[[2]],
-           xref = "x", yref = "y", line = list(color = "gray", width = 1, dash = "dash")),
-      # Horizontal p-value threshold
-      list(type = "line", x0 = xlim[[1]], x1 = xlim[[2]], y0 = -log10(p_thr), y1 = -log10(p_thr),
-           xref = "x", yref = "y", line = list(color = "gray", width = 1, dash = "dash"))
-    ))
-  }
-
-  # Dynamic x-axis label (use HTML subscript for plotly)
-  x_axis_label <- if (nzchar(comparison_name)) {
-    parts <- unlist(strsplit(comparison_name, "_vs_", fixed = TRUE))
-    if (length(parts) == 2) {
-      p1 <- if (flip_fc) parts[2] else parts[1]
-      p2 <- if (flip_fc) parts[1] else parts[2]
-      paste0("log<sub>2</sub>(", p1, "/", p2, ")")
-    } else {
-      paste0("log<sub>2</sub>FC (", comparison_name, ")")
-    }
-  } else {
-    "log<sub>2</sub>FC"
-  }
-
-  # Y-axis label
-  y_axis_label <- if (isTRUE(apply_fdr)) "-log10(p-adj)" else "-log10(p)"
-
-  # Create plotly
-  p <- plotly::plot_ly(
-    data = df,
-    x = ~log2fc,
-    y = ~neglog10p,
-    customdata = ~gene,
-    type = "scatter",
-    mode = "markers",
-    marker = list(
-      color = ~color,
-      size = tb_num(style$point_size, 3) * 2.5,
-      opacity = 0.9
-    ),
-    text = ~paste0(gene, "\nlog2FC: ", round(log2fc, 3), "\n", hover_p_label, ": ",
-                   format(pval_display, scientific = TRUE, digits = 2)),
-    hoverinfo = "text",
-    source = "volcano_plotly",
-    name = "Genes",
-    showlegend = FALSE
-  )
-
-  # ---- Highlight Groups Rendering (Plotly) ----
-  highlight_map_json <- style$highlight_groups_map %||% "{}"
-  highlight_map <- tryCatch(jsonlite::fromJSON(highlight_map_json, simplifyVector = FALSE), error = function(e) list())
-  plot_key_hl <- if (nzchar(comparison_name)) comparison_name else "volcano_plot"
-  highlight_groups <- highlight_map[[plot_key_hl]] %||% list()
-
-  if (length(highlight_groups) > 0) {
-    # Build gene -> group mapping (last group wins)
-    gene_to_group <- list()
-    for (g in highlight_groups) {
-      genes <- trimws(unlist(strsplit(as.character(g$genes %||% ""), "\n", fixed = TRUE)))
-      genes <- genes[nzchar(genes)]
-      for (gene in genes) {
-        gene_to_group[[gene]] <- g
-      }
-    }
-
-    # Reverse mapping: group_id -> genes
-    group_to_genes <- list()
-    for (gene in names(gene_to_group)) {
-      gid <- gene_to_group[[gene]]$id
-      group_to_genes[[gid]] <- c(group_to_genes[[gid]], gene)
-    }
-
-    # Add traces for each highlight group
-    for (g in highlight_groups) {
-      gid <- g$id
-      genes_in_group <- group_to_genes[[gid]]
-      if (length(genes_in_group) == 0) next
-
-      df_hl <- df[df$gene %in% genes_in_group, , drop = FALSE]
-      if (nrow(df_hl) == 0) next
-
-      group_name <- g$name %||% gid
-      fill_color <- g$color %||% "#FF6600"
-      has_outline <- isTRUE(g$outline)
-      outline_width <- as.numeric(g$outline_width %||% 1)
-
-      marker_config <- if (has_outline) {
-        list(
-          color = fill_color,
-          size = tb_num(style$point_size, 3) * 2.5 + 2,
-          opacity = 1,
-          line = list(color = "black", width = outline_width)
-        )
-      } else {
-        list(
-          color = fill_color,
-          size = tb_num(style$point_size, 3) * 2.5 + 2,
-          opacity = 1,
-          line = list(color = fill_color, width = 0.5)
-        )
-      }
-
-      p <- p %>% plotly::add_trace(
-        data = df_hl,
-        x = ~log2fc,
-        y = ~neglog10p,
-        customdata = ~gene,
-        type = "scatter",
-        mode = "markers",
-        marker = marker_config,
-        text = ~paste0(gene, "\nlog2FC: ", round(log2fc, 3), "\n", hover_p_label, ": ",
-                       format(pval_display, scientific = TRUE, digits = 2)),
-        hoverinfo = "text",
-        name = group_name,
-        legendgroup = "highlight",
-        showlegend = TRUE
-      )
-    }
-  }
-
-  # Show legend only if there are highlight groups
-  has_hl_groups <- length(highlight_groups) > 0
-
-  p <- p %>%
-    plotly::layout(
-      xaxis = list(
-        title = x_axis_label,
-        range = xlim,
-        zeroline = FALSE,
-        showgrid = TRUE,
-        gridcolor = "#e0e0e0",
-        constrain = "domain"
-      ),
-      yaxis = list(
-        title = y_axis_label,
-        range = ylim,
-        zeroline = FALSE,
-        showgrid = TRUE,
-        gridcolor = "#e0e0e0",
-        constrain = "domain"
-      ),
-      shapes = shapes,
-      annotations = annotations,
-      showlegend = has_hl_groups,
-      legend = list(x = 1.02, y = 1, xanchor = "left"),
-      dragmode = "pan",
-      plot_bgcolor = "white",
-      paper_bgcolor = "white"
-    ) %>%
-    plotly::config(
-      edits = list(
-        annotationPosition = TRUE,
-        annotationTail = FALSE
-      ),
-      displayModeBar = FALSE,
-      modeBarButtonsToRemove = c("select2d", "lasso2d", "autoScale2d")
-    )
-
-  p <- plotly::event_register(p, "plotly_click")
-  p <- plotly::event_register(p, "plotly_relayout")
-
-  p
-}
 
 # ============================================================
 # Plotly-based interactive 2D GO-FCS plot for label editing
@@ -1837,10 +1510,8 @@ tb_render_volcano <- function(results, style, meta) {
 
   unique_label <- "Group Specific Protein"
 
-  view_mode <- tolower(as.character(style$view_mode %||% "export_preview"))
-  # Show summary info as subtitle when enabled (default TRUE) and not in interactive mode
-  show_summary <- isTRUE(style$show_summary_cards %||% TRUE) &&
-    !identical(view_mode, "interactive")
+  # Single-mode rendering: summary cards are now driven solely by the user toggle.
+  show_summary <- isTRUE(style$show_summary_cards %||% TRUE)
 
   # Check for multiple comparisons structure
   comparisons <- results$data$comparisons
@@ -7954,6 +7625,7 @@ tb_render_peptide_aggregate_to_protein <- function(results, style, meta) {
 #' @return list(plots, tables, sets)
 tb_render_rankplot <- function(results, style, meta) {
   tb_require_pkg("ggplot2")
+  tb_require_pkg("ggiraph")
 
   # Extract data
   df <- results$data$points
@@ -8088,10 +7760,30 @@ tb_render_rankplot <- function(results, style, meta) {
   y_pad <- global_max_value * 0.05
   ylim <- c(0, global_max_value + y_pad)
 
+  # Build gene/tooltip columns for interactivity
+  if (is.null(df$gene)) {
+    df$gene <- df$gene_id %||% df$protein_id %||% ""
+  }
+  df$gene <- as.character(df$gene)
+  df$tooltip_text <- sprintf(
+    "%s\nRank: %s\n%s: %s",
+    df$gene,
+    formatC(df$rank, digits = 4, format = "fg"),
+    y_axis_title,
+    formatC(df$value, digits = 4, format = "fg")
+  )
+  df$data_id_val <- as.character(df$protein_id %||% df$gene)
+
   # Create the plot with explicit axis limits
   # clip = "on" to prevent points spilling past axis boundaries
+  # geom_point_interactive carries hover tooltips and selection ids; saved as a
+  # static image these aesthetics are silently ignored, so the same ggplot drives
+  # both export and the girafe viewer.
   p <- ggplot2::ggplot(df, ggplot2::aes(x = rank, y = value, color = highlight)) +
-    ggplot2::geom_point(size = point_size, alpha = point_alpha) +
+    ggiraph::geom_point_interactive(
+      ggplot2::aes(tooltip = .data$tooltip_text, data_id = .data$data_id_val),
+      size = point_size, alpha = point_alpha
+    ) +
     ggplot2::scale_color_manual(values = color_map, guide = "none") +
     ggplot2::scale_x_continuous(labels = if (identical(rank_axis_mode, "percent_rank")) waiver() else format_k_suffix, expand = c(0, 0)) +
     ggplot2::scale_y_continuous(expand = c(0, 0)) +
@@ -8149,10 +7841,21 @@ tb_render_rankplot <- function(results, style, meta) {
       df_hl$highlight_group <- factor(group_name, levels = group_name)
       groups_with_data <- c(groups_with_data, group_name)
 
+      df_hl$tooltip_text <- sprintf(
+        "%s\nGroup: %s\nRank: %s\n%s: %s",
+        df_hl$gene,
+        group_name,
+        formatC(df_hl$rank, digits = 4, format = "fg"),
+        y_axis_title,
+        formatC(df_hl$value, digits = 4, format = "fg")
+      )
+      df_hl$data_id_val <- as.character(df_hl$protein_id %||% df_hl$gene)
+
       if (has_outline) {
-        p <- p + ggplot2::geom_point(
+        p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
-          ggplot2::aes(x = rank, y = value, fill = highlight_group),
+          ggplot2::aes(x = rank, y = value, fill = highlight_group,
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = point_size + 0.5,
           color = "black",
@@ -8160,9 +7863,10 @@ tb_render_rankplot <- function(results, style, meta) {
           inherit.aes = FALSE
         )
       } else {
-        p <- p + ggplot2::geom_point(
+        p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
-          ggplot2::aes(x = rank, y = value, fill = highlight_group),
+          ggplot2::aes(x = rank, y = value, fill = highlight_group,
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = point_size + 0.5,
           color = fill_color,
@@ -8188,8 +7892,8 @@ tb_render_rankplot <- function(results, style, meta) {
     }
   }
 
-  # Add gene labels from label_genes_map (for export/preview mode)
-  # Use saved plotly positions for label placement (same pattern as volcano)
+  # Manual labels — placement handled entirely by ggrepel. Single mode: same
+  # ggplot drives both static export and the girafe viewer.
   label_font_size <- tb_num(style$label_font_size, 12)
   label_map_json <- style$label_genes_map %||% "{}"
   label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
@@ -8197,82 +7901,23 @@ tb_render_rankplot <- function(results, style, meta) {
   label_genes <- trimws(unlist(strsplit(as.character(label_genes), "\n", fixed = TRUE)))
   label_genes <- label_genes[nzchar(label_genes)]
 
-  # Get saved plotly label positions (reflected in ggplot export)
-  # Use per-group composite key for position lookup, with fallback to legacy "rankplot"
-  effective_group <- if (nzchar(selected_group) && selected_group %in% available_groups) {
-    selected_group
-  } else if (length(available_groups) > 0) {
-    available_groups[1]
-  } else {
-    ""
-  }
-  position_key <- if (nzchar(effective_group)) paste0("rankplot::", effective_group) else "rankplot"
-  saved <- meta$plotly$labels_by_plot[[position_key]] %||%
-    meta$plotly$labels_by_plot[["rankplot"]] %||%
-    meta$plotly$labels_by_plot$default %||%
-    meta$plotly$labels %||% list()
-
   if (length(label_genes) > 0) {
-    message("[DEBUG-RENDER] tb_render_rankplot: rendering ", length(label_genes), " label(s), saved positions: ", length(saved))
-    # Build gene column if not present
-    if (is.null(df$gene)) {
-      df$gene <- df$gene_id %||% df$protein_id %||% ""
-    }
-    df$gene <- as.character(df$gene)
-
     df_labels <- df[df$gene %in% label_genes, , drop = FALSE]
     if (nrow(df_labels) > 0) {
-      # Compute label positions from saved state (same pattern as volcano)
-      df_labels$lx <- NA_real_
-      df_labels$ly <- NA_real_
-
-      for (i in seq_len(nrow(df_labels))) {
-        id <- as.character(df_labels$gene[[i]])
-        s <- saved[[id]] %||% list()
-
-        pos <- .tb_label_xy_from_state(s, x_range = xlim, y_range = ylim)
-
-        lx <- pos$x
-        ly <- pos$y
-
-        if (!is.finite(lx)) lx <- df_labels$rank[[i]]
-        if (!is.finite(ly)) ly <- df_labels$value[[i]]
-
-        # Default offset if no saved position
-        if (is.null(s$x_range) && is.null(s$y_range)) {
-          if (is.null(s$x) || is.null(s$y) || !is.finite(suppressWarnings(as.numeric(s$x))) ||
-              !is.finite(suppressWarnings(as.numeric(s$y)))) {
-            x_offset <- 0.07 * diff(xlim)
-            y_offset <- 0.07 * diff(ylim)
-            lx <- df_labels$rank[[i]] + x_offset
-            ly <- df_labels$value[[i]] + y_offset
-          }
-        }
-
-        # Clamp to visible plot window
-        lx <- max(xlim[[1]], min(xlim[[2]], lx))
-        ly <- max(ylim[[1]], min(ylim[[2]], ly))
-
-        df_labels$lx[[i]] <- lx
-        df_labels$ly[[i]] <- ly
-      }
-      message("[DEBUG-RENDER] tb_render_rankplot: adding geom_segment + geom_text for ", nrow(df_labels), " labels")
-
-      # Draw connector lines and labels (same pattern as volcano)
+      tb_require_pkg("ggrepel")
       label_size <- label_font_size / 3  # Convert points to ggplot mm scale
-      p <- p +
-        ggplot2::geom_segment(
-          data = df_labels,
-          ggplot2::aes(x = rank, y = value, xend = lx, yend = ly),
-          linewidth = 0.3, color = "black",
-          inherit.aes = FALSE
-        ) +
-        ggplot2::geom_text(
-          data = df_labels,
-          ggplot2::aes(x = lx, y = ly, label = gene),
-          size = label_size, color = "black", hjust = 0.5, vjust = 0,
-          inherit.aes = FALSE
-        )
+      p <- p + ggrepel::geom_text_repel(
+        data = df_labels,
+        ggplot2::aes(x = rank, y = value, label = gene),
+        size = label_size,
+        color = "black",
+        max.overlaps = Inf,
+        box.padding = 0.4,
+        segment.size = 0.3,
+        segment.color = "grey40",
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      )
     }
   }
 
@@ -8290,246 +7935,6 @@ tb_render_rankplot <- function(results, style, meta) {
     tables = list(),
     sets = sets
   )
-}
-
-# ============================================================
-# Plotly-based interactive rank plot for label editing
-# - Hover: shows gene name, rank, value
-# - Click on point: triggers uniprot search (handled by Shiny)
-# - Drag annotations: repositions labels (captured via relayout events)
-# ============================================================
-tb_rankplot_plotly <- function(df, style, meta, xlim, ylim, labs, saved, y_axis_title = "Intensity") {
-  tb_require_pkg("plotly")
-
-  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
-    return(NULL)
-  }
-
-  # Normalize gene column
-  if (is.null(df$gene)) {
-    df$gene <- df$gene_id %||% df$protein_id %||% ""
-  }
-  df$gene <- as.character(df$gene)
-
-  # Colors from style
-  point_color <- style$point_color %||% "#B0B0B0"
-  highlight_color_top <- style$highlight_color_top %||% "#FF4242"
-  highlight_color_bottom <- style$highlight_color_bottom %||% "#4245FF"
-  point_size <- tb_num(style$point_size, 2)
-
-  # Map highlight to colors
-  color_map <- c(
-    "none" = point_color,
-    "top" = highlight_color_top,
-    "bottom" = highlight_color_bottom
-  )
-  df$color <- color_map[as.character(df$highlight)]
-  df$color[is.na(df$color)] <- point_color
-
-  # Build annotations with arrows for labels
-  annotations <- list()
-  label_size <- suppressWarnings(as.numeric(style$label_font_size %||% 12))
-  if (!is.finite(label_size) || label_size <= 0) label_size <- 12
-
-  if (length(labs) > 0) {
-    df_lab <- df[df$gene %in% labs, , drop = FALSE]
-
-    if (nrow(df_lab) > 0) {
-      for (i in seq_len(nrow(df_lab))) {
-        id <- as.character(df_lab$gene[[i]])
-        s <- saved[[id]] %||% list()
-
-        # Data point coordinates
-        data_x <- df_lab$rank[[i]]
-        data_y <- df_lab$value[[i]]
-
-        # Get saved position or compute default for label placement
-        lx <- suppressWarnings(as.numeric(s$x %||% NA_real_))
-        ly <- suppressWarnings(as.numeric(s$y %||% NA_real_))
-
-        # Apply range-normalized positions if available
-        if (!is.null(s$x_range) && !is.null(s$y_range)) {
-          pos <- .tb_label_xy_from_state(s, x_range = xlim, y_range = ylim)
-          lx <- pos$x
-          ly <- pos$y
-        }
-
-        if (!is.finite(lx)) lx <- data_x
-        if (!is.finite(ly)) ly <- data_y
-
-        # Default offset if no saved position - offset away from data point
-        if (is.null(s$x) || is.null(s$y) || !is.finite(suppressWarnings(as.numeric(s$x))) ||
-            !is.finite(suppressWarnings(as.numeric(s$y)))) {
-          if (is.null(s$x_range) && is.null(s$y_range)) {
-            # Use 7% of range for offset (similar to volcano)
-            x_offset <- 0.07 * diff(xlim)
-            y_offset <- 0.07 * diff(ylim)
-            lx <- data_x + x_offset
-            ly <- data_y + y_offset
-          }
-        }
-
-        # Clamp to visible plot window
-        lx <- max(xlim[[1]], min(xlim[[2]], lx))
-        ly <- max(ylim[[1]], min(ylim[[2]], ly))
-
-        # Label annotation with arrow pointing to data point
-        # x, y = arrowhead position (data point)
-        # ax, ay = text position (with axref/ayref = "x"/"y" for data coordinates)
-        # The arrow draws from text (ax, ay) to data point (x, y)
-        annotations <- c(annotations, list(list(
-          x = data_x,
-          y = data_y,
-          ax = lx,
-          ay = ly,
-          xref = "x",
-          yref = "y",
-          axref = "x",
-          ayref = "y",
-          text = id,
-          showarrow = TRUE,
-          arrowhead = 0,
-          arrowwidth = 1,
-          arrowcolor = "#333333",
-          font = list(size = label_size, color = "#000000"),
-          xanchor = "center",
-          yanchor = "bottom",
-          captureevents = TRUE,
-          name = id
-        )))
-      }
-    }
-  }
-
-  # Create plotly
-  p <- plotly::plot_ly(
-    data = df,
-    x = ~rank,
-    y = ~value,
-    customdata = ~gene,
-    type = "scatter",
-    mode = "markers",
-    marker = list(
-      color = ~color,
-      size = point_size * 2.5,
-      opacity = 0.9
-    ),
-    text = ~paste0(gene, "\nRank: ", rank, "\n", y_axis_title, ": ", round(value, 3)),
-    hoverinfo = "text",
-    source = "rankplot_plotly"
-  )
-
-  # ---- Highlight Groups Rendering (Plotly) ----
-  highlight_map_json <- style$highlight_groups_map %||% "{}"
-  highlight_map <- tryCatch(jsonlite::fromJSON(highlight_map_json, simplifyVector = FALSE), error = function(e) list())
-  highlight_groups <- highlight_map[["rankplot"]] %||% list()
-
-  if (length(highlight_groups) > 0) {
-    # Build gene -> group mapping (last group wins)
-    gene_to_group <- list()
-    for (g in highlight_groups) {
-      genes <- trimws(unlist(strsplit(as.character(g$genes %||% ""), "\n", fixed = TRUE)))
-      genes <- genes[nzchar(genes)]
-      for (gene in genes) {
-        gene_to_group[[gene]] <- g
-      }
-    }
-
-    # Reverse mapping: group_id -> genes
-    group_to_genes <- list()
-    for (gene in names(gene_to_group)) {
-      gid <- gene_to_group[[gene]]$id
-      group_to_genes[[gid]] <- c(group_to_genes[[gid]], gene)
-    }
-
-    # Add traces for each highlight group
-    for (g in highlight_groups) {
-      gid <- g$id
-      genes_in_group <- group_to_genes[[gid]]
-      if (length(genes_in_group) == 0) next
-
-      df_hl <- df[df$gene %in% genes_in_group, , drop = FALSE]
-      if (nrow(df_hl) == 0) next
-
-      group_name <- g$name %||% gid
-      fill_color <- g$color %||% "#FF6600"
-      has_outline <- isTRUE(g$outline)
-      outline_width <- as.numeric(g$outline_width %||% 1)
-
-      marker_config <- if (has_outline) {
-        list(
-          color = fill_color,
-          size = point_size * 2.5 + 2,
-          opacity = 1,
-          line = list(color = "black", width = outline_width)
-        )
-      } else {
-        list(
-          color = fill_color,
-          size = point_size * 2.5 + 2,
-          opacity = 1,
-          line = list(color = fill_color, width = 0.5)
-        )
-      }
-
-      p <- p %>% plotly::add_trace(
-        data = df_hl,
-        x = ~rank,
-        y = ~value,
-        customdata = ~gene,
-        type = "scatter",
-        mode = "markers",
-        marker = marker_config,
-        text = ~paste0(gene, "\nRank: ", rank, "\n", y_axis_title, ": ", round(value, 3)),
-        hoverinfo = "text",
-        name = group_name,
-        legendgroup = "highlight",
-        showlegend = TRUE
-      )
-    }
-  }
-
-  # Show legend only if there are highlight groups
-  has_hl_groups <- length(highlight_groups) > 0
-
-  p <- p %>%
-    plotly::layout(
-      xaxis = list(
-        title = "Rank",
-        range = xlim,
-        zeroline = FALSE,
-        showgrid = TRUE,
-        gridcolor = "#e0e0e0",
-        automargin = TRUE
-      ),
-      yaxis = list(
-        title = y_axis_title,
-        range = ylim,
-        zeroline = FALSE,
-        showgrid = TRUE,
-        gridcolor = "#e0e0e0",
-        automargin = TRUE
-      ),
-      annotations = annotations,
-      showlegend = has_hl_groups,
-      dragmode = "pan",
-      plot_bgcolor = "white",
-      paper_bgcolor = "white",
-      margin = list(l = 60, r = 40, t = 20, b = 50)
-    ) %>%
-    plotly::config(
-      edits = list(
-        annotationPosition = TRUE,
-        annotationTail = TRUE
-      ),
-      displayModeBar = FALSE,
-      modeBarButtonsToRemove = c("select2d", "lasso2d", "autoScale2d")
-    )
-
-  p <- plotly::event_register(p, "plotly_click")
-  p <- plotly::event_register(p, "plotly_relayout")
-
-  p
 }
 
 # ---- Heatmap ----------------------------------------------------------------
@@ -11743,6 +11148,45 @@ tb_peptide_region_detail_components <- function(results, style, interactive_bar 
   data <- results$data
   if (is.null(data) || !identical(data$mode %||% "", "detail")) return(NULL)
   .pr_build_detail_components(data, style, interactive_bar = interactive_bar)
+}
+
+# Wrap a ggplot in a girafe widget for in-app interactive display. The same
+# ggplot object remains valid for static export — interactive aesthetics
+# (tooltip, data_id) are silently ignored by ggsave.
+tb_ggplot_to_girafe <- function(p, style = list(), girafe_id = NULL) {
+  if (is.null(p)) return(NULL)
+  tb_require_pkg("ggiraph")
+
+  width_svg  <- tb_num(style$width,  7)
+  height_svg <- tb_num(style$height, 5)
+
+  selection_opts <- if (!is.null(girafe_id)) {
+    ggiraph::opts_selection(
+      type = "single",
+      css = "stroke:#000000;stroke-width:1.5px;",
+      only_shiny = TRUE
+    )
+  } else {
+    ggiraph::opts_selection(type = "none")
+  }
+
+  ggiraph::girafe(
+    ggobj = p,
+    width_svg = width_svg,
+    height_svg = height_svg,
+    options = list(
+      ggiraph::opts_sizing(rescale = TRUE, width = 0.95),
+      ggiraph::opts_hover(css = "stroke:#222222;stroke-width:1px;"),
+      ggiraph::opts_tooltip(css = paste(
+        "background-color: rgba(30,30,30,0.96);",
+        "color: #FFFFFF;",
+        "padding: 8px 10px;",
+        "border-radius: 4px;",
+        "font-size: 12px;"
+      )),
+      selection_opts
+    )
+  )
 }
 
 tb_peptide_region_detail_girafe <- function(results, style) {

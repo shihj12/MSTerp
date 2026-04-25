@@ -4515,12 +4515,25 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   res_engine_uses_plotly <- function(eng, style, results = NULL) {
     if (is.null(eng)) return(FALSE)
     eng <- tolower(eng)
-    if (eng %in% c("volcano", "2dgofcs", "rankplot")) {
+    if (eng %in% c("2dgofcs")) {
       return(isTRUE(res_is_interactive_view(style)))
     }
     if (identical(eng, "peptide_region")) {
       pr_mode <- tolower(as.character(results$data$mode %||% "overview"))
       return(identical(pr_mode, "overview"))
+    }
+    FALSE
+  }
+
+  # Engines that render via ggiraph::girafe in the viewer (single-mode: same
+  # ggplot drives both static export and the interactive widget).
+  res_engine_uses_girafe <- function(eng, results = NULL) {
+    if (is.null(eng)) return(FALSE)
+    eng <- tolower(eng)
+    if (eng %in% c("volcano", "rankplot")) return(TRUE)
+    if (identical(eng, "peptide_region")) {
+      pr_mode <- tolower(as.character(results$data$mode %||% "overview"))
+      return(identical(pr_mode, "detail"))
     }
     FALSE
   }
@@ -7113,8 +7126,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       view_mode <- tolower(as.character(st$view_mode %||% "export_preview"))
       is_pr_detail <- identical(eng_lower, "peptide_region") &&
         identical(tolower(as.character(active_results()$data$mode %||% "overview")), "detail")
+      eng_l <- tolower(eng %||% "")
       plot_box_class <- "res-plot-box"
-      if ((tolower(eng %||% "") %in% c("volcano", "2dgofcs", "rankplot") && view_mode == "interactive") ||
+      if ((eng_l == "2dgofcs" && view_mode == "interactive") ||
+          eng_l %in% c("volcano", "rankplot") ||
           isTRUE(is_pr_detail)) {
         plot_box_class <- "res-plot-box res-plot-box-free"
       }
@@ -7960,6 +7975,70 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     tb_peptide_region_detail_girafe(res, style)
   })
 
+  # ---- Single-mode girafe rendering for volcano / rankplot -------------------
+  # Both share the same ggplot returned by tb_render_*; the static export path
+  # (download / copy / bulk export) reads that same ggplot via res_extract_ggplots.
+  res_girafe_ggplot <- function(plot_key) {
+    rend <- active_rendered()
+    if (inherits(rend, "error") || is.null(rend)) return(NULL)
+    plots <- res_extract_ggplots(rend)
+    if (length(plots) == 0) return(NULL)
+    if (!is.null(plot_key) && nzchar(plot_key) && plot_key %in% names(plots)) {
+      return(plots[[plot_key]])
+    }
+    plots[[1]]
+  }
+
+  output$res_volcano_girafe <- ggiraph::renderGirafe({
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "volcano")) return(NULL)
+
+    plot_key <- res_active_plot_name() %||% ""
+    p <- res_girafe_ggplot(plot_key)
+    if (is.null(p)) return(NULL)
+
+    style <- active_effective_state()$style %||% list()
+    tb_ggplot_to_girafe(p, style = style, girafe_id = "res_volcano_girafe")
+  })
+
+  output$res_rankplot_girafe <- ggiraph::renderGirafe({
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "rankplot")) return(NULL)
+
+    p <- res_girafe_ggplot("rankplot")
+    if (is.null(p)) return(NULL)
+
+    style <- active_effective_state()$style %||% list()
+    tb_ggplot_to_girafe(p, style = style, girafe_id = "res_rankplot_girafe")
+  })
+
+  # girafe selection -> UniProt / metabolite modal. Selection is keyed by
+  # data_id which is set to the gene/protein identifier in the renderer.
+  .res_handle_girafe_pick <- function(picked) {
+    if (is.null(picked)) return()
+    picked <- as.character(picked)
+    picked <- picked[nzchar(picked)]
+    if (length(picked) == 0) return()
+    gene_id <- picked[[1]]
+    if (identical(rv$run_data_type, "metabolomics")) {
+      res_show_metabolite_summary(gene_id)
+    } else {
+      res_show_uniprot_summary(gene_id)
+    }
+  }
+
+  observeEvent(input$res_volcano_girafe_selected, {
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "volcano")) return()
+    .res_handle_girafe_pick(input$res_volcano_girafe_selected)
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
+
+  observeEvent(input$res_rankplot_girafe_selected, {
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "rankplot")) return()
+    .res_handle_girafe_pick(input$res_rankplot_girafe_selected)
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
+
   # Track the SHAPE signal for the outer plot container. Only re-fires
   # res_plot_pub when a structural field changes (engine, peptide_region mode,
   # interactive vs preview, width/height, dpi). Style-only tweaks still flow
@@ -7985,6 +8064,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       eng         = eng,
       pr_mode     = pr_mode,
       interactive = isTRUE(res_engine_uses_plotly(eng, st, res)),
+      girafe      = isTRUE(res_engine_uses_girafe(eng, res)),
       width       = tb_num(st$width  %||% 7, 7),
       height      = tb_num(st$height %||% 5, 5),
       dpi         = suppressWarnings(as.integer(rv$preview_dpi %||% 150L))
@@ -8027,7 +8107,26 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       }
     }
 
-    # Use plotly for interactive mode on volcano/2dgofcs/rankplot and peptide-region overview
+    # Single-mode girafe rendering for volcano/rankplot. Same ggplot also
+    # backs the static export path (the hidden plotOutput keeps download/copy
+    # working off res_extract_ggplots).
+    if (eng %in% c("volcano", "rankplot")) {
+      girafe_id <- if (identical(eng, "volcano")) "res_volcano_girafe" else "res_rankplot_girafe"
+      return(
+        div(
+          class = "res-plot-interact res-girafe-wrap",
+          style = "width: 100%; height: 100%; position: relative; overflow: hidden;",
+          tabindex = "0",
+          div(
+            style = "position: absolute; left: -99999px; top: -99999px; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none;",
+            plotOutput("res_plot", height = "1px", width = "1px")
+          ),
+          ggiraph::girafeOutput(girafe_id, height = "100%", width = "100%")
+        )
+      )
+    }
+
+    # Use plotly for interactive mode on 2dgofcs and peptide-region overview
     if (is_interactive) {
       # Get aspect ratio from style dimensions (default 7:5)
       plot_width <- sig$width
@@ -8058,7 +8157,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     }
 
     # Non-interactive: standard ggplot rendering
-    if (eng %in% c("volcano", "2dgofcs", "rankplot")) {
+    if (identical(eng, "2dgofcs")) {
       click_id <- "res_label_plot_click"
       dblclick_id <- "res_label_plot_dblclick"
     } else if (eng %in% c("goora", "1dgofcs")) {
@@ -8108,14 +8207,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   })
 
   # ============================================================
-  # Plotly-based interactive plot for volcano, 2dgofcs, and rankplot
-  # - Draggable annotations for label positioning
-  # - Click events for uniprot search (volcano/rankplot) or label toggle (2dgofcs)
+  # Plotly-based interactive plot for 2dgofcs and peptide_region overview.
+  # (Volcano and rankplot now use ggiraph — see res_volcano_girafe / res_rankplot_girafe.)
   # ============================================================
   output$res_plotly_interactive <- plotly::renderPlotly({
     tryCatch({
     eng <- tolower(active_engine_id() %||% "")
-    if (!(eng %in% c("volcano", "2dgofcs", "rankplot", "peptide_region"))) return(NULL)
+    if (!(eng %in% c("2dgofcs", "peptide_region"))) return(NULL)
 
     st <- active_effective_state()
     style <- st$style %||% list()
@@ -8132,40 +8230,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
     visibility <- st$visibility %||% list()
     plotly_state <- st$plotly %||% list()
-    # Use res_active_plot_name for volcano (multi-comparison), but fixed key for rankplot
-    plot_key <- if (identical(eng, "rankplot")) {
-      "rankplot"
-    } else {
-      res_active_plot_name() %||% ""
-    }
-
-    if (identical(eng, "volcano")) {
-      state <- res_volcano_plot_state(res, style, visibility, plot_key, plotly_state)
-      if (is.null(state)) return(NULL)
-
-      # Get comparison metadata for thresholds
-      comparisons <- res$data$comparisons %||% NULL
-      comp <- if (!is.null(comparisons) && plot_key %in% names(comparisons)) comparisons[[plot_key]] else NULL
-
-      apply_fdr <- state$apply_fdr
-      fc_threshold <- comp$comparison$fc_threshold %||% res$params$fc_threshold
-      p_threshold <- comp$comparison$sig_threshold %||% res$params$p_threshold
-
-      p <- tb_volcano_plotly(
-        df = state$df,
-        style = style,
-        meta = list(visibility = visibility, plotly = plotly_state),
-        xlim = state$xlim,
-        ylim = state$ylim,
-        labs = state$labs,
-        saved = state$saved,
-        comparison_name = plot_key,
-        apply_fdr = apply_fdr,
-        fc_threshold = fc_threshold,
-        p_threshold = p_threshold
-      )
-      return(p)
-    }
+    plot_key <- res_active_plot_name() %||% ""
 
     if (identical(eng, "2dgofcs")) {
       state <- res_2dgofcs_plot_state(res, style, visibility, plot_key, plotly_state)
@@ -8207,25 +8272,6 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       return(p)
     }
 
-    if (identical(eng, "rankplot")) {
-      state <- res_rankplot_plot_state(res, style, visibility, plot_key, plotly_state)
-      if (is.null(state)) return(NULL)
-
-      y_axis_title <- style$y_axis_title %||% "Intensity"
-
-      p <- tb_rankplot_plotly(
-        df = state$df,
-        style = style,
-        meta = list(visibility = visibility, plotly = plotly_state),
-        xlim = state$xlim,
-        ylim = state$ylim,
-        labs = state$labs,
-        saved = state$saved,
-        y_axis_title = y_axis_title
-      )
-      return(p)
-    }
-
     NULL
     }, error = function(e) {
       message("[renderPlotly] Error: ", conditionMessage(e))
@@ -8234,272 +8280,9 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     })
   })
 
-  # ============================================================
-  # Plotly click handler - volcano: uniprot search only
-  # ============================================================
-  observeEvent(event_data("plotly_click", source = "volcano_plotly"), {
-    click <- event_data("plotly_click", source = "volcano_plotly")
-    if (is.null(click)) return()
-
-    eng <- tolower(active_engine_id() %||% "")
-    if (!identical(eng, "volcano")) return()
-
-    st <- active_effective_state()
-    style <- st$style %||% list()
-    if (!isTRUE(res_is_interactive_view(style))) return()
-
-    res <- active_results()
-    if (is.null(res)) return()
-
-    plot_key <- res_active_plot_name() %||% ""
-    visibility <- st$visibility %||% list()
-    plotly_state <- st$plotly %||% list()
-    state <- res_volcano_plot_state(res, style, visibility, plot_key, plotly_state)
-    if (is.null(state)) return()
-
-    # Identify clicked gene via customdata (robust across multiple traces)
-    gene_id <- click$customdata
-    if (is.null(gene_id) || !nzchar(gene_id)) {
-      # Fallback: try pointNumber index on main trace
-      idx <- click$pointNumber + 1
-      df <- state$df
-      if (idx >= 1 && idx <= nrow(df)) gene_id <- df$gene[idx]
-    }
-    if (!is.null(gene_id) && nzchar(gene_id)) {
-      if (identical(rv$run_data_type, "metabolomics")) {
-        res_show_metabolite_summary(gene_id)
-      } else {
-        res_show_uniprot_summary(gene_id)
-      }
-    }
-  }, ignoreInit = TRUE)
-
-  # ============================================================
-  # Plotly click handler - rankplot: uniprot search
-  # ============================================================
-  observeEvent(event_data("plotly_click", source = "rankplot_plotly"), {
-    tryCatch({
-    click <- event_data("plotly_click", source = "rankplot_plotly")
-    if (is.null(click)) return()
-
-    eng <- tolower(active_engine_id() %||% "")
-    if (!identical(eng, "rankplot")) return()
-
-    st <- active_effective_state()
-    style <- st$style %||% list()
-    if (!isTRUE(res_is_interactive_view(style))) return()
-
-    res <- active_results()
-    if (is.null(res)) return()
-
-    # Use consistent plot_key for rankplot
-    plot_key <- "rankplot"
-    visibility <- st$visibility %||% list()
-    plotly_state <- st$plotly %||% list()
-    state <- res_rankplot_plot_state(res, style, visibility, plot_key, plotly_state)
-    if (is.null(state)) return()
-
-    # Identify clicked gene via customdata (robust across multiple traces)
-    gene_id <- click$customdata
-    if (is.null(gene_id) || !nzchar(gene_id)) {
-      # Fallback: try pointNumber index on main trace
-      idx <- click$pointNumber + 1
-      df <- state$df
-      if (idx >= 1 && idx <= nrow(df)) gene_id <- df$gene[idx]
-    }
-    if (!is.null(gene_id) && nzchar(gene_id)) {
-      if (identical(rv$run_data_type, "metabolomics")) {
-        res_show_metabolite_summary(gene_id)
-      } else {
-        res_show_uniprot_summary(gene_id)
-      }
-    }
-    }, error = function(e) {
-      message("[Rankplot click] Error: ", conditionMessage(e))
-    })
-  }, ignoreInit = TRUE)
-
-  # ============================================================
-  # Plotly annotation relayout handler - capture label drag events
-  # FIX: Use deferred updates in interactive mode to avoid re-render lag
-  # ============================================================
-  observeEvent(event_data("plotly_relayout", source = "volcano_plotly"), {
-    relayout_data <- event_data("plotly_relayout", source = "volcano_plotly")
-    if (is.null(relayout_data)) return()
-
-    eng <- tolower(active_engine_id() %||% "")
-    if (!identical(eng, "volcano")) return()
-
-    plot_key <- res_active_plot_name() %||% ""
-    st <- active_effective_state()
-    style <- st$style %||% list()
-    plotly_state <- st$plotly %||% list()
-
-    # Check if in interactive mode - use deferred updates to avoid re-render lag
-    is_interactive <- isTRUE(res_is_interactive_view(style))
-
-    # Get current label list - must match the order annotations were created in tb_volcano_plotly
-    # Annotations are created in df row order (filtered by labs), not in labs order
-    res <- active_results()
-    if (is.null(res)) return()
-    visibility <- st$visibility %||% list()
-    state <- res_volcano_plot_state(res, style, visibility, plot_key, plotly_state)
-    if (is.null(state)) return()
-
-    # Get labels in the same order as annotations (df row order, not text input order)
-    # Must replicate the exact filtering done in tb_volcano_plotly
-    df <- state$df
-    labs_input <- res_volcano_label_list(style, plot_key)
-    df_lab <- df[df$gene %in% labs_input, , drop = FALSE]
-    if (nrow(df_lab) == 0) return()
-    # Apply the same hide_nonsig filter as tb_volcano_plotly (line 979-981)
-    if (identical(style$label_mode %||% "color_sig", "hide_nonsig")) {
-      df_lab <- df_lab[df_lab$sig != "nonsig", , drop = FALSE]
-    }
-    if (nrow(df_lab) == 0) return()
-    # This is the order annotations were created in tb_volcano_plotly
-    labs <- as.character(df_lab$gene)
-
-    # Check for annotation position changes
-    # Format: annotations[0].x, annotations[0].y, etc.
-    updated <- FALSE
-    for (key in names(relayout_data)) {
-      if (grepl("^annotations\\[\\d+\\]\\.(x|y)$", key)) {
-        matches <- regmatches(key, regexec("annotations\\[(\\d+)\\]\\.(x|y)", key))[[1]]
-        if (length(matches) == 3) {
-          idx <- as.integer(matches[2]) + 1  # Convert to 1-indexed
-          coord <- matches[3]
-          value <- relayout_data[[key]]
-
-          if (idx >= 1 && idx <= length(labs)) {
-            gene <- labs[idx]
-
-            # Update plotly state with new position (normalized from data coords to [0,1])
-            # Use deferred mode in interactive view to avoid lag
-            res_update_plotly_labels(plot_key, function(cur_labels) {
-              if (is.null(cur_labels[[gene]])) cur_labels[[gene]] <- list()
-
-              # Normalize the new coordinate value from data coords to [0,1]
-              if (coord == "x") {
-                norm <- tb_normalize_coords(value, 0, state$xlim, state$ylim)
-                cur_labels[[gene]]$x <- norm$x[[1]]
-              } else if (coord == "y") {
-                norm <- tb_normalize_coords(0, value, state$xlim, state$ylim)
-                cur_labels[[gene]]$y <- norm$y[[1]]
-              }
-
-              # Store current axis ranges for denormalization on render
-              cur_labels[[gene]]$x_range <- state$xlim
-              cur_labels[[gene]]$y_range <- state$ylim
-              cur_labels
-            }, defer = is_interactive)
-            updated <- TRUE
-          }
-        }
-      }
-    }
-
-    # Only trigger immediate re-render if NOT in deferred mode
-    if (updated && !is_interactive) {
-      rv$has_unsaved_changes <- TRUE
-      rv$save_status <- "dirty"
-      style_rev(isolate(style_rev()) + 1L)
-    }
-  }, ignoreInit = TRUE)
-
-  # ============================================================
-  # Plotly annotation relayout handler - rankplot label drag events
-  # ============================================================
-  observeEvent(event_data("plotly_relayout", source = "rankplot_plotly"), {
-    tryCatch({
-    relayout_data <- event_data("plotly_relayout", source = "rankplot_plotly")
-    if (is.null(relayout_data)) return()
-
-    eng <- tolower(active_engine_id() %||% "")
-    if (!identical(eng, "rankplot")) return()
-
-    message("[DEBUG-RELAYOUT] Rankplot relayout event: ", paste(names(relayout_data), collapse = ", "))
-
-    st <- active_effective_state()
-    style <- st$style %||% list()
-    plotly_state <- st$plotly %||% list()
-
-    is_interactive <- isTRUE(res_is_interactive_view(style))
-
-    res <- active_results()
-    if (is.null(res)) return()
-    visibility <- st$visibility %||% list()
-    state <- res_rankplot_plot_state(res, style, visibility, "rankplot", plotly_state)
-    if (is.null(state)) return()
-
-    # Use per-group composite key for position storage
-    plot_key <- state$position_key
-
-    # Get labels in the same order as annotations (df row order, not text input order)
-    # Must replicate the exact filtering done in tb_rankplot_plotly
-    df <- state$df
-    labs_input <- state$labs
-    df_lab <- df[df$gene %in% labs_input, , drop = FALSE]
-    if (nrow(df_lab) == 0) return()
-    # This is the order annotations were created in tb_rankplot_plotly
-    labs <- as.character(df_lab$gene)
-    if (length(labs) == 0) return()
-
-    # Check for annotation position changes
-    # Annotations use showarrow=TRUE with axref/ayref="x"/"y", so text is at (ax, ay).
-    # When annotationTail=TRUE, dragging the text changes ax/ay (not x/y).
-    updated <- FALSE
-    for (key in names(relayout_data)) {
-      if (grepl("^annotations\\[\\d+\\]\\.(ax|ay)$", key)) {
-        matches <- regmatches(key, regexec("annotations\\[(\\d+)\\]\\.(ax|ay)", key))[[1]]
-        if (length(matches) == 3) {
-          idx <- as.integer(matches[2]) + 1
-          coord <- matches[3]
-          value <- relayout_data[[key]]
-
-          if (idx >= 1 && idx <= length(labs)) {
-            gene <- labs[idx]
-
-            if (coord == "ax") {
-              norm <- tb_normalize_coords(value, 0, state$xlim, state$ylim)
-              if (length(norm$x) == 0 || !is.finite(norm$x[[1]])) next
-              norm_val <- norm$x[[1]]
-              res_update_plotly_labels(plot_key, function(cur_labels) {
-                if (is.null(cur_labels[[gene]])) cur_labels[[gene]] <- list()
-                cur_labels[[gene]]$x <- norm_val
-                cur_labels[[gene]]$x_range <- state$xlim
-                cur_labels[[gene]]$y_range <- state$ylim
-                cur_labels
-              }, defer = is_interactive)
-              updated <- TRUE
-            } else if (coord == "ay") {
-              norm <- tb_normalize_coords(0, value, state$xlim, state$ylim)
-              if (length(norm$y) == 0 || !is.finite(norm$y[[1]])) next
-              norm_val <- norm$y[[1]]
-              res_update_plotly_labels(plot_key, function(cur_labels) {
-                if (is.null(cur_labels[[gene]])) cur_labels[[gene]] <- list()
-                cur_labels[[gene]]$y <- norm_val
-                cur_labels[[gene]]$x_range <- state$xlim
-                cur_labels[[gene]]$y_range <- state$ylim
-                cur_labels
-              }, defer = is_interactive)
-              updated <- TRUE
-            }
-          }
-        }
-      }
-    }
-
-    if (updated && !is_interactive) {
-      rv$has_unsaved_changes <- TRUE
-      rv$save_status <- "dirty"
-      style_rev(isolate(style_rev()) + 1L)
-    }
-    }, error = function(e) {
-      message("[Rankplot relayout] Error: ", conditionMessage(e))
-      message(paste(capture.output(traceback()), collapse = "\n"))
-    })
-  }, ignoreInit = TRUE)
+  # (Removed) volcano + rankplot plotly_click and plotly_relayout observers.
+  # Single-mode girafe handles both selection and (no longer needed) label
+  # repositioning. ggrepel places labels automatically.
 
   # 2D GOFCS plotly relayout handlers for each standard ontology tab (BP, MF, CC)
   # These are created once at session start and listen for annotation drag events.
