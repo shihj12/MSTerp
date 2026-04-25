@@ -1931,6 +1931,14 @@ msterp_theme_head <- function() {
         startNavPoll(pageId);
       });
 
+      // Programmatic input trigger — used to fire Shiny inputs from server code
+      // (e.g., navigating from a modal click without an actual user click).
+      Shiny.addCustomMessageHandler('msterp_trigger_input', function(payload) {
+        if (!payload || !payload.id) return;
+        try { Shiny.setInputValue(payload.id, payload.value, {priority: 'event'}); }
+        catch (e) { /* swallow */ }
+      });
+
       // Scroll to element handler
       Shiny.addCustomMessageHandler('msterp_scroll_to', function(payload) {
         if (!payload || !payload.selector) return;

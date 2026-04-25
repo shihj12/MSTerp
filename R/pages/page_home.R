@@ -191,6 +191,36 @@ page_home_ui <- function() {
           gap: 8px;
           justify-content: center;
         }
+        #home-landing .recovery-banner {
+          background: rgba(201, 65, 77, 0.08);
+          border: 1px solid rgba(201, 65, 77, 0.35);
+          border-radius: 12px;
+          padding: 12px 16px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
+          color: var(--home-ink);
+        }
+        [data-theme='dark'] #home-landing .recovery-banner {
+          background: rgba(201, 65, 77, 0.15);
+          color: var(--text-primary, #e8e8e8);
+        }
+        #home-landing .recovery-banner .rb-msg { flex: 1 1 auto; font-size: 13px; }
+        #home-landing .recovery-banner .rb-msg b { color: var(--home-red); }
+        #home-landing .recovery-banner .rb-actions { display: flex; gap: 8px; }
+        #home-landing .recovery-list { display: flex; flex-direction: column; gap: 8px; }
+        #home-landing .recovery-row {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 12px; padding: 10px 12px;
+          border: 1px solid var(--home-line); border-radius: 10px;
+          background: var(--bg-card, #ffffff);
+        }
+        [data-theme='dark'] #home-landing .recovery-row {
+          background: var(--bg-card, #242424); border-color: var(--border-light, #3a3a3a);
+        }
+        #home-landing .recovery-row .rr-meta { font-size: 12px; color: var(--home-muted); }
+
         #home-landing .hi-pill {
           display: inline-block;
           padding: 6px 14px;
@@ -400,6 +430,7 @@ page_home_ui <- function() {
       class = "home-container",
       div(
         class = "main-stack",
+        uiOutput("home_recovery_banner"),
         # Hero section
         div(
           class = "hero fade-in delay-1",
@@ -487,5 +518,112 @@ page_home_ui <- function() {
 }
 
 page_home_server <- function(input, output, session, app_state) {
+  if (is.null(app_state)) return(invisible(NULL))
+
+  # Refresh recovery candidates on demand (after the user dismisses or recovers).
+  refresh_candidates <- function() {
+    app_state$recovery_candidates <- tryCatch(tb_workspace_scan_dirty(),
+                                              error = function(e) list())
+  }
+
+  # Modal generation counter — bumps on every modal open so per-row input IDs
+  # are unique across opens. Prevents stale observers from double-firing.
+  modal_gen <- 0L
+
+  output$home_recovery_banner <- renderUI({
+    cands <- app_state$recovery_candidates
+    if (is.null(cands) || length(cands) == 0) return(NULL)
+    n <- length(cands)
+    div(
+      class = "recovery-banner fade-in",
+      div(class = "rb-msg",
+          tags$b(sprintf("%d unsaved terpbook edit%s", n, if (n == 1) "" else "s")),
+          tags$span(" found from a previous session.")),
+      div(class = "rb-actions",
+          actionButton("home_recovery_open", "Review",
+                       class = "btn btn-primary btn-sm"),
+          actionButton("home_recovery_dismiss", "Dismiss",
+                       class = "btn btn-ghost btn-sm"))
+    )
+  })
+
+  observeEvent(input$home_recovery_dismiss, {
+    # Hide the banner this session without deleting workspace data.
+    app_state$recovery_candidates <- list()
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$home_recovery_open, {
+    cands <- app_state$recovery_candidates %||% list()
+    if (length(cands) == 0) { removeModal(); return() }
+    modal_gen <<- modal_gen + 1L
+    gen <- modal_gen
+    rows <- lapply(seq_along(cands), function(i) {
+      c1 <- cands[[i]]
+      name <- c1$source_basename %||% "(unknown)"
+      src  <- c1$source_path
+      le   <- c1$last_edit_at
+      le_str <- if (!is.null(le) && !is.na(le)) format(le, "%Y-%m-%d %H:%M") else "unknown"
+      meta <- if (!is.null(src) && !is.na(src)) {
+        if (file.exists(src)) sprintf("Source: %s · last edit %s", src, le_str)
+        else sprintf("Source missing: %s · last edit %s", src, le_str)
+      } else {
+        sprintf("Browser-uploaded · last edit %s", le_str)
+      }
+      div(
+        class = "recovery-row",
+        div(
+          tags$div(tags$b(name)),
+          tags$div(class = "rr-meta", meta)
+        ),
+        div(
+          style = "display: flex; gap: 6px;",
+          actionButton(sprintf("home_recovery_recover_%d_%d", gen, i), "Recover",
+                       class = "btn btn-primary btn-sm"),
+          actionButton(sprintf("home_recovery_drop_%d_%d", gen, i), "Discard",
+                       class = "btn btn-warning btn-sm")
+        )
+      )
+    })
+    showModal(modalDialog(
+      title = "Recover unsaved edits",
+      size = "l",
+      easyClose = TRUE,
+      div(class = "recovery-list", rows),
+      footer = modalButton("Close")
+    ))
+
+    # Bind one observer per row. Input IDs include the modal generation so
+    # observers from prior opens cannot double-fire on a new open.
+    for (i in seq_along(cands)) {
+      local({
+        idx <- i
+        cand <- cands[[idx]]
+        gen_local <- gen
+        observeEvent(input[[sprintf("home_recovery_recover_%d_%d", gen_local, idx)]], {
+          app_state$pending_recovery <- list(
+            workspace_dir = cand$dir,
+            source_path = if (!is.null(cand$source_path) && !is.na(cand$source_path)) cand$source_path else NULL,
+            display_name = cand$source_basename
+          )
+          removeModal()
+          # Trigger the same navigation that home_go_results fires (observed
+          # in app.R server). Random value ensures it always re-fires.
+          session$sendCustomMessage("msterp_trigger_input",
+                                    list(id = "home_go_results", value = stats::runif(1)))
+          refresh_candidates()
+        }, ignoreInit = TRUE, once = TRUE)
+        observeEvent(input[[sprintf("home_recovery_drop_%d_%d", gen_local, idx)]], {
+          tryCatch(unlink(cand$dir, recursive = TRUE, force = TRUE), error = function(e) NULL)
+          refresh_candidates()
+          removeModal()
+          if (length(app_state$recovery_candidates) > 0) {
+            session$sendCustomMessage("msterp_trigger_input",
+                                      list(id = "home_recovery_open", value = stats::runif(1)))
+          }
+        }, ignoreInit = TRUE, once = TRUE)
+      })
+    }
+  }, ignoreInit = TRUE)
+
   invisible(NULL)
 }

@@ -2975,7 +2975,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     preview_dpi = 150L,  # Preview-only DPI (publication export uses separate download/export settings)
     label_selected = list(id = NULL, plot_key = NULL, eng = NULL),
     hover_info_by_plot = list(),
-    switching_node = FALSE  # FIX: Flag to prevent false dirty detection during node switch
+    switching_node = FALSE,  # FIX: Flag to prevent false dirty detection during node switch
+    terpbook_source_path = NULL,  # Absolute path of opened .terpbook (NULL for browser uploads)
+    workspace_id = NULL,          # Stable workspace identifier for the open file
+    save_in_place_confirmed = FALSE,  # First-time overwrite confirmation flag (per session)
+    pending_load = NULL,          # Deferred load payload while a recovery modal is open
+    lock_heartbeat_token = 0L     # Token used to cancel pending heartbeat callbacks
   )
   style_rev <- reactiveVal(0L)
   pr_detail_shared_rev <- reactiveVal(0L)
@@ -3326,19 +3331,121 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     )
   })
   
+  # ---- Workspace lifecycle helpers (per-page-server scope) -------------------
+
+  # Best-effort flush + unlock of the currently-held workspace, if any.
+  # Used on Return click, new-load, and onSessionEnded.
+  release_current_workspace <- function() {
+    tryCatch(.commit_style_debounced$flush(), error = function(e) NULL)
+    if (!is.null(rv$exdir) && dir.exists(rv$exdir)) {
+      tryCatch(tb_workspace_unlock(rv$exdir), error = function(e) NULL)
+    }
+    rv$lock_heartbeat_token <- (rv$lock_heartbeat_token %||% 0L) + 1L
+  }
+
+  # Schedule a 30s heartbeat that re-touches the lock so other instances see
+  # this session as live. Cancels itself if the workspace changes.
+  schedule_lock_heartbeat <- function() {
+    if (!requireNamespace("later", quietly = TRUE)) return(invisible(NULL))
+    rv$lock_heartbeat_token <- (rv$lock_heartbeat_token %||% 0L) + 1L
+    my_token <- isolate(rv$lock_heartbeat_token)
+    target_dir <- isolate(rv$exdir)
+    sid <- session$token
+    tick <- function() {
+      if (!identical(my_token, isolate(rv$lock_heartbeat_token))) return(invisible(NULL))
+      if (is.null(target_dir) || !dir.exists(target_dir)) return(invisible(NULL))
+      tryCatch(tb_workspace_lock(target_dir, sid), error = function(e) NULL)
+      later::later(tick, delay = 30)
+    }
+    later::later(tick, delay = 30)
+    invisible(NULL)
+  }
+
   # Core loader: extracts a .terpbook archive and populates rv.
   # Accepts a filesystem path + display name (used by both upload and
-  # file-association ingress paths).
-  load_terpbook_from_path <- function(path, display_name) {
+  # file-association ingress paths). `source` distinguishes browser uploads
+  # (temp path, no Save-in-place) from file-association opens (real on-disk
+  # source that Save-in-place can write back to).
+  #
+  # Edits persist to a stable workspace dir under the app cache (see
+  # tb_workspace_resolve). When dirty edits are found from a previous session,
+  # the user is prompted (Recover / Discard / Open Fresh Copy) before loading.
+  load_terpbook_from_path <- function(path, display_name, source = c("file", "upload"), recovered_dir = NULL) {
+    source <- match.arg(source)
     if (is.null(path) || !nzchar(path) || !file.exists(path)) {
       showNotification("File missing or does not exist.", type = "error")
       return(invisible(FALSE))
     }
 
-    if (!is.null(rv$exdir) && dir.exists(rv$exdir)) {
-      try(unlink(rv$exdir, recursive = TRUE, force = TRUE), silent = TRUE)
+    # If the caller provided a workspace dir already on disk (recovery from
+    # the home banner), reuse it — skip resolve + recovery prompt.
+    if (!is.null(recovered_dir) && dir.exists(recovered_dir)) {
+      meta <- tryCatch(tb_workspace_meta_read(recovered_dir), error = function(e) list())
+      res <- list(
+        dir = normalizePath(recovered_dir, winslash = "/", mustWork = FALSE),
+        workspace_id = meta$workspace_id %||% basename(recovered_dir),
+        canonical_id = meta$canonical_id %||% basename(recovered_dir),
+        is_new = FALSE, has_dirty_overrides = TRUE,
+        last_edit_at = as.POSIXct(NA), forked = isTRUE(meta$forked),
+        meta = meta
+      )
+      .do_load_terpbook_into_workspace(path, display_name, res, do_unzip = FALSE, source = source)
+      return(invisible(TRUE))
     }
-    rv$exdir <- NULL
+
+    # Resolve workspace BEFORE releasing the current one, so that re-opening the
+    # same file doesn't churn the lock.
+    sid <- session$token
+    res <- tryCatch(
+      tb_workspace_resolve(path, display_name = display_name, session_id = sid),
+      error = function(e) {
+        showNotification(paste("Workspace error:", conditionMessage(e)), type = "error")
+        NULL
+      }
+    )
+    if (is.null(res)) return(invisible(FALSE))
+
+    # If a recovery prompt is required, defer the actual load until the user
+    # picks an option from the modal.
+    if (isTRUE(res$has_dirty_overrides) && !isTRUE(res$is_new)) {
+      rv$pending_load <- list(path = path, display_name = display_name, resolved = res, source = source)
+      last_str <- if (!is.null(res$last_edit_at) && !is.na(res$last_edit_at))
+        format(res$last_edit_at, "%Y-%m-%d %H:%M") else "an earlier session"
+      showModal(modalDialog(
+        title = "Unsaved edits found",
+        easyClose = FALSE,
+        tagList(
+          tags$p(
+            "Unsaved edits from ", tags$b(last_str),
+            " were found for ", tags$code(display_name %||% basename(path)), "."
+          ),
+          tags$p("How would you like to proceed?"),
+          tags$ul(
+            tags$li(tags$b("Recover"), " — reopen with your previous edits."),
+            tags$li(tags$b("Discard"), " — start clean from the file on disk."),
+            tags$li(tags$b("Open Fresh Copy"), " — open a clean copy in a separate workspace, leaving the recoverable edits alone.")
+          )
+        ),
+        footer = tagList(
+          actionButton("res_recovery_recover", "Recover", class = "btn btn-primary"),
+          actionButton("res_recovery_discard", "Discard", class = "btn btn-warning"),
+          actionButton("res_recovery_fresh",   "Open Fresh Copy"),
+          modalButton("Cancel")
+        )
+      ))
+      return(invisible(TRUE))
+    }
+
+    # No recovery needed — proceed straight to loading. New workspace, or an
+    # existing-but-clean one (e.g., previously discarded).
+    .do_load_terpbook_into_workspace(path, display_name, res, do_unzip = TRUE, source = source)
+  }
+
+  # Actually unzips (optionally) and populates rv. Assumes workspace dir at
+  # res$dir is ready to use.
+  .do_load_terpbook_into_workspace <- function(path, display_name, res, do_unzip, source = "file") {
+    # Tear down any previously-held workspace before switching.
+    release_current_workspace()
 
     if (exists("tb_cache_clear", mode = "function")) {
       tb_cache_clear()
@@ -3348,23 +3455,32 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     on.exit(msterp_set_busy(session, FALSE), add = TRUE)
 
     tryCatch({
-      msterp_set_busy(session, TRUE, "Reading archive index...", percent = 10)
-      zlist <- utils::unzip(path, list = TRUE)
-      znames <- as.character(zlist$Name %||% zlist[, 1, drop = TRUE])
-      if (length(znames) == 0) stop("Zip index empty (archive invalid).")
+      if (isTRUE(do_unzip)) {
+        msterp_set_busy(session, TRUE, "Reading archive index...", percent = 10)
+        zlist <- utils::unzip(path, list = TRUE)
+        znames <- as.character(zlist$Name %||% zlist[, 1, drop = TRUE])
+        if (length(znames) == 0) stop("Zip index empty (archive invalid).")
 
-      has_manifest <- any(grepl("(^|/)manifest\\.json$", znames))
-      if (!has_manifest) {
-        stop("Archive does not contain manifest.json (expected run/manifest.json or similar).")
+        has_manifest <- any(grepl("(^|/)manifest\\.json$", znames))
+        if (!has_manifest) {
+          stop("Archive does not contain manifest.json (expected run/manifest.json or similar).")
+        }
+
+        msterp_set_busy(session, TRUE, "Extracting files...", percent = 35)
+        # Clean any stale unzip contents but preserve workspace metadata files.
+        keep <- c(basename(.tb_workspace_meta_path(res$dir)),
+                  basename(.tb_workspace_lock_path(res$dir)),
+                  basename(.tb_workspace_clean_path(res$dir)))
+        for (e in setdiff(list.files(res$dir, all.files = TRUE, no.. = TRUE), keep)) {
+          try(unlink(file.path(res$dir, e), recursive = TRUE, force = TRUE), silent = TRUE)
+        }
+        utils::unzip(path, exdir = res$dir, overwrite = TRUE)
+        # Discarded/fresh workspaces should not show as dirty until edits land.
+        try(tb_workspace_mark_clean(res$dir, file.mtime(path)), silent = TRUE)
       }
 
-      msterp_set_busy(session, TRUE, "Extracting files...", percent = 35)
-      exdir <- tempfile("terpbook_")
-      dir.create(exdir, recursive = TRUE, showWarnings = FALSE)
-      utils::unzip(path, exdir = exdir, overwrite = TRUE)
-
       msterp_set_busy(session, TRUE, "Locating run root...", percent = 55)
-      run_root <- tb_find_run_root(exdir)
+      run_root <- tb_find_run_root(res$dir)
 
       msterp_set_busy(session, TRUE, "Loading manifest...", percent = 70)
       man <- tb_load_manifest(run_root)
@@ -3377,8 +3493,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       msterp_set_busy(session, TRUE, "Finalizing...", percent = 95)
 
       rv$exdir <- tryCatch(
-        normalizePath(exdir, winslash = "/", mustWork = FALSE),
-        error = function(e) exdir
+        normalizePath(res$dir, winslash = "/", mustWork = FALSE),
+        error = function(e) res$dir
       )
       rv$run_root <- man$run_root
       rv$manifest <- man$manifest
@@ -3388,11 +3504,31 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       rv$run_data_type <- man$manifest$data_type %||% "proteomics"
 
       rv$terpbook_filename <- display_name %||% basename(path) %||% "Unknown"
+      # Source path is only meaningful when the caller passed a real on-disk
+      # location (file association / IPC). Browser uploads use a tempfile that
+      # the OS will reclaim — keep NULL so Save-in-place stays hidden.
+      rv$terpbook_source_path <- if (identical(source, "upload")) NULL else
+        tryCatch(normalizePath(path, winslash = "/", mustWork = FALSE), error = function(e) path)
+      rv$workspace_id <- res$workspace_id
+      rv$save_in_place_confirmed <- FALSE
+      rv$has_unsaved_changes <- FALSE
+      rv$save_status <- "saved"
       rv$active_node_id <- "overview"
       rv$loaded <- TRUE
 
+      # Acquire the workspace lock and start the heartbeat.
+      tryCatch(tb_workspace_lock(rv$exdir, session$token), error = function(e) NULL)
+      schedule_lock_heartbeat()
+
       if (length(rv$load_warnings) > 0) {
         showNotification(paste(rv$load_warnings, collapse = "\n"), type = "warning", duration = NULL)
+      }
+
+      if (isTRUE(res$forked)) {
+        showNotification(
+          "Another session is using this file; opened a separate workspace for this window.",
+          type = "warning", duration = 8
+        )
       }
 
       msterp_set_busy(session, TRUE, "Ready.", percent = 100)
@@ -3403,13 +3539,50 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     })
   }
 
+  # ---- Recovery modal handlers ---------------------------------------------
+
+  observeEvent(input$res_recovery_recover, {
+    pl <- rv$pending_load
+    rv$pending_load <- NULL
+    removeModal()
+    if (is.null(pl)) return()
+    .do_load_terpbook_into_workspace(pl$path, pl$display_name, pl$resolved, do_unzip = FALSE,
+                                     source = pl$source %||% "file")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$res_recovery_discard, {
+    pl <- rv$pending_load
+    rv$pending_load <- NULL
+    removeModal()
+    if (is.null(pl)) return()
+    tryCatch(tb_workspace_reset(pl$resolved$dir), error = function(e) NULL)
+    # Re-resolve so the metadata gets re-seeded for the now-empty dir.
+    res2 <- tryCatch(tb_workspace_resolve(pl$path, pl$display_name, session$token),
+                     error = function(e) pl$resolved)
+    .do_load_terpbook_into_workspace(pl$path, pl$display_name, res2, do_unzip = TRUE,
+                                     source = pl$source %||% "file")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$res_recovery_fresh, {
+    pl <- rv$pending_load
+    rv$pending_load <- NULL
+    removeModal()
+    if (is.null(pl)) return()
+    res2 <- tryCatch(
+      tb_workspace_fresh_copy(pl$path, pl$display_name, session$token),
+      error = function(e) pl$resolved
+    )
+    .do_load_terpbook_into_workspace(pl$path, pl$display_name, res2, do_unzip = TRUE,
+                                     source = pl$source %||% "file")
+  }, ignoreInit = TRUE)
+
   observeEvent(input$res_load_upload, {
     f <- input$res_terpbook_upload
     if (is.null(f) || is.null(f$datapath)) {
       showNotification("Upload missing or file does not exist.", type = "error")
       return()
     }
-    load_terpbook_from_path(f$datapath, f$name)
+    load_terpbook_from_path(f$datapath, f$name, source = "upload")
   }, ignoreInit = TRUE)
 
   # File-association ingress: app.R sets app_state$pending_open_file when a
@@ -3421,7 +3594,35 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       ext <- tolower(tools::file_ext(path))
       if (!ext %in% c("terpbook", "zip")) return()
       app_state$pending_open_file <- NULL
-      load_terpbook_from_path(path, basename(path))
+      load_terpbook_from_path(path, basename(path), source = "file")
+    }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+    # Recovery banner click on the home page: passes a workspace dir to reopen.
+    observeEvent(app_state$pending_recovery, {
+      info <- app_state$pending_recovery
+      if (is.null(info) || !is.list(info)) return()
+      app_state$pending_recovery <- NULL
+      src_path <- info$source_path
+      ws_dir <- info$workspace_dir
+      display <- info$display_name %||% basename(ws_dir %||% "recovered.terpbook")
+      if (is.null(ws_dir) || !dir.exists(ws_dir)) {
+        showNotification("Recovery workspace no longer exists.", type = "warning")
+        return()
+      }
+      # If the source is gone, synthesize a virtual path inside the workspace
+      # so existence checks pass. Save-in-place will be hidden either way
+      # (source = "upload"), and the workspace already contains everything.
+      eff_path <- if (!is.null(src_path) && file.exists(src_path)) src_path else {
+        # Use any file inside the workspace as a stand-in; load_terpbook_from_path
+        # only needs `path` to exist when do_unzip = TRUE, which we skip here.
+        files <- list.files(ws_dir, recursive = TRUE, full.names = TRUE)
+        if (length(files) == 0) {
+          showNotification("Recovery workspace is empty.", type = "warning"); return()
+        }
+        files[1]
+      }
+      src_for_load <- if (!is.null(src_path) && file.exists(src_path)) "file" else "upload"
+      load_terpbook_from_path(eff_path, display, source = src_for_load, recovered_dir = ws_dir)
     }, ignoreNULL = TRUE, ignoreInit = TRUE)
   }
 
@@ -5988,12 +6189,11 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   })
 
 
-  observeEvent(input$res_return_gate, {
-    # Cleanup extracted dir if present
-    if (!is.null(rv$exdir) && dir.exists(rv$exdir)) {
-      try(unlink(rv$exdir, recursive = TRUE, force = TRUE), silent = TRUE)
-    }
-
+  # Internal helper: actually clears all viewer state. Workspace itself is
+  # preserved on disk (so dirty edits stay recoverable); only the lock is
+  # released so other instances can pick it up.
+  .do_close_terpbook <- function() {
+    release_current_workspace()
     rv$exdir <- NULL
     rv$run_root <- NULL
     rv$manifest <- NULL
@@ -6002,8 +6202,59 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     rv$nav_obs <- list()
     rv$last_sparse_by_node <- list()
     rv$loaded <- FALSE
-    rv$pending_cluster_goora <- NULL  # Clear any pending cluster GO-ORA state
+    rv$pending_cluster_goora <- NULL
+    rv$terpbook_source_path <- NULL
+    rv$workspace_id <- NULL
+    rv$has_unsaved_changes <- FALSE
+    rv$save_status <- "saved"
+  }
+
+  observeEvent(input$res_return_gate, {
+    # If the workspace has unsaved edits, give the user a chance to keep them
+    # for recovery (or discard outright) before releasing the page state.
+    if (isTRUE(rv$has_unsaved_changes) && !is.null(rv$exdir) && dir.exists(rv$exdir)) {
+      showModal(modalDialog(
+        title = "Unsaved edits",
+        easyClose = FALSE,
+        tagList(
+          tags$p("You have unsaved edits in this terpbook."),
+          tags$p("Keeping them lets you recover from the home page next time. Discarding throws them away.")
+        ),
+        footer = tagList(
+          actionButton("res_return_keep",    "Keep for recovery", class = "btn btn-primary"),
+          actionButton("res_return_discard", "Discard edits",     class = "btn btn-warning"),
+          modalButton("Cancel")
+        )
+      ))
+      return()
+    }
+    .do_close_terpbook()
   }, ignoreInit = TRUE)
+
+  observeEvent(input$res_return_keep, {
+    removeModal()
+    .do_close_terpbook()
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$res_return_discard, {
+    removeModal()
+    if (!is.null(rv$exdir) && dir.exists(rv$exdir)) {
+      try(tb_workspace_reset(rv$exdir), silent = TRUE)
+    }
+    .do_close_terpbook()
+  }, ignoreInit = TRUE)
+
+  # Best-effort cleanup when the Shiny session ends gracefully (browser close,
+  # window close, server shutdown). Will not run on hard crash — design must
+  # work without it; the workspace itself stays on disk for recovery.
+  session$onSessionEnded(function() {
+    isolate({
+      tryCatch(.commit_style_debounced$flush(), error = function(e) NULL)
+      if (!is.null(rv$exdir) && dir.exists(rv$exdir)) {
+        tryCatch(tb_workspace_unlock(rv$exdir), error = function(e) NULL)
+      }
+    })
+  })
 
   # ---- Commit triggers for deferred pending changes -------------------------
 
@@ -6870,6 +7121,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         rv$save_status <- "saved"
         rv$save_error <- NULL
 
+        # Mark workspace clean so the recovery banner stops surfacing it.
+        # We can't know what the user named the download, so use the original
+        # source mtime when available (file-association case), else "now".
+        src_mt <- if (!is.null(rv$terpbook_source_path) && file.exists(rv$terpbook_source_path))
+          as.numeric(file.mtime(rv$terpbook_source_path)) else as.numeric(Sys.time())
+        try(tb_workspace_mark_clean(rv$exdir, src_mt), silent = TRUE)
+
         showNotification(
           paste0("Downloaded updated .terpbook (", nodes_written, " node(s) modified, ",
                  round(zip_size / 1024 / 1024, 2), " MB)"),
@@ -6890,6 +7148,139 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     },
     contentType = "application/zip"
   )
+
+  # ---- Save in place (file-association ingress only) ----------------------
+  # Writes the current workspace back to the original on-disk path the
+  # terpbook was opened from. Hidden when there is no source path
+  # (browser uploads).
+
+  .do_save_in_place <- function() {
+    src <- rv$terpbook_source_path
+    if (is.null(src) || !nzchar(src)) {
+      showNotification("No source file to save to. Use 'Save .terpbook' instead.",
+                       type = "warning"); return(invisible(FALSE))
+    }
+    if (!isTRUE(rv$loaded) || is.null(rv$run_root) || is.null(rv$nodes_df)) {
+      showNotification("No terpbook loaded.", type = "error"); return(invisible(FALSE))
+    }
+    if (!dir.exists(rv$run_root)) {
+      showNotification(paste("Run directory missing:", rv$run_root), type = "error")
+      return(invisible(FALSE))
+    }
+
+    rv$save_status <- "saving"; rv$save_error <- NULL
+    msterp_set_busy(session, TRUE, "Saving in place...", percent = 5)
+    on.exit(msterp_set_busy(session, FALSE), add = TRUE)
+
+    tryCatch({
+      # Drain any in-flight debounced state.
+      .commit_style_debounced$flush()
+
+      msterp_set_busy(session, TRUE, "Persisting node states...", percent = 25)
+      all_cached_node_ids <- unique(c(
+        names(rv$cache_style_by_node),
+        names(rv$cache_plotly_by_node),
+        names(rv$cache_vis_by_node)
+      ))
+      for (node_id in all_cached_node_ids) {
+        idx <- match(node_id, rv$nodes_df$node_id)
+        if (!is.finite(idx)) next
+        node_dir <- rv$nodes_df$node_dir[[idx]]
+        if (!dir.exists(node_dir)) next
+        payload <- list(
+          style = rv$cache_style_by_node[[node_id]] %||% list(),
+          plotly = rv$cache_plotly_by_node[[node_id]],
+          visibility = rv$cache_vis_by_node[[node_id]]
+        )
+        tryCatch(tb_save_render_state_atomic(node_dir, payload),
+                 error = function(e) warning("Failed to save node ", node_id, ": ", conditionMessage(e)))
+      }
+
+      msterp_set_busy(session, TRUE, "Building archive...", percent = 60)
+      parent_dir <- dirname(rv$run_root)
+      run_folder <- basename(rv$run_root)
+      # Tmp file lives next to the destination so the rename is atomic on the
+      # same filesystem. Falls back to tempdir if the source dir isn't writable.
+      dest_dir <- dirname(src)
+      tmp_zip <- tryCatch(
+        tempfile(pattern = paste0(".", basename(src), ".tmp_"), tmpdir = dest_dir,
+                 fileext = ".terpbook"),
+        error = function(e) tempfile(pattern = "terpbook_save_", fileext = ".terpbook")
+      )
+      res_safe_zip(zipfile = tmp_zip, files = run_folder, root = parent_dir)
+      if (!file.exists(tmp_zip) || file.info(tmp_zip)$size == 0) {
+        if (file.exists(tmp_zip)) try(file.remove(tmp_zip), silent = TRUE)
+        stop("Failed to build archive (empty or missing).")
+      }
+
+      msterp_set_busy(session, TRUE, "Replacing source file...", percent = 85)
+      ok <- file.rename(tmp_zip, src)
+      if (!ok) {
+        # Windows may refuse rename-over; remove + retry.
+        if (file.exists(src) && !file.remove(src)) {
+          if (file.exists(tmp_zip)) try(file.remove(tmp_zip), silent = TRUE)
+          stop("Cannot overwrite source file (locked or read-only): ", src)
+        }
+        if (!file.rename(tmp_zip, src)) {
+          if (file.exists(tmp_zip)) try(file.remove(tmp_zip), silent = TRUE)
+          stop("Failed to atomically replace source file: ", src)
+        }
+      }
+
+      # Workspace is now in sync with the source file.
+      try(tb_workspace_mark_clean(rv$exdir, file.mtime(src)), silent = TRUE)
+      rv$has_unsaved_changes <- FALSE
+      rv$save_status <- "saved"
+      rv$save_error <- NULL
+      # mtime/size changed, so the canonical workspace_id has shifted. Refresh
+      # metadata so the next reopen finds the same workspace.
+      meta <- tryCatch(tb_workspace_meta_read(rv$exdir), error = function(e) list())
+      meta$canonical_id <- tb_workspace_id(src, rv$terpbook_filename)
+      meta$source_mtime <- as.numeric(file.mtime(src))
+      meta$source_size  <- as.numeric(file.info(src)$size %||% NA)
+      tryCatch(tb_workspace_meta_write(rv$exdir, meta), error = function(e) NULL)
+
+      msterp_set_busy(session, TRUE, "Saved.", percent = 100)
+      showNotification(paste0("Saved to ", basename(src), "."),
+                       type = "message", duration = 5)
+      invisible(TRUE)
+    }, error = function(e) {
+      rv$save_status <- "failed"
+      rv$save_error <- conditionMessage(e)
+      showNotification(paste("Save failed:", conditionMessage(e)),
+                       type = "error", duration = 10)
+      invisible(FALSE)
+    })
+  }
+
+  observeEvent(input$res_save_in_place, {
+    if (is.null(rv$terpbook_source_path)) return()
+    # First-time-per-session confirmation. After confirmation, the user can
+    # mash the button without further prompts (they already opted in).
+    if (!isTRUE(rv$save_in_place_confirmed)) {
+      showModal(modalDialog(
+        title = "Overwrite source file?",
+        easyClose = FALSE,
+        tagList(
+          tags$p("Save will replace the original file in place:"),
+          tags$pre(rv$terpbook_source_path),
+          tags$p(tags$small("After this confirmation, future Save clicks will skip the prompt for this session."))
+        ),
+        footer = tagList(
+          actionButton("res_save_in_place_confirm", "Overwrite", class = "btn btn-primary"),
+          modalButton("Cancel")
+        )
+      ))
+      return()
+    }
+    .do_save_in_place()
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$res_save_in_place_confirm, {
+    removeModal()
+    rv$save_in_place_confirmed <- TRUE
+    .do_save_in_place()
+  }, ignoreInit = TRUE)
 
   # ---- Main view -------------------------------------------------------------
   output$res_main <- renderUI({
@@ -7542,6 +7933,16 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       class = paste("btn-sm", if (isTRUE(rv$has_unsaved_changes)) "btn-primary" else "")
     )
 
+    # Save-in-place: only when the file was opened from a real on-disk source
+    # (file association / IPC). Browser uploads keep download as the only path.
+    save_in_place_btn <- if (!is.null(rv$terpbook_source_path)) {
+      lbl <- if (isTRUE(rv$has_unsaved_changes)) "Save *" else "Save"
+      actionButton("res_save_in_place", lbl,
+                   class = paste("btn-sm",
+                                 if (isTRUE(rv$has_unsaved_changes)) "btn-primary" else ""),
+                   title = paste0("Save changes back to ", basename(rv$terpbook_source_path)))
+    } else NULL
+
     # Table-only processing engines: dedicated download bar + optional substep section
     if (!has_plot && is_processing_engine) {
       return(
@@ -7550,6 +7951,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
             class = "res-size-bar",
             style = "justify-content: flex-end;",
             downloadButton("res_dl_dp_processed", "Processed Data (.xlsx)", class = "btn-primary btn-sm"),
+            save_in_place_btn,
             save_btn
           ),
           if (identical(eng, "dataprocessor")) uiOutput("res_dp_substep_download_ui")
@@ -7564,6 +7966,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       if (isTRUE(show_plot_export)) actionButton("res_copy_plot", "Copy", class = "btn-sm"),
       if (is_processing_engine) downloadButton("res_dl_dp_processed", "Processed Data (.xlsx)", class = "btn-primary btn-sm"),
       if (identical(eng, "dataprocessor")) uiOutput("res_dp_substep_download_ui"),
+      save_in_place_btn,
       save_btn
     )
   })
@@ -8012,8 +8415,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     tb_ggplot_to_girafe(p, style = style, girafe_id = "res_rankplot_girafe")
   })
 
-  # girafe selection -> UniProt / metabolite modal. Selection is keyed by
-  # data_id which is set to the gene/protein identifier in the renderer.
+  # Click-to-search for volcano / rankplot is wired via geom_point_interactive
+  # onclick (.tb_girafe_pick_onclick in terpbook.R), which fires this single
+  # input on every click using priority:'event' — no selection state, no
+  # visible outline on the clicked point, repeat clicks on the same gene work.
   .res_handle_girafe_pick <- function(picked) {
     if (is.null(picked)) return()
     picked <- as.character(picked)
@@ -8027,16 +8432,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     }
   }
 
-  observeEvent(input$res_volcano_girafe_selected, {
+  observeEvent(input$res_girafe_picked, {
     eng <- tolower(active_engine_id() %||% "")
-    if (!identical(eng, "volcano")) return()
-    .res_handle_girafe_pick(input$res_volcano_girafe_selected)
-  }, ignoreInit = TRUE, ignoreNULL = TRUE)
-
-  observeEvent(input$res_rankplot_girafe_selected, {
-    eng <- tolower(active_engine_id() %||% "")
-    if (!identical(eng, "rankplot")) return()
-    .res_handle_girafe_pick(input$res_rankplot_girafe_selected)
+    if (!(eng %in% c("volcano", "rankplot"))) return()
+    .res_handle_girafe_pick(input$res_girafe_picked)
   }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
   # Track the SHAPE signal for the outer plot container. Only re-fires

@@ -19,6 +19,7 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(plotly)
   library(ggiraph)
+  library(ggrepel)
   library(scales)
   library(pheatmap)
   library(ggplotify)
@@ -108,8 +109,23 @@ server <- function(input, output, session) {
     datasets = list(),
     pipelines = list(),
     last_run = NULL,
-    pending_open_file = NULL
+    pending_open_file = NULL,
+    pending_recovery = NULL,        # set when home banner asks results to reopen a workspace
+    recovery_candidates = list()    # snapshot of dirty workspaces shown on home banner
   )
+
+  # Sweep stale workspaces and snapshot any dirty ones for the home banner.
+  tryCatch({
+    sweep_res <- tb_workspace_sweep()
+    if (length(sweep_res$warnings) > 0) {
+      for (w in sweep_res$warnings) {
+        showNotification(w, type = "warning", duration = 8)
+      }
+    }
+    app_state$recovery_candidates <- tb_workspace_scan_dirty()
+  }, error = function(e) {
+    message("[workspace sweep] ", conditionMessage(e))
+  })
 
   current_page <- reactiveVal("home")
 
