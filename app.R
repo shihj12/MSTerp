@@ -109,20 +109,28 @@ server <- function(input, output, session) {
     datasets = list(),
     pipelines = list(),
     last_run = NULL,
-    pending_open_file = NULL,
-    pending_recovery = NULL,        # set when home banner asks results to reopen a workspace
-    recovery_candidates = list()    # snapshot of dirty workspaces shown on home banner
+    pending_open_file = NULL
   )
 
-  # Sweep stale workspaces and snapshot any dirty ones for the home banner.
+  # Silent stale-workspace sweep at startup. With autosave-to-source and no
+  # recovery UI, leftover workspaces are just transient cache from a previous
+  # session — sweep anything older than 24h with no live lock. The 24h grace
+  # leaves room for a freshly-crashed workspace to be picked up by reopening
+  # the source file (tb_workspace_resolve will find it via canonical_id).
   tryCatch({
-    sweep_res <- tb_workspace_sweep()
-    if (length(sweep_res$warnings) > 0) {
-      for (w in sweep_res$warnings) {
-        showNotification(w, type = "warning", duration = 8)
+    ws_root <- tryCatch(tb_workspace_root(), error = function(e) NA_character_)
+    if (!is.na(ws_root) && dir.exists(ws_root)) {
+      now <- Sys.time()
+      for (d in list.dirs(ws_root, recursive = FALSE, full.names = TRUE)) {
+        lock <- file.path(d, "workspace.lock")
+        lock_stale <- !file.exists(lock) ||
+                      difftime(now, file.mtime(lock), units = "secs") > 600   # 10 min
+        dir_old    <- difftime(now, file.mtime(d), units = "hours") > 24
+        if (lock_stale && dir_old) {
+          try(unlink(d, recursive = TRUE, force = TRUE), silent = TRUE)
+        }
       }
     }
-    app_state$recovery_candidates <- tb_workspace_scan_dirty()
   }, error = function(e) {
     message("[workspace sweep] ", conditionMessage(e))
   })

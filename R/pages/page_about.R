@@ -189,22 +189,6 @@ page_about_ui <- function(linkedin_logo = "static/img/linkedin.png",
               ),
               
               about_card(
-                "Recovery cache",
-                tags$div(
-                  tags$div(class = "muted",
-                           "MSTerp keeps an on-disk workspace for each open terpbook so unsaved edits survive crashes and reopens."),
-                  uiOutput("about_recovery_cache_info"),
-                  tags$div(
-                    style = "display: flex; gap: 8px; margin-top: 8px;",
-                    actionButton("about_recovery_refresh", "Refresh",
-                                 class = "btn btn-outline-secondary btn-sm"),
-                    actionButton("about_recovery_clear", "Clear recovery data",
-                                 class = "btn btn-outline-danger btn-sm")
-                  )
-                )
-              ),
-
-              about_card(
                 "Citations",
                 tags$ol(
                   cite_item(
@@ -264,63 +248,6 @@ page_about_ui <- function(linkedin_logo = "static/img/linkedin.png",
 
 page_about_server <- function(input, output, session, app_state = NULL) {
   scholar_works_url <- "https://scholar.google.com/citations?hl=en&user=IgEvNuQAAAAJ&view_op=list_works&sortby=pubdate"
-
-  # ---- Recovery cache info ------------------------------------------------
-  recovery_refresh_token <- shiny::reactiveVal(0L)
-
-  fmt_size <- function(b) {
-    if (!is.numeric(b) || !is.finite(b)) return("?")
-    units <- c("B", "KB", "MB", "GB", "TB")
-    i <- 1L
-    while (b >= 1024 && i < length(units)) { b <- b / 1024; i <- i + 1L }
-    sprintf("%.1f %s", b, units[i])
-  }
-
-  output$about_recovery_cache_info <- shiny::renderUI({
-    recovery_refresh_token()  # take dependency for explicit refreshes
-    root <- tryCatch(tb_workspace_root(), error = function(e) NA_character_)
-    cands <- tryCatch(tb_workspace_scan_dirty(), error = function(e) list())
-    size_b <- tryCatch(tb_workspace_total_size(), error = function(e) 0)
-    n_dirs <- if (dir.exists(root)) length(list.dirs(root, recursive = FALSE, full.names = FALSE)) else 0L
-
-    tags$div(
-      style = "margin-top: 8px; font-size: 13px;",
-      tags$div(tags$b("Cache path: "), tags$code(root)),
-      tags$div(tags$b("Workspaces: "), n_dirs,
-               " (", length(cands), " with unsaved edits)"),
-      tags$div(tags$b("Total size: "), fmt_size(size_b))
-    )
-  })
-
-  observeEvent(input$about_recovery_refresh, {
-    recovery_refresh_token(isolate(recovery_refresh_token()) + 1L)
-  }, ignoreInit = TRUE)
-
-  observeEvent(input$about_recovery_clear, {
-    showModal(modalDialog(
-      title = "Clear all recovery data?",
-      easyClose = FALSE,
-      tagList(
-        tags$p("This permanently deletes every workspace not currently in use, including any unsaved edits."),
-        tags$p("Currently-open terpbooks are preserved.")
-      ),
-      footer = tagList(
-        actionButton("about_recovery_clear_confirm", "Clear", class = "btn btn-danger"),
-        modalButton("Cancel")
-      )
-    ))
-  }, ignoreInit = TRUE)
-
-  observeEvent(input$about_recovery_clear_confirm, {
-    removeModal()
-    n <- tryCatch(tb_workspace_clear_all(), error = function(e) 0L)
-    if (!is.null(app_state)) {
-      app_state$recovery_candidates <- tryCatch(tb_workspace_scan_dirty(), error = function(e) list())
-    }
-    recovery_refresh_token(isolate(recovery_refresh_token()) + 1L)
-    showNotification(sprintf("Removed %d workspace(s).", n), type = "message", duration = 5)
-  }, ignoreInit = TRUE)
-
 
   # Static fallback publications (update periodically)
   # Used when Google Scholar blocks automated requests (common on servers)
