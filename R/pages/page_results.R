@@ -3260,13 +3260,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
               class = "res-gate-inner msterp-gate-body",
               div(class = "msterp-gate-title", "Load Results"),
               div(class = "msterp-gate-help",
-                  "Open from disk to enable autosave back to the original file. Upload is for cloud/dev use and saves only via Download."),
+                  "Open a .terpbook from disk. Edits autosave back to the same file every 30 seconds."),
               div(
                 class = "msterp-gate-actions",
-                actionButton("res_open_native", "Open from disk", class = "btn-primary"),
-                tags$hr(style = "margin: 12px 0; border-color: var(--color-border);"),
-                fileInput("res_terpbook_upload", label = NULL, accept = c(".terpbook", ".zip")),
-                actionButton("res_load_upload", "Load (upload)")
+                actionButton("res_open_native", "Open .terpbook", class = "btn-primary")
               )
             )
           )
@@ -3525,34 +3522,30 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     })
   }
 
-  observeEvent(input$res_load_upload, {
-    f <- input$res_terpbook_upload
-    if (is.null(f) || is.null(f$datapath)) {
-      showNotification("Upload missing or file does not exist.", type = "error")
-      return()
-    }
-    load_terpbook_from_path(f$datapath, f$name, source = "upload")
-  }, ignoreInit = TRUE)
-
-  # Native file picker — gives us a real disk path so source = "file" sticks
-  # and autosave + Save now activate. fileInput() above produces only a
-  # tempfile (browsers strip the original path for security), which forces
-  # source = "upload". This is the recommended path for the packaged desktop
-  # app; the upload path remains as a fallback for cloud/dev deployments.
+  # Native file picker — uses utils::choose.files() (base R, Windows-native
+  # file dialog, no extra deps) to capture the real disk path. That makes
+  # source = "file" stick so the autosave timer and Save now button activate.
+  # We deliberately do NOT use Shiny's fileInput here: it strips the original
+  # path (browser security) and produces a tempfile, which forces upload
+  # semantics and silently disables autosave.
   observeEvent(input$res_open_native, {
-    if (!requireNamespace("tcltk", quietly = TRUE)) {
+    if (!exists("choose.files", where = asNamespace("utils"), mode = "function")) {
       showNotification(
-        "Native file picker unavailable (tcltk not installed). Use Upload instead.",
-        type = "error", duration = 6
+        "Native file picker unavailable on this platform. Re-launch via double-click on a .terpbook in Explorer.",
+        type = "error", duration = 8
       )
       return()
     }
     path <- tryCatch(
-      tcltk::tk_choose.files(
+      utils::choose.files(
         caption = "Open .terpbook",
         multi = FALSE,
-        filters = matrix(c("Terpbook", ".terpbook", "Zip", ".zip"),
-                         ncol = 2, byrow = TRUE)
+        filters = matrix(
+          c("Terpbook (*.terpbook)", "*.terpbook",
+            "Zip archive (*.zip)",   "*.zip",
+            "All files (*.*)",       "*.*"),
+          ncol = 2, byrow = TRUE
+        )
       ),
       error = function(e) character()
     )
