@@ -3259,11 +3259,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
             div(
               class = "res-gate-inner msterp-gate-body",
               div(class = "msterp-gate-title", "Load Results"),
-              div(class = "msterp-gate-help", "Upload a .terpbook or .zip to view results."),
+              div(class = "msterp-gate-help",
+                  "Open from disk to enable autosave back to the original file. Upload is for cloud/dev use and saves only via Download."),
               div(
                 class = "msterp-gate-actions",
+                actionButton("res_open_native", "Open from disk", class = "btn-primary"),
+                tags$hr(style = "margin: 12px 0; border-color: var(--color-border);"),
                 fileInput("res_terpbook_upload", label = NULL, accept = c(".terpbook", ".zip")),
-                actionButton("res_load_upload", "Load")
+                actionButton("res_load_upload", "Load (upload)")
               )
             )
           )
@@ -3529,6 +3532,36 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       return()
     }
     load_terpbook_from_path(f$datapath, f$name, source = "upload")
+  }, ignoreInit = TRUE)
+
+  # Native file picker — gives us a real disk path so source = "file" sticks
+  # and autosave + Save now activate. fileInput() above produces only a
+  # tempfile (browsers strip the original path for security), which forces
+  # source = "upload". This is the recommended path for the packaged desktop
+  # app; the upload path remains as a fallback for cloud/dev deployments.
+  observeEvent(input$res_open_native, {
+    if (!requireNamespace("tcltk", quietly = TRUE)) {
+      showNotification(
+        "Native file picker unavailable (tcltk not installed). Use Upload instead.",
+        type = "error", duration = 6
+      )
+      return()
+    }
+    path <- tryCatch(
+      tcltk::tk_choose.files(
+        caption = "Open .terpbook",
+        multi = FALSE,
+        filters = matrix(c("Terpbook", ".terpbook", "Zip", ".zip"),
+                         ncol = 2, byrow = TRUE)
+      ),
+      error = function(e) character()
+    )
+    if (length(path) == 0 || !nzchar(path)) return()    # user cancelled
+    if (!file.exists(path)) {
+      showNotification(paste("File not found:", path), type = "error")
+      return()
+    }
+    load_terpbook_from_path(path, basename(path), source = "file")
   }, ignoreInit = TRUE)
 
   # File-association ingress: app.R sets app_state$pending_open_file when a
