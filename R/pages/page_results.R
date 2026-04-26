@@ -1435,6 +1435,14 @@ page_results_ui <- function() {
           if (payload && payload.url) window.open(payload.url, '_blank');
         });
 
+        // Clear ggiraph single-selection so re-clicking the same point fires
+        // input$<id>_selected again. Server fires this after handling the
+        // click-to-search modal trigger.
+        Shiny.addCustomMessageHandler('res_clear_girafe_selection', function(payload) {
+          if (!payload || !payload.id) return;
+          Shiny.setInputValue(payload.id + '_selected', null, {priority: 'event'});
+        });
+
         // Blur-only update for result viewer width/height inputs
         // Prevents rapid plot re-renders while user is typing
         $(document).on('shiny:bound', function(e) {
@@ -2178,7 +2186,7 @@ page_results_ui <- function() {
           justify-content: center;
           width: 100%;
         }
-        .res-pr-detail-wrap .girafe_container_div {
+        .res-pr-detail-wrap .girafe_container_std {
           margin: 0 auto;
         }
 
@@ -2348,6 +2356,24 @@ page_results_ui <- function() {
           height: 100% !important;
           object-fit: contain;
           object-position: center;
+        }
+
+        /* Girafe widget (volcano + rankplot): give .girafe_container_std an
+           explicit height so the SVG inside (which ggiraph styles with
+           height: 100% via autoScale) has a definite parent to resolve
+           against. Without this, container_std auto-heights to its content,
+           the SVG percentage falls back to auto, and the SVG sizes itself
+           from its viewBox aspect (overflowing the box vertically when the
+           stage aspect is narrower than the chart aspect, leaving dead
+           space when wider). The .res-plot-box itself is aspect-matched to
+           the chart via --res-plot-ar, so SVG fills box edge-to-edge with
+           no internal letterboxing.
+           NOTE: ggiraph 0.9.x emits class .girafe_container_std (NOT
+           .girafe_container_div). The corresponding rule for peptide-
+           region detail is at .res-pr-detail-wrap above. */
+        .res-girafe-wrap .girafe_container_std {
+          width: 100% !important;
+          height: 100% !important;
         }
 
         .res-plot-interact {
@@ -7520,7 +7546,6 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       eng_l <- tolower(eng %||% "")
       plot_box_class <- "res-plot-box"
       if ((eng_l == "2dgofcs" && view_mode == "interactive") ||
-          eng_l %in% c("volcano", "rankplot") ||
           isTRUE(is_pr_detail)) {
         plot_box_class <- "res-plot-box res-plot-box-free"
       }
@@ -7762,7 +7787,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           ar <- w / h
           view_mode <- tolower(as.character(st$view_mode %||% "export_preview"))
           plot_box_class <- "res-plot-box"
-          if (tolower(eng %||% "") %in% c("volcano", "2dgofcs", "rankplot") && view_mode == "interactive") {
+          if (tolower(eng %||% "") %in% c("2dgofcs") && view_mode == "interactive") {
             plot_box_class <- "res-plot-box res-plot-box-free"
           }
 
@@ -8415,10 +8440,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     tb_ggplot_to_girafe(p, style = style, girafe_id = "res_rankplot_girafe")
   })
 
-  # Click-to-search for volcano / rankplot is wired via geom_point_interactive
-  # onclick (.tb_girafe_pick_onclick in terpbook.R), which fires this single
-  # input on every click using priority:'event' — no selection state, no
-  # visible outline on the clicked point, repeat clicks on the same gene work.
+  # Click-to-search for volcano / rankplot uses ggiraph's first-class
+  # single-selection mechanism. opts_selection(type = "single") in
+  # tb_ggplot_to_girafe makes a click on a point set input$<girafe_id>_selected
+  # to that point's data_id. Selected-state CSS is suppressed so no outline
+  # is drawn. After firing the modal we clear the selection client-side so
+  # re-clicking the same point still triggers the event.
   .res_handle_girafe_pick <- function(picked) {
     if (is.null(picked)) return()
     picked <- as.character(picked)
@@ -8432,10 +8459,20 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     }
   }
 
-  observeEvent(input$res_girafe_picked, {
+  observeEvent(input$res_volcano_girafe_selected, {
     eng <- tolower(active_engine_id() %||% "")
-    if (!(eng %in% c("volcano", "rankplot"))) return()
-    .res_handle_girafe_pick(input$res_girafe_picked)
+    if (!identical(eng, "volcano")) return()
+    .res_handle_girafe_pick(input$res_volcano_girafe_selected)
+    session$sendCustomMessage("res_clear_girafe_selection",
+                              list(id = "res_volcano_girafe"))
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
+
+  observeEvent(input$res_rankplot_girafe_selected, {
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "rankplot")) return()
+    .res_handle_girafe_pick(input$res_rankplot_girafe_selected)
+    session$sendCustomMessage("res_clear_girafe_selection",
+                              list(id = "res_rankplot_girafe"))
   }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
   # Track the SHAPE signal for the outer plot container. Only re-fires

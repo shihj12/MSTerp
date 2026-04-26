@@ -948,12 +948,10 @@ tb_render_spearman <- tb_render_scatter_correlation
     df$pval_display
   )
   df$data_id_val <- df$gene
-  df$onclick_js <- .tb_girafe_pick_onclick(df$data_id_val)
 
   p <- ggplot2::ggplot(df, ggplot2::aes(x = log2fc, y = neglog10p)) +
     ggiraph::geom_point_interactive(
-      ggplot2::aes(color = sig, tooltip = .data$tooltip_text, data_id = .data$data_id_val,
-                   onclick = .data$onclick_js),
+      ggplot2::aes(color = sig, tooltip = .data$tooltip_text, data_id = .data$data_id_val),
       size = tb_num(style$point_size, 3), alpha = 0.9
     ) +
     ggplot2::scale_color_manual(values = c(up = col_up, down = col_dn, nonsig = col_ns))
@@ -1013,15 +1011,13 @@ tb_render_spearman <- tb_render_scatter_correlation
         df_hl$pval_display
       )
       df_hl$data_id_val <- df_hl$gene
-      df_hl$onclick_js <- .tb_girafe_pick_onclick(df_hl$data_id_val)
 
       if (has_outline) {
         # Shape 21 = filled circle with border
         p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
           ggplot2::aes(x = log2fc, y = neglog10p, fill = highlight_group,
-                       tooltip = .data$tooltip_text, data_id = .data$data_id_val,
-                       onclick = .data$onclick_js),
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = tb_num(style$point_size, 3) + 0.5,
           color = "black",
@@ -1033,8 +1029,7 @@ tb_render_spearman <- tb_render_scatter_correlation
         p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
           ggplot2::aes(x = log2fc, y = neglog10p, fill = highlight_group,
-                       tooltip = .data$tooltip_text, data_id = .data$data_id_val,
-                       onclick = .data$onclick_js),
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = tb_num(style$point_size, 3) + 0.5,
           color = fill_color,
@@ -1132,13 +1127,25 @@ tb_render_spearman <- tb_render_scatter_correlation
       label_font_size <- suppressWarnings(as.numeric(style$label_font_size %||% 12))
       if (!is.finite(label_font_size) || label_font_size <= 0) label_font_size <- 12
       label_size <- label_font_size / 3  # Convert points to ggplot mm scale
+      p <- p + ggplot2::geom_point(
+        data = df_lab,
+        ggplot2::aes(x = log2fc, y = neglog10p),
+        shape = 21, color = "black", fill = NA,
+        size = tb_num(style$point_size, 3) + 1.5,
+        stroke = 0.8,
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      )
       p <- p + ggrepel::geom_text_repel(
         data = df_lab,
         ggplot2::aes(x = log2fc, y = neglog10p, label = gene),
         size = label_size,
         color = "black",
         max.overlaps = Inf,
-        box.padding = 0.4,
+        box.padding = 0.5,
+        point.padding = 0.5,
+        force_pull = 0.5,
+        min.segment.length = 0,
         segment.size = 0.3,
         segment.color = "grey40",
         inherit.aes = FALSE,
@@ -7778,17 +7785,16 @@ tb_render_rankplot <- function(results, style, meta) {
     formatC(df$value, digits = 4, format = "fg")
   )
   df$data_id_val <- as.character(df$protein_id %||% df$gene)
-  df$onclick_js <- .tb_girafe_pick_onclick(df$data_id_val)
 
   # Create the plot with explicit axis limits
   # clip = "on" to prevent points spilling past axis boundaries
-  # geom_point_interactive carries hover tooltips and per-point onclick; saved
-  # as a static image these aesthetics are silently ignored, so the same ggplot
+  # geom_point_interactive carries hover tooltips + a data_id used by ggiraph's
+  # single-selection mechanism (drives the click-to-search modal). Saved as a
+  # static image these aesthetics are silently ignored, so the same ggplot
   # drives both export and the girafe viewer.
   p <- ggplot2::ggplot(df, ggplot2::aes(x = rank, y = value, color = highlight)) +
     ggiraph::geom_point_interactive(
-      ggplot2::aes(tooltip = .data$tooltip_text, data_id = .data$data_id_val,
-                   onclick = .data$onclick_js),
+      ggplot2::aes(tooltip = .data$tooltip_text, data_id = .data$data_id_val),
       size = point_size, alpha = point_alpha
     ) +
     ggplot2::scale_color_manual(values = color_map, guide = "none") +
@@ -7857,14 +7863,12 @@ tb_render_rankplot <- function(results, style, meta) {
         formatC(df_hl$value, digits = 4, format = "fg")
       )
       df_hl$data_id_val <- as.character(df_hl$protein_id %||% df_hl$gene)
-      df_hl$onclick_js <- .tb_girafe_pick_onclick(df_hl$data_id_val)
 
       if (has_outline) {
         p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
           ggplot2::aes(x = rank, y = value, fill = highlight_group,
-                       tooltip = .data$tooltip_text, data_id = .data$data_id_val,
-                       onclick = .data$onclick_js),
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = point_size + 0.5,
           color = "black",
@@ -7875,8 +7879,7 @@ tb_render_rankplot <- function(results, style, meta) {
         p <- p + ggiraph::geom_point_interactive(
           data = df_hl,
           ggplot2::aes(x = rank, y = value, fill = highlight_group,
-                       tooltip = .data$tooltip_text, data_id = .data$data_id_val,
-                       onclick = .data$onclick_js),
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
           shape = 21,
           size = point_size + 0.5,
           color = fill_color,
@@ -7916,13 +7919,25 @@ tb_render_rankplot <- function(results, style, meta) {
     if (nrow(df_labels) > 0) {
       tb_require_pkg("ggrepel")
       label_size <- label_font_size / 3  # Convert points to ggplot mm scale
+      p <- p + ggplot2::geom_point(
+        data = df_labels,
+        ggplot2::aes(x = rank, y = value),
+        shape = 21, color = "black", fill = NA,
+        size = point_size + 1.5,
+        stroke = 0.8,
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      )
       p <- p + ggrepel::geom_text_repel(
         data = df_labels,
         ggplot2::aes(x = rank, y = value, label = gene),
         size = label_size,
         color = "black",
         max.overlaps = Inf,
-        box.padding = 0.4,
+        box.padding = 0.5,
+        point.padding = 0.5,
+        force_pull = 0.5,
+        min.segment.length = 0,
         segment.size = 0.3,
         segment.color = "grey40",
         inherit.aes = FALSE,
@@ -11160,25 +11175,14 @@ tb_peptide_region_detail_components <- function(results, style, interactive_bar 
   .pr_build_detail_components(data, style, interactive_bar = interactive_bar)
 }
 
-# Per-point onclick JS for ggiraph geom_point_interactive. Fires a Shiny input
-# event on every click using priority:'event' so identical consecutive clicks
-# both register. We use this instead of opts_selection so there is no visible
-# selection outline left on the clicked point.
-.tb_girafe_pick_onclick <- function(ids, input_id = "res_girafe_picked") {
-  if (length(ids) == 0) return(character(0))
-  ids <- as.character(ids)
-  vapply(ids, function(x) {
-    sprintf(
-      "Shiny.setInputValue('%s', %s, {priority: 'event'});",
-      input_id,
-      jsonlite::toJSON(x, auto_unbox = TRUE)
-    )
-  }, character(1), USE.NAMES = FALSE)
-}
-
 # Wrap a ggplot in a girafe widget for in-app interactive display. The same
 # ggplot object remains valid for static export — interactive aesthetics
-# (tooltip, data_id, onclick) are silently ignored by ggsave.
+# (tooltip, data_id) are silently ignored by ggsave. Click-to-search is wired
+# through ggiraph's first-class single-selection mechanism (input$<id>_selected
+# fires with the data_id of the clicked point); the selected-state CSS is
+# explicitly suppressed so no outline is drawn on the clicked point. The
+# server-side observer clears the selection after handling so re-clicking the
+# same point still fires the event.
 tb_ggplot_to_girafe <- function(p, style = list(), girafe_id = NULL) {
   if (is.null(p)) return(NULL)
   tb_require_pkg("ggiraph")
@@ -11200,7 +11204,11 @@ tb_ggplot_to_girafe <- function(p, style = list(), girafe_id = NULL) {
         "border-radius: 4px;",
         "font-size: 12px;"
       )),
-      ggiraph::opts_selection(type = "none")
+      ggiraph::opts_selection(
+        type = "single",
+        css  = "stroke:transparent;stroke-width:0;fill-opacity:1;",
+        only_shiny = TRUE
+      )
     )
   )
 }
