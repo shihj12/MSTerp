@@ -271,6 +271,113 @@ tb_load_results <- function(node_dir, use_cache = TRUE) {
   res
 }
 
+# ---- Group overrides (run-level) --------------------------------------------
+# Sparse, run-wide overrides for group_name and color, keyed by group_id.
+# Stored as run_root/group_overrides.json with shape:
+#   { "<group_id>": { "name": "...", "color": "#RRGGBB" } }
+# Applied at load time via apply_group_overrides() so engines see updated
+# names/colors without needing to know about the override mechanism.
+
+tb_group_overrides_path <- function(run_root) {
+  file.path(run_root, "group_overrides.json")
+}
+
+tb_load_group_overrides <- function(run_root) {
+  if (is.null(run_root) || !nzchar(as.character(run_root))) return(list())
+  p <- tb_group_overrides_path(run_root)
+  if (!file.exists(p)) return(list())
+  tryCatch(
+    {
+      raw <- jsonlite::read_json(p, simplifyVector = FALSE)
+      if (!is.list(raw)) return(list())
+      # Drop entries that are not lists or have no fields.
+      out <- list()
+      for (gid in names(raw)) {
+        ent <- raw[[gid]]
+        if (!is.list(ent)) next
+        cur <- list()
+        if (!is.null(ent$name) && nzchar(as.character(ent$name))) cur$name <- as.character(ent$name)
+        if (!is.null(ent$color) && nzchar(as.character(ent$color))) cur$color <- as.character(ent$color)
+        if (length(cur) > 0) out[[gid]] <- cur
+      }
+      out
+    },
+    error = function(e) list()
+  )
+}
+
+tb_save_group_overrides_atomic <- function(run_root, overrides) {
+  if (is.null(run_root) || !nzchar(as.character(run_root))) {
+    stop("tb_save_group_overrides_atomic: run_root is required.")
+  }
+  overrides <- overrides %||% list()
+  # Sparse: drop any entry whose name and color are both NULL/empty
+  clean <- list()
+  for (gid in names(overrides)) {
+    ent <- overrides[[gid]]
+    if (!is.list(ent)) next
+    cur <- list()
+    if (!is.null(ent$name) && nzchar(as.character(ent$name))) cur$name <- as.character(ent$name)
+    if (!is.null(ent$color) && nzchar(as.character(ent$color))) cur$color <- as.character(ent$color)
+    if (length(cur) > 0) clean[[gid]] <- cur
+  }
+  p <- tb_group_overrides_path(run_root)
+  tb_atomic_write_json(tb_json_safe(clean), p)
+  invisible(TRUE)
+}
+
+# Apply run-level group overrides to an in-memory results object.
+# Returns a mutated copy. Does NOT touch on-disk results.rds or
+# .tb_cache$results — callers must ensure they are not mutating the cached
+# value (active_results() reads the cached value but the data.frame edit
+# below makes a defensive copy via column reassignment).
+apply_group_overrides <- function(res, overrides) {
+  if (is.null(res) || !is.list(res)) return(res)
+  if (length(overrides) == 0) return(res)
+
+  md <- res$data$metadata
+  if (is.null(md) || !is.list(md)) return(res)
+  groups <- md$groups
+  if (!is.data.frame(groups) || nrow(groups) == 0) return(res)
+  if (is.null(groups$group_id)) return(res)
+
+  # Defensive copy of the columns we mutate.
+  group_name <- as.character(groups$group_name)
+  color <- as.character(groups$color)
+  group_id <- as.character(groups$group_id)
+
+  name_remap <- character()  # named: old_name -> new_name
+  for (i in seq_along(group_id)) {
+    gid <- group_id[[i]]
+    ov <- overrides[[gid]]
+    if (is.null(ov)) next
+    if (!is.null(ov$name) && nzchar(ov$name) && !identical(as.character(ov$name), group_name[[i]])) {
+      old_name <- group_name[[i]]
+      group_name[[i]] <- as.character(ov$name)
+      name_remap[[old_name]] <- as.character(ov$name)
+    }
+    if (!is.null(ov$color) && nzchar(ov$color)) {
+      color[[i]] <- as.character(ov$color)
+    }
+  }
+  groups$group_name <- group_name
+  groups$color <- color
+  md$groups <- groups
+
+  # Remap samples$group_name (engines key joins by group_name string).
+  if (length(name_remap) > 0 && is.data.frame(md$samples) && !is.null(md$samples$group_name)) {
+    sn <- as.character(md$samples$group_name)
+    hits <- sn %in% names(name_remap)
+    if (any(hits)) {
+      sn[hits] <- unname(name_remap[sn[hits]])
+      md$samples$group_name <- sn
+    }
+  }
+
+  res$data$metadata <- md
+  res
+}
+
 # ---- Node descriptors + defaults --------------------------------------------
 
 tb_as_list_of_rows <- function(x) {

@@ -801,6 +801,29 @@ res_render_overview <- function(run_root, manifest, nodes_df, terpbook_filename 
         )
       ),
 
+      # Groups panel (edit name + color, applied to all plots in this run)
+      div(
+        class = "res-panel",
+        style = "flex: 0 0 auto;",
+        div(class = "res-panel-head"),
+        div(
+          class = "res-panel-body",
+          style = "padding: 16px;",
+          div(
+            style = "display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;",
+            h4(style = "margin: 0; font-weight: 800;", "Groups"),
+            div(
+              style = "display: flex; gap: 8px;",
+              actionButton("res_groups_reset", "Reset", class = "btn-sm"),
+              actionButton("res_groups_apply", "Apply", class = "btn-sm btn-primary")
+            )
+          ),
+          p(style = "margin: 0 0 10px 0; font-size: 12px; color: var(--color-text-hint);",
+            "Edit names and colors. Click Apply to update all plots in this run."),
+          uiOutput("res_groups_panel")
+        )
+      ),
+
       # Run Log panel
       div(
         class = "res-panel",
@@ -1008,6 +1031,11 @@ res_color_input <- function(id, label, value) {
   } else {
     textInput(id, label, value = value, placeholder = "#RRGGBB")
   }
+}
+
+# Build a stable Shiny input id for a group editor field.
+res_groups_input_id <- function(group_id, kind) {
+  paste0("res_grp_", kind, "_", gsub("[^A-Za-z0-9_]", "_", as.character(group_id)))
 }
 
 res_field_ui_core <- function(node_id, field, value_override = NULL, dynamic_choices = NULL) {
@@ -3005,7 +3033,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     terpbook_source_path = NULL,  # Absolute path of opened .terpbook (NULL for browser uploads)
     workspace_id = NULL,          # Stable workspace identifier for the open file
     last_autosave_at = NULL,      # Timestamp of the most recent successful flush to source
-    lock_heartbeat_token = 0L     # Token used to cancel pending heartbeat callbacks
+    lock_heartbeat_token = 0L,    # Token used to cancel pending heartbeat callbacks
+    group_overrides = list(),         # Applied (committed) run-level group overrides keyed by group_id
+    group_overrides_staged = list(),  # Staged group edits (not yet applied)
+    groups_panel_rev = 0L             # Bumped to force re-mount of the Groups panel inputs
   )
   style_rev <- reactiveVal(0L)
   pr_detail_shared_rev <- reactiveVal(0L)
@@ -3366,6 +3397,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       tryCatch(tb_workspace_unlock(rv$exdir), error = function(e) NULL)
     }
     rv$lock_heartbeat_token <- (rv$lock_heartbeat_token %||% 0L) + 1L
+    rv$group_overrides <- list()
+    rv$group_overrides_staged <- list()
   }
 
   # Schedule a 30s heartbeat that re-touches the lock so other instances see
@@ -3485,6 +3518,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       rv$load_warnings <- man$warnings %||% character()
       rv$pending_cluster_goora <- NULL
       rv$run_data_type <- man$manifest$data_type %||% "proteomics"
+
+      # Seed run-level group overrides from disk (sparse). Empty if file absent.
+      rv$group_overrides <- tryCatch(
+        tb_load_group_overrides(man$run_root),
+        error = function(e) list()
+      )
+      rv$group_overrides_staged <- rv$group_overrides
+      rv$groups_panel_rev <- isolate(rv$groups_panel_rev %||% 0L) + 1L
 
       rv$terpbook_filename <- display_name %||% basename(path) %||% "Unknown"
       # Source path is only meaningful when the caller passed a real on-disk
@@ -3618,7 +3659,9 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   active_results <- reactive({
     nd <- active_node_dir()
     if (is.null(nd)) return(NULL)
-    tb_load_results(nd)
+    res <- tb_load_results(nd)
+    ov <- rv$group_overrides %||% list()
+    apply_group_overrides(res, ov)
   })
   
   active_meta <- reactive({
@@ -3626,7 +3669,195 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (is.null(nd)) return(list())
     tb_node_meta(nd)
   })
-  
+
+  # ---- Groups editor (Overview page) -----------------------------------------
+  # Source-of-truth list of groups for this run, unioned across nodes. We do
+  # NOT take a dependency on rv$group_overrides here: the panel renderUI
+  # below depends only on the baseline + a manual rev counter, so editing
+  # an input does not destroy the focused field.
+  res_run_groups_baseline <- reactive({
+    req(rv$loaded, rv$nodes_df)
+    ndf <- rv$nodes_df
+    acc <- list()
+    for (i in seq_len(nrow(ndf))) {
+      nd <- ndf$node_dir[[i]]
+      res <- tryCatch(tb_load_results(nd), error = function(e) NULL)
+      g <- res$data$metadata$groups
+      if (!is.data.frame(g) || nrow(g) == 0) next
+      gid_col <- as.character(g$group_id %||% rep("", nrow(g)))
+      gnm_col <- as.character(g$group_name %||% rep("", nrow(g)))
+      col_col <- as.character(g$color %||% rep("", nrow(g)))
+      ctl_col <- if (!is.null(g$is_control)) as.logical(g$is_control) else rep(FALSE, nrow(g))
+      for (j in seq_len(nrow(g))) {
+        gid <- gid_col[[j]]
+        if (!nzchar(gid)) next
+        if (is.null(acc[[gid]])) {
+          acc[[gid]] <- list(
+            group_id   = gid,
+            group_name = gnm_col[[j]],
+            color      = col_col[[j]],
+            is_control = isTRUE(ctl_col[[j]])
+          )
+        }
+      }
+    }
+    unname(acc)
+  })
+
+  # Render the Groups panel inputs. Seed each input with the staged value if
+  # present (so a previous edit survives panel re-render), otherwise the
+  # current applied value (baseline + applied overrides).
+  output$res_groups_panel <- renderUI({
+    # Take a dependency on rv$groups_panel_rev so Reset can force a re-mount.
+    rv$groups_panel_rev
+    baseline <- res_run_groups_baseline()
+    if (length(baseline) == 0) {
+      return(tags$p(style = "color: var(--color-text-hint); margin: 0;",
+                    "No groups found in this run."))
+    }
+    applied <- isolate(rv$group_overrides %||% list())
+    staged  <- isolate(rv$group_overrides_staged %||% list())
+
+    rows <- lapply(baseline, function(g) {
+      gid <- g$group_id
+      st_e <- staged[[gid]]
+      ap_e <- applied[[gid]]
+      cur_name <- if (!is.null(st_e$name) && nzchar(st_e$name)) st_e$name
+                  else if (!is.null(ap_e$name) && nzchar(ap_e$name)) ap_e$name
+                  else g$group_name
+      cur_color <- if (!is.null(st_e$color) && nzchar(st_e$color)) st_e$color
+                   else if (!is.null(ap_e$color) && nzchar(ap_e$color)) ap_e$color
+                   else g$color
+      tags$div(
+        class = "res-group-row",
+        style = "display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; margin-bottom: 8px;",
+        tags$div(
+          textInput(
+            res_groups_input_id(gid, "name"),
+            label = if (isTRUE(g$is_control))
+                      tagList("Name ", tags$span(style = "color: var(--color-text-hint); font-weight: 400;", "(control)"))
+                    else "Name",
+            value = cur_name, width = "100%"
+          )
+        ),
+        tags$div(
+          res_color_input(res_groups_input_id(gid, "color"), "Color", cur_color)
+        )
+      )
+    })
+    tagList(rows)
+  })
+
+  # Per-group input observers (stage only; never touch caches or trigger
+  # rerender). Recreated whenever the baseline changes (e.g. on file open).
+  observe({
+    baseline <- res_run_groups_baseline()
+    if (length(baseline) == 0) return()
+    for (g in baseline) local({
+      gid <- g$group_id
+      name_id  <- res_groups_input_id(gid, "name")
+      color_id <- res_groups_input_id(gid, "color")
+      observeEvent(input[[name_id]], {
+        val <- as.character(input[[name_id]] %||% "")
+        st <- rv$group_overrides_staged %||% list()
+        cur <- st[[gid]] %||% list()
+        cur$name <- val
+        st[[gid]] <- cur
+        rv$group_overrides_staged <- st
+      }, ignoreInit = TRUE)
+      observeEvent(input[[color_id]], {
+        val <- as.character(input[[color_id]] %||% "")
+        st <- rv$group_overrides_staged %||% list()
+        cur <- st[[gid]] %||% list()
+        cur$color <- val
+        st[[gid]] <- cur
+        rv$group_overrides_staged <- st
+      }, ignoreInit = TRUE)
+    })
+  })
+
+  # Apply: validate the staged buffer, commit to rv$group_overrides, persist
+  # sparsely to run_root/group_overrides.json, clear the results cache, and
+  # bump style_rev so all open plots re-render.
+  observeEvent(input$res_groups_apply, {
+    baseline <- res_run_groups_baseline()
+    if (length(baseline) == 0) return()
+    staged <- rv$group_overrides_staged %||% list()
+
+    out <- list()
+    seen_names <- character()
+    for (g in baseline) {
+      gid <- g$group_id
+      s <- staged[[gid]] %||% list()
+      new_name  <- if (!is.null(s$name) && nzchar(s$name)) as.character(s$name) else g$group_name
+      new_color <- if (!is.null(s$color) && nzchar(s$color)) as.character(s$color) else g$color
+
+      if (!isTRUE(msterp_is_valid_group_name(new_name))) {
+        showNotification(sprintf("Invalid group name: '%s'.", new_name),
+                         type = "error", duration = 4)
+        return()
+      }
+      if (new_name %in% seen_names) {
+        showNotification(sprintf("Duplicate group name: '%s'.", new_name),
+                         type = "error", duration = 4)
+        return()
+      }
+      seen_names <- c(seen_names, new_name)
+
+      if (!grepl("^#[0-9A-Fa-f]{6}$", new_color)) {
+        showNotification(sprintf("Invalid color for '%s': %s",
+                                  new_name, new_color),
+                         type = "error", duration = 4)
+        return()
+      }
+
+      entry <- list()
+      if (!identical(new_name, g$group_name)) entry$name <- new_name
+      if (!identical(toupper(new_color), toupper(g$color))) entry$color <- new_color
+      if (length(entry) > 0) out[[gid]] <- entry
+    }
+
+    rv$group_overrides <- out
+    rv$group_overrides_staged <- out
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+
+    if (exists("tb_cache_clear", mode = "function")) tb_cache_clear()
+    style_rev(isolate(style_rev()) + 1L)
+
+    if (!is.null(rv$run_root)) {
+      tryCatch(
+        tb_save_group_overrides_atomic(rv$run_root, out),
+        error = function(e) showNotification(
+          paste("Save failed:", conditionMessage(e)),
+          type = "error", duration = 6
+        )
+      )
+    }
+
+    showNotification("Groups updated. Plots refreshed.",
+                     type = "message", duration = 3)
+  }, ignoreInit = TRUE)
+
+  # Reset: clear both staged and applied overrides, persist {} to disk, and
+  # force the panel to re-mount so input fields reflect the baseline values.
+  observeEvent(input$res_groups_reset, {
+    rv$group_overrides <- list()
+    rv$group_overrides_staged <- list()
+    if (exists("tb_cache_clear", mode = "function")) tb_cache_clear()
+    style_rev(isolate(style_rev()) + 1L)
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+    if (!is.null(rv$run_root)) {
+      tryCatch(
+        tb_save_group_overrides_atomic(rv$run_root, list()),
+        error = function(e) NULL
+      )
+    }
+    rv$groups_panel_rev <- (rv$groups_panel_rev %||% 0L) + 1L
+    showNotification("Group edits cleared.", type = "message", duration = 3)
+  }, ignoreInit = TRUE)
+
   # ---- Effective state (MEMORY-FIRST; disk only as fallback) -----------------
   res_effective_render_state_mem <- function(nodes_df, node_id) {
     chain <- tb_ancestor_chain(nodes_df, node_id)
@@ -7036,6 +7267,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           })
         }
 
+        # Synchronously persist run-level group overrides so the file is on
+        # disk before we zip. Empty list writes "{}" — apply_group_overrides
+        # is a no-op in that case so reloads behave identically to fresh.
+        tryCatch(
+          tb_save_group_overrides_atomic(rv$run_root, rv$group_overrides %||% list()),
+          error = function(e) warning("Failed to save group overrides: ", conditionMessage(e))
+        )
+
         # Zip the entire run directory
         parent_dir <- dirname(rv$run_root)
         if (!dir.exists(parent_dir)) {
@@ -7146,6 +7385,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         tryCatch(tb_save_render_state_atomic(node_dir, payload),
                  error = function(e) warning("Failed to save node ", node_id, ": ", conditionMessage(e)))
       }
+
+      # Persist run-level group overrides before zipping.
+      tryCatch(
+        tb_save_group_overrides_atomic(rv$run_root, rv$group_overrides %||% list()),
+        error = function(e) warning("Failed to save group overrides: ", conditionMessage(e))
+      )
 
       if (!silent) msterp_set_busy(session, TRUE, "Building archive...", percent = 60)
       parent_dir <- dirname(rv$run_root)
