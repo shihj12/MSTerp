@@ -1968,14 +1968,39 @@ msterp_theme_head <- function() {
             { priority: 'event' });
         }
       });
-      if (window.chrome && window.chrome.webview && !window.__msterpFolderListener) {
-        window.__msterpFolderListener = true;
+
+      // File picker IPC — same pattern as folder picker above, but opens the
+      // host's modern Win 10/11 OpenFileDialog. Filter is a comma-separated
+      // list of extensions (no dots). Host replies with 'file-chosen:<path>'
+      // (empty on cancel); we forward to Shiny.setInputValue('open_file', ...)
+      // — the existing warm-launch ingress that routes through source=file so
+      // the autosave system activates.
+      Shiny.addCustomMessageHandler('msterp_choose_file', function(payload) {
+        var filter = (payload && payload.filter) || '';
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage('choose-file:' + filter);
+        } else {
+          // Browser / RStudio dev: ask the server to fall back to
+          // utils::choose.files(). The legacy dialog isn't pretty but it
+          // keeps dev workflows functional.
+          Shiny.setInputValue('msterp_choose_file_fallback',
+            { ts: Date.now() }, { priority: 'event' });
+        }
+      });
+
+      if (window.chrome && window.chrome.webview && !window.__msterpHostListener) {
+        window.__msterpHostListener = true;
         window.chrome.webview.addEventListener('message', function(e) {
           var d = typeof e.data === 'string' ? e.data : '';
           if (d.indexOf('folder-chosen:') === 0) {
             Shiny.setInputValue('msterp_folder_chosen',
               { value: d.substring('folder-chosen:'.length), ts: Date.now() },
               { priority: 'event' });
+          } else if (d.indexOf('file-chosen:') === 0) {
+            var p = d.substring('file-chosen:'.length);
+            if (p && p.length > 0) {
+              Shiny.setInputValue('open_file', p, { priority: 'event' });
+            }
           }
         });
       }

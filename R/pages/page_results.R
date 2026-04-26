@@ -3522,13 +3522,22 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     })
   }
 
-  # Native file picker — uses utils::choose.files() (base R, Windows-native
-  # file dialog, no extra deps) to capture the real disk path. That makes
-  # source = "file" stick so the autosave timer and Save now button activate.
-  # We deliberately do NOT use Shiny's fileInput here: it strips the original
-  # path (browser security) and produces a tempfile, which forces upload
-  # semantics and silently disables autosave.
+  # Native file picker — primary path goes through the WebView2 host bridge
+  # (modern Win 10/11 IFileOpenDialog via System.Windows.Forms.OpenFileDialog
+  # in MainForm.cs). The host replies via a 'file-chosen:<path>' message that
+  # the JS shim in ui_shell.R forwards to Shiny.setInputValue('open_file',
+  # ...), which is the existing warm-launch ingress wired in app.R. That
+  # routes through handle_open_file() → source = "file" so autosave activates.
+  #
+  # Fallback for non-WebView2 contexts (RStudio dev, plain browser): JS sets
+  # input$msterp_choose_file_fallback and we use utils::choose.files() — the
+  # legacy Win32 dialog. Same outcome (real disk path, source = "file"),
+  # different look.
   observeEvent(input$res_open_native, {
+    session$sendCustomMessage("msterp_choose_file", list(filter = "terpbook,zip"))
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$msterp_choose_file_fallback, {
     if (!exists("choose.files", where = asNamespace("utils"), mode = "function")) {
       showNotification(
         "Native file picker unavailable on this platform. Re-launch via double-click on a .terpbook in Explorer.",

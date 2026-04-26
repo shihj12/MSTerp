@@ -344,6 +344,8 @@ public sealed partial class MainForm : Form
             default:
                 if (msg.StartsWith("choose-folder:", StringComparison.Ordinal))
                     ShowFolderPicker(msg.Substring("choose-folder:".Length));
+                else if (msg.StartsWith("choose-file:", StringComparison.Ordinal))
+                    ShowFilePicker(msg.Substring("choose-file:".Length));
                 break;
         }
     }
@@ -365,6 +367,54 @@ public sealed partial class MainForm : Form
             // Always reply so the R side can clear any pending state.
             _webView?.CoreWebView2?.PostWebMessageAsString($"folder-chosen:{chosen}");
         });
+    }
+
+    // Modern Win 10/11 file picker. WinForms OpenFileDialog auto-upgrades to
+    // IFileOpenDialog (the modern shell dialog used by File Explorer) when
+    // AutoUpgradeEnabled is true, which is the default since .NET 2.0 SP1.
+    // The filterSpec is a comma-separated list of extension hints from R
+    // (e.g. "terpbook,zip"); we map known extensions to nice labels and
+    // fall back to "All files" when unrecognised.
+    private void ShowFilePicker(string filterSpec)
+    {
+        BeginInvoke(() =>
+        {
+            using var dlg = new OpenFileDialog
+            {
+                Title = "Open .terpbook",
+                AutoUpgradeEnabled = true,
+                CheckFileExists = true,
+                CheckPathExists = true,
+                Multiselect = false,
+                Filter = BuildOpenFileFilter(filterSpec),
+            };
+            var chosen = dlg.ShowDialog(this) == DialogResult.OK ? dlg.FileName : string.Empty;
+            _webView?.CoreWebView2?.PostWebMessageAsString($"file-chosen:{chosen}");
+        });
+    }
+
+    private static string BuildOpenFileFilter(string filterSpec)
+    {
+        var exts = (filterSpec ?? string.Empty)
+            .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(e => e.Trim().TrimStart('.').ToLowerInvariant())
+            .Where(e => e.Length > 0)
+            .Distinct()
+            .ToList();
+
+        var parts = new List<string>();
+        foreach (var e in exts)
+        {
+            var label = e switch
+            {
+                "terpbook" => "Terpbook",
+                "zip"      => "Zip archive",
+                _          => e.ToUpperInvariant() + " file",
+            };
+            parts.Add($"{label} (*.{e})|*.{e}");
+        }
+        parts.Add("All files (*.*)|*.*");
+        return string.Join("|", parts);
     }
 
     private async void OnShinyReady()
