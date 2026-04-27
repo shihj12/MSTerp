@@ -1850,8 +1850,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field(
           "scale_method", "choice", "Scaling method",
           default = "zscore",
-          choices = c("zscore", "rank", "none"),
-          help = "Z-score for standard PCA; rank-based is robust for non-normal distributions"
+          choices = c("zscore", "rank", "pareto", "covariance"),
+          choice_labels = c("Z-score (correlation)", "Rank", "Pareto (center / sqrt SD)", "Covariance (center only)"),
+          help = "Z-score for standard PCA; rank is robust to non-normal data; Pareto dampens high-variance features without fully equalising them; covariance centers only (covariance-PCA)"
         ),
         msterp_schema_field("n_pcs", "int", "Number of PCs", default = 3, min = 2, max = 20),
         msterp_schema_field("top_n", "int", "Top N IDs (pos/neg)", default = 50, min = 1, max = 500),

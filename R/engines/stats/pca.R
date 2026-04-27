@@ -73,9 +73,13 @@ stats_pca_run <- function(payload, params = NULL, context = NULL) {
   n_pcs_scree <- min(as.integer(params$n_pcs_scree %||% 8), ncol(mat) - 1, nrow(mat) - 1)
   n_pcs <- max(n_pcs_paired, n_pcs_scree)  # Compute enough PCs for both uses
   top_n <- as.integer(params$top_n %||% 50)
-  # Scaling method: "zscore" (default), "rank", or "none"
-  # For multi-dataset mode, "rank" provides more robust normalization
+  # Scaling method: "zscore" (default), "rank", "pareto", "covariance", or "none"
+  # - zscore: per-feature center + scale to unit variance (correlation-PCA)
+  # - rank: rank-transform per feature, then z-score (robust to non-normal data)
+  # - pareto: center, divide by sqrt(SD) — middle ground between zscore and covariance
+  # - covariance / none: mean-center only (covariance-PCA); "none" kept as alias
   scale_method <- params$scale_method %||% "zscore"
+  if (identical(scale_method, "none")) scale_method <- "covariance"
 
   # Apply log transform
   if (log_transform == "log10") {
@@ -148,9 +152,25 @@ stats_pca_run <- function(payload, params = NULL, context = NULL) {
     }
     add_log("INFO", "Applying Z-score scaling...")
     mat_scaled <- scale(mat_t, center = TRUE, scale = TRUE)
+  } else if (scale_method == "pareto") {
+    # Pareto scaling: center, divide by sqrt(SD). Common in metabolomics —
+    # dampens the influence of high-variance features without fully equalising
+    # them, preserving more of the original data structure than z-scoring.
+    col_vars <- apply(mat_t, 2, var, na.rm = TRUE)
+    zero_var <- col_vars == 0 | is.na(col_vars)
+    if (any(zero_var)) {
+      add_log("INFO", sprintf("Removing %d zero-variance features before scaling", sum(zero_var)))
+      mat_t <- mat_t[, !zero_var, drop = FALSE]
+      mat_complete <- mat_complete[zero_var == FALSE, , drop = FALSE]
+      ids_complete <- ids_complete[zero_var == FALSE, , drop = FALSE]
+    }
+    add_log("INFO", "Applying Pareto scaling (center / sqrt(SD))...")
+    col_sds <- apply(mat_t, 2, sd, na.rm = TRUE)
+    mat_scaled <- scale(mat_t, center = TRUE, scale = sqrt(col_sds))
   } else {
-    # No scaling - just center
-    add_log("INFO", "Applying centering only (no scaling)...")
+    # Covariance-PCA: mean-center only (no variance scaling).
+    # "none" is also routed here for backwards compatibility.
+    add_log("INFO", "Applying covariance centering (mean-center only)...")
     mat_scaled <- scale(mat_t, center = TRUE, scale = FALSE)
   }
 
