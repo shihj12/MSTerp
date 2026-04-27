@@ -5403,7 +5403,7 @@ tb_render_pca <- function(results, style, meta) {
   # Use the computed limits directly - no need to force square for PCA plots
   # since PC1 and PC2 have different variance explained anyway
 
-  point_stroke <- 0.3
+  point_stroke <- 0.8
   p_scores <- ggplot2::ggplot(scores, ggplot2::aes(x = PC1, y = PC2, text = hover_text)) +
     ggplot2::geom_point(
       ggplot2::aes(fill = group),
@@ -5449,11 +5449,10 @@ tb_render_pca <- function(results, style, meta) {
           p_scores <- p_scores +
             ggplot2::stat_ellipse(
               data = scores_for_ellipse,
-              ggplot2::aes(x = PC1, y = PC2, color = group, fill = group),
+              ggplot2::aes(x = PC1, y = PC2, fill = group),
               type = "norm",
               level = ellipse_level,
-              linewidth = 0.8,
-              linetype = "solid",
+              color = NA,
               alpha = ellipse_alpha,
               geom = "polygon",
               show.legend = FALSE,
@@ -5534,9 +5533,9 @@ tb_render_pca <- function(results, style, meta) {
           p_scores <- p_scores +
             ggplot2::geom_polygon(
               data = ellipse_data,
-              ggplot2::aes(x = PC1, y = PC2, fill = group, color = group),
+              ggplot2::aes(x = PC1, y = PC2, fill = group),
+              color = NA,
               alpha = ellipse_alpha,
-              linewidth = 0.8,
               show.legend = FALSE,
               inherit.aes = FALSE
             )
