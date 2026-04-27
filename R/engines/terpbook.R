@@ -2686,16 +2686,149 @@ tb_render_idquant <- function(results, style, meta) {
     p_group <- p_group + ggplot2::coord_cartesian(clip = "off")
   }
 
+  # ---- Grouped Quant only view ----------------------------------------------
+  # Mean of per-replicate identification counts per group, optional SD error
+  # bars and pairwise t-test brackets.
+  p_grouped <- NULL
+  agg_df <- NULL
+  if (identical(view_mode, "grouped_quant_only")) {
+    rep_src <- results$data$replicate_counts
+
+    if (is.null(rep_src) || !is.data.frame(rep_src) || nrow(rep_src) == 0) {
+      p_grouped <- ggplot2::ggplot() +
+        ggplot2::annotate("text", x = 0.5, y = 0.5,
+                          label = "No replicate data available for grouped view",
+                          size = 6, color = "gray50") +
+        ggplot2::theme_void()
+      agg_df <- data.frame(group = character(0), mean = numeric(0),
+                           sd = numeric(0), n_rep = integer(0),
+                           stringsAsFactors = FALSE)
+    } else {
+      rep_src$group <- as.character(rep_src$group)
+      group_levels <- unique(rep_src$group)
+      agg_list <- lapply(group_levels, function(g) {
+        vals <- rep_src$n[rep_src$group == g]
+        data.frame(
+          group = g,
+          mean  = mean(vals, na.rm = TRUE),
+          sd    = if (length(vals) >= 2) stats::sd(vals, na.rm = TRUE) else NA_real_,
+          n_rep = length(vals),
+          stringsAsFactors = FALSE
+        )
+      })
+      agg_df <- do.call(rbind, agg_list)
+      agg_df$group <- factor(agg_df$group, levels = group_levels)
+
+      show_error_bars <- isTRUE(style$show_error_bars %||% FALSE)
+      show_significance <- isTRUE(style$show_significance %||% FALSE)
+      sig_display_mode <- as.character(style$sig_display_mode %||% "stars")[1]
+      sig_text_size <- tb_num(style$sig_text_size, 3.5)
+      if (!is.finite(sig_text_size) || sig_text_size <= 0) sig_text_size <- 3.5
+
+      grp_y_expand <- if (show_values || show_significance || show_error_bars) c(0, 0.15) else c(0, 0.05)
+
+      p_grouped <- ggplot2::ggplot(agg_df, ggplot2::aes(x = group, y = mean)) +
+        ggplot2::geom_col(fill = color_quantified, color = outline_color, linewidth = outline_lw) +
+        ggplot2::scale_y_continuous(labels = format_k_suffix,
+                                    expand = ggplot2::expansion(mult = grp_y_expand)) +
+        ggplot2::labs(x = NULL, y = "Quantified count (mean)") +
+        tb_theme_base(tb_num(style$axis_text_size, 20),
+                      axis_style = style$axis_style %||% "clean") +
+        ggplot2::theme(axis.text.x = ggplot2::element_text(
+          angle = rotation_angle, hjust = rotation_hjust, vjust = rotation_vjust)) +
+        ggplot2::theme(legend.position = "none")
+
+      if (show_error_bars) {
+        bar_w <- tb_num(style$error_bar_width, 0.2)
+        if (!is.finite(bar_w) || bar_w < 0) bar_w <- 0.2
+        p_grouped <- p_grouped + ggplot2::geom_errorbar(
+          ggplot2::aes(ymin = pmax(0, mean - sd), ymax = mean + sd),
+          width = bar_w, linewidth = 0.5, na.rm = TRUE
+        )
+      }
+
+      if (show_values) {
+        p_grouped <- p_grouped + ggplot2::geom_text(
+          ggplot2::aes(label = as.integer(round(mean))),
+          vjust = if (show_error_bars) -1.0 else -0.3,
+          size = value_label_size
+        )
+      }
+
+      # Significance brackets — t-test on per-replicate counts
+      if (show_significance && length(group_levels) >= 2) {
+        if (show_error_bars && any(!is.na(agg_df$sd))) {
+          y_max_data <- max(agg_df$mean + ifelse(is.na(agg_df$sd), 0, agg_df$sd), na.rm = TRUE)
+        } else {
+          y_max_data <- max(agg_df$mean, na.rm = TRUE)
+        }
+        if (!is.finite(y_max_data) || y_max_data <= 0) y_max_data <- 1
+
+        y_step <- y_max_data * 0.06
+        current_y <- y_max_data * 1.05
+
+        pairs <- utils::combn(group_levels, 2, simplify = FALSE)
+        for (pair in pairs) {
+          vals_a <- rep_src$n[rep_src$group == pair[1]]
+          vals_b <- rep_src$n[rep_src$group == pair[2]]
+          if (length(vals_a) < 2 || length(vals_b) < 2) next
+
+          pval <- tryCatch({
+            stats::t.test(vals_a, vals_b)$p.value
+          }, error = function(e) NA_real_)
+          if (is.na(pval) || !is.finite(pval)) next
+
+          if (pval >= 0.05) {
+            label_text <- "n.s."
+          } else if (sig_display_mode == "pvalue") {
+            label_text <- if (pval < 0.001) "p < 0.001" else sprintf("p = %s", signif(pval, 2))
+          } else {
+            label_text <- if (pval < 0.001) "***" else if (pval < 0.01) "**" else "*"
+          }
+
+          x_a <- which(group_levels == pair[1])
+          x_b <- which(group_levels == pair[2])
+
+          p_grouped <- p_grouped +
+            ggplot2::annotate("segment", x = x_a, xend = x_a,
+                              y = current_y - y_step * 0.3, yend = current_y, linewidth = 0.4) +
+            ggplot2::annotate("segment", x = x_a, xend = x_b,
+                              y = current_y, yend = current_y, linewidth = 0.4) +
+            ggplot2::annotate("segment", x = x_b, xend = x_b,
+                              y = current_y, yend = current_y - y_step * 0.3, linewidth = 0.4) +
+            ggplot2::annotate("text", x = (x_a + x_b) / 2, y = current_y + y_step * 0.2,
+                              label = label_text, size = sig_text_size)
+
+          current_y <- current_y + y_step
+        }
+      }
+
+      grp_clip_off <- show_values || show_significance || show_error_bars
+      if (y_limit_mode == "manual") {
+        ymax <- style$ymax_protein %||% 10000
+        p_grouped <- p_grouped + ggplot2::coord_cartesian(
+          ylim = c(0, ymax), clip = if (grp_clip_off) "off" else "on"
+        )
+      } else if (grp_clip_off) {
+        p_grouped <- p_grouped + ggplot2::coord_cartesian(clip = "off")
+      }
+    }
+  }
+
   # Build plots and tables lists
   # view_mode emits exactly one plot so the view selector is the only graph picker:
   #   - combined: group-level plot with Quantified + Reproducibly Quantified dodged
   #   - quant_only: per-replicate quantified plot
   #   - repro_quant_only: group-level plot filtered to Reproducibly Quantified only
+  #   - grouped_quant_only: group-level mean of per-replicate quantified counts
   plots <- list()
   tables <- list()
   if (view_mode %in% c("combined", "repro_quant_only")) {
     plots$idquant_group <- p_group
     tables$idquant_group <- df
+  } else if (identical(view_mode, "grouped_quant_only")) {
+    plots$idquant_group <- p_grouped
+    tables$idquant_group <- agg_df
   }
 
   # Replicate-level bar plot - shown in quant_only mode only

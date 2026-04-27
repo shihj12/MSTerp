@@ -713,7 +713,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field(
             "show_significance", "bool", "Show significance",
             default = FALSE,
-            help = "Display pairwise t-test significance brackets between groups."
+            help = "Display pairwise t-test significance brackets between groups. Applies in 'Grouped Quant only' view."
           ),
           msterp_schema_field(
             "sig_display_mode", "choice", "Significance display",
@@ -726,6 +726,15 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             default = 3.5, min = 1, max = 12,
             help = "Text size for significance labels.",
             advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_error_bars", "bool", "Show error bars (SD)",
+            default = FALSE,
+            help = "Display SD error bars on group bars. Applies in 'Grouped Quant only' view."
+          ),
+          msterp_schema_field(
+            "error_bar_width", "num", "Error bar cap width",
+            default = 0.2, min = 0, max = 1, advanced = TRUE
           ),
           msterp_schema_field(
             "label_rotation", "choice", "X-axis label rotation",
@@ -741,9 +750,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field(
           "view_mode", "choice", "View",
           default = "combined",
-          choices = c("combined", "quant_only", "repro_quant_only"),
-          choice_labels = c("Combined", "Quant only", "Repro quant only"),
-          help = "Combined shows Quantified and Reproducibly Quantified bars side-by-side at the group level. Quant only shows the per-replicate quantified plot. Repro quant only shows the reproducibly-quantified bars only at the group level."
+          choices = c("combined", "quant_only", "repro_quant_only", "grouped_quant_only"),
+          choice_labels = c("Combined", "Quant only", "Repro quant only", "Grouped Quant only"),
+          help = "Combined shows Quantified and Reproducibly Quantified bars side-by-side at the group level. Quant only shows the per-replicate quantified plot. Repro quant only shows the reproducibly-quantified bars only at the group level. Grouped Quant only shows the mean per-replicate quantified count per group with optional SD error bars and pairwise significance."
         )
       ),
       outputs = list(figures = c("idquant_group", "idquant_replicate"), tables = c("idquant_group", "idquant_replicate"), interactive = TRUE),
