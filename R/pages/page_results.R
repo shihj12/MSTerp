@@ -3063,6 +3063,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   pending_label_positions <- reactiveVal(list())   # Pending position changes: list(plot_key -> label_id -> {x, y, x_range, y_range})
   pending_term_labels <- reactiveVal(list())       # Pending term label edits: list(original_term -> new_value)
   highlight_groups_state <- reactiveVal(list())    # Temporary state for highlight groups modal
+  # Per-modal-open input prefix so Shiny doesn't restore stale textarea values
+  # from a previous opening (same pattern as rv$modal_gen for the enrichment
+  # modal). Read by renderUI / Add / Remove / Apply handlers.
+  hl_ns_prefix <- reactiveVal("res_hl_g0")
 
   # Enrichment modal state: deferred visibility/label changes applied on "Apply & Close"
   rv$enrichment_modal_open <- FALSE
@@ -3070,6 +3074,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   rv$modal_pending_labels <- list()                 # term_labels accumulated in modal
   rv$modal_node_key <- ""                           # node key when modal opened
   rv$modal_gen <- 0L                                # counter to ensure unique input IDs per modal open
+  rv$hl_modal_gen <- 0L                             # counter for highlight-groups modal opens
 
   # ---- DPI observer: sync input$res_preview_dpi -> rv$preview_dpi ------------
   observeEvent(input$res_preview_dpi, {
@@ -6515,6 +6520,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       ))
     }
 
+    # Bump counter -> unique input prefix this modal open. Prevents Shiny from
+    # restoring stale textarea values from a previous opening (different node
+    # or even same node) where input IDs would otherwise collide.
+    rv$hl_modal_gen <- (rv$hl_modal_gen %||% 0L) + 1L
+    hl_ns_prefix(paste0("res_hl_g", rv$hl_modal_gen))
+
     # Store in reactive state
     highlight_groups_state(groups)
 
@@ -6533,18 +6544,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       # Groups container
       uiOutput("res_hl_groups_container"),
 
-      # JS to toggle outline width visibility
-      tags$script(HTML("
-        $(document).on('change', '[id^=\"res_hl_outline_\"]', function() {
-          var idx = this.id.split('_').pop();
-          var container = $('#res_hl_outline_width_container_' + idx);
-          if (this.checked) {
-            container.show();
-          } else {
-            container.hide();
-          }
-        });
-      ")),
+      # JS to toggle outline-width visibility — prefix-agnostic so it works
+      # with the per-open ns prefix. .off().on() keeps it idempotent across
+      # modal openings.
+      tags$script(HTML(
+        "$(document).off('change.hl_outline').on('change.hl_outline', 'input[type=\"checkbox\"][id*=\"_outline_\"]:not([id*=\"_outline_width_\"])', function() {",
+        "  var containerId = this.id.replace(/_outline_(\\d+)$/, '_outline_width_container_$1');",
+        "  if (this.checked) $('#' + containerId).show(); else $('#' + containerId).hide();",
+        "});"
+      )),
 
       footer = tagList(
         actionButton("res_hl_apply", "Apply", class = "btn btn-primary"),
@@ -6580,6 +6588,11 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       ))
     }
 
+    # Bump counter -> unique input prefix this modal open. See volcano opener
+    # for rationale.
+    rv$hl_modal_gen <- (rv$hl_modal_gen %||% 0L) + 1L
+    hl_ns_prefix(paste0("res_hl_g", rv$hl_modal_gen))
+
     # Store in reactive state
     highlight_groups_state(groups)
 
@@ -6598,18 +6611,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       # Groups container
       uiOutput("res_hl_groups_container"),
 
-      # JS to toggle outline width visibility
-      tags$script(HTML("
-        $(document).on('change', '[id^=\"res_hl_outline_\"]', function() {
-          var idx = this.id.split('_').pop();
-          var container = $('#res_hl_outline_width_container_' + idx);
-          if (this.checked) {
-            container.show();
-          } else {
-            container.hide();
-          }
-        });
-      ")),
+      # JS to toggle outline-width visibility — prefix-agnostic.
+      tags$script(HTML(
+        "$(document).off('change.hl_outline').on('change.hl_outline', 'input[type=\"checkbox\"][id*=\"_outline_\"]:not([id*=\"_outline_width_\"])', function() {",
+        "  var containerId = this.id.replace(/_outline_(\\d+)$/, '_outline_width_container_$1');",
+        "  if (this.checked) $('#' + containerId).show(); else $('#' + containerId).hide();",
+        "});"
+      )),
 
       footer = tagList(
         actionButton("res_hl_apply", "Apply", class = "btn btn-primary"),
@@ -6621,12 +6629,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   # Render highlight groups container
   output$res_hl_groups_container <- renderUI({
     groups <- highlight_groups_state()
+    ns_prefix <- hl_ns_prefix()
     if (length(groups) == 0) {
       return(tags$p(class = "text-muted", "No highlight groups. Click '+ Add Group' to create one."))
     }
 
     cards <- lapply(seq_along(groups), function(idx) {
-      render_highlight_group_card(groups[[idx]], idx)
+      render_highlight_group_card(groups[[idx]], idx, ns_prefix = ns_prefix)
     })
     tagList(cards)
   })
@@ -6656,7 +6665,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (is.null(group_id_to_remove) || !nzchar(group_id_to_remove)) return()
 
     current_groups <- highlight_groups_state()
-    ns_prefix <- "res_hl"
+    ns_prefix <- hl_ns_prefix()
 
     # Before removing, save current input values to all groups (so we don't lose edits)
     current_groups <- lapply(seq_along(current_groups), function(idx) {
@@ -6681,7 +6690,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     req(rv$loaded, rv$active_node_id)
 
     groups <- highlight_groups_state()
-    ns_prefix <- "res_hl"
+    ns_prefix <- hl_ns_prefix()
 
     # Collect data from inputs for each group
     updated_groups <- lapply(seq_along(groups), function(idx) {
