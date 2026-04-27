@@ -1431,6 +1431,41 @@ page_results_ui <- function() {
           }
         });
 
+        Shiny.addCustomMessageHandler('copy_plot_blob', function(payload) {
+          var url = payload && payload.data_url ? payload.data_url : null;
+          if (!url) return;
+
+          function notify(msg, type) {
+            Shiny.notifications.show({
+              html: '<span>' + msg + '</span>',
+              type: type, duration: 3000
+            });
+          }
+
+          if (!navigator.clipboard || !window.ClipboardItem) {
+            notify('Clipboard API not available in this browser.', 'error');
+            return;
+          }
+
+          fetch(url)
+            .then(function(r) { return r.blob(); })
+            .then(function(blob) {
+              var item = new ClipboardItem({ [blob.type]: blob });
+              return navigator.clipboard.write([item]);
+            })
+            .then(function() {
+              var w = payload.width || 0;
+              var h = payload.height || 0;
+              var label = (w && h) ? ('Copied plot (' + w + ' x ' + h + ' px).')
+                                   : 'Copied plot to clipboard.';
+              notify(label, 'message');
+            })
+            .catch(function(err) {
+              notify('Copy failed. Check browser permissions.', 'error');
+              if (window.console && console.error) console.error(err);
+            });
+        });
+
         Shiny.addCustomMessageHandler('res_open_url', function(payload) {
           if (payload && payload.url) window.open(payload.url, '_blank');
         });
@@ -14330,6 +14365,46 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       return()
     }
 
+    # For ggplot/patchwork, render server-side and ship as a data-URL. This
+    # avoids depending on a hidden plotOutput<img> in the DOM, which is
+    # unreliable for interactive engines (volcano, rankplot, peptide_region
+    # detail) whose visible plot is a girafe SVG.
+    which <- res_active_plot_name()
+    if (is.null(which) || !nzchar(which) || !(which %in% names(plots))) {
+      which <- names(plots)[[1]]
+    }
+    p <- plots[[which]]
+
+    if (inherits(p, c("gg", "ggplot", "patchwork")) &&
+        requireNamespace("base64enc", quietly = TRUE)) {
+      st <- active_effective_state()$style %||% list()
+      defs <- tb_publication_export_defaults(st)
+      tmp <- tempfile(fileext = ".png")
+      on.exit(try(unlink(tmp), silent = TRUE), add = TRUE)
+      ok <- tryCatch({
+        png_type <- if (capabilities("cairo")) "cairo-png" else NULL
+        ggplot2::ggsave(tmp, p, width = defs$width, height = defs$height,
+                        units = defs$units, dpi = defs$dpi,
+                        device = grDevices::png, type = png_type)
+        TRUE
+      }, error = function(e) {
+        showNotification(paste("Copy failed:", conditionMessage(e)), type = "error")
+        FALSE
+      })
+      if (!ok) return()
+
+      bytes <- readBin(tmp, what = "raw", n = file.info(tmp)$size)
+      b64 <- base64enc::base64encode(bytes)
+      session$sendCustomMessage("copy_plot_blob", list(
+        data_url = paste0("data:image/png;base64,", b64),
+        width    = as.integer(round(defs$width * defs$dpi)),
+        height   = as.integer(round(defs$height * defs$dpi))
+      ))
+      return()
+    }
+
+    # Fallback for non-ggplot outputs (e.g., visNetwork canvas) — keep the
+    # existing DOM-based copy path.
     plot_id <- res_current_plot_output_id()
     if (!nzchar(plot_id)) {
       showNotification("No plot available to copy.", type = "warning")
