@@ -75,6 +75,9 @@ stats_umap_run <- function(payload, params = NULL, context = NULL) {
   variance_filter_top_n <- as.integer(params$variance_filter_top_n %||% 2000)
   n_neighbors <- as.integer(params$n_neighbors %||% 15)
   min_dist <- as.numeric(params$min_dist %||% 0.1)
+  spread <- as.numeric(params$spread %||% 1)
+  n_epochs_param <- as.integer(params$n_epochs %||% 0)
+  init <- params$init %||% "spectral"
   metric <- params$metric %||% "correlation"
   seed <- as.integer(params$seed %||% 42)
 
@@ -138,19 +141,29 @@ stats_umap_run <- function(payload, params = NULL, context = NULL) {
                             variance_filter_top_n))
   }
 
-  # ---- Per-feature z-score across samples ----
-  if (scale_method == "zscore") {
-    row_means <- rowMeans(mat, na.rm = TRUE)
+  # ---- Per-feature scaling across samples ----
+  if (scale_method %in% c("zscore", "pareto")) {
     row_sds <- apply(mat, 1, stats::sd, na.rm = TRUE)
     nonzero <- is.finite(row_sds) & row_sds > 0
     if (any(!nonzero)) {
       add_log("INFO", sprintf("Removing %d zero-variance features", sum(!nonzero)))
       mat <- mat[nonzero, , drop = FALSE]
-      row_means <- row_means[nonzero]
       row_sds <- row_sds[nonzero]
     }
-    mat <- (mat - row_means) / row_sds
-    add_log("INFO", "Applied per-feature z-score scaling")
+    row_means <- rowMeans(mat, na.rm = TRUE)
+    if (scale_method == "zscore") {
+      mat <- (mat - row_means) / row_sds
+      add_log("INFO", "Applied per-feature z-score scaling")
+    } else {
+      mat <- (mat - row_means) / sqrt(row_sds)
+      add_log("INFO", "Applied per-feature Pareto scaling (centre / sqrt(SD))")
+    }
+  } else if (scale_method == "covariance") {
+    row_means <- rowMeans(mat, na.rm = TRUE)
+    mat <- mat - row_means
+    add_log("INFO", "Applied per-feature mean-centering (covariance)")
+  } else {
+    add_log("INFO", "No scaling applied (raw values)")
   }
 
   # ---- Transpose: samples become rows ----
@@ -166,11 +179,16 @@ stats_umap_run <- function(payload, params = NULL, context = NULL) {
   }
 
   # ---- Run UMAP ----
-  add_log("INFO", sprintf("Running uwot::umap (n=%d samples, neighbors=%d, metric=%s)",
-                          n_samples_eff, n_neighbors_eff, metric))
+  n_epochs_arg <- if (n_epochs_param > 0) n_epochs_param else NULL
+  add_log("INFO", sprintf(
+    "Running uwot::umap (n=%d samples, neighbors=%d, metric=%s, min_dist=%.3g, spread=%.3g, init=%s, n_epochs=%s)",
+    n_samples_eff, n_neighbors_eff, metric, min_dist, spread, init,
+    if (is.null(n_epochs_arg)) "auto" else as.character(n_epochs_arg)
+  ))
   set.seed(seed)
   emb <- tryCatch(
     uwot::umap(mat_t, n_neighbors = n_neighbors_eff, min_dist = min_dist,
+               spread = spread, init = init, n_epochs = n_epochs_arg,
                metric = metric, n_components = 2L, verbose = FALSE),
     error = function(e) {
       add_log("ERROR", sprintf("uwot::umap failed: %s", conditionMessage(e)))

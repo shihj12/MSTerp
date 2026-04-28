@@ -5794,9 +5794,12 @@ tb_render_umap <- function(results, style, meta) {
   y_range <- range(scores$UMAP2, na.rm = TRUE)
 
   show_ellipses <- isTRUE(style$show_ellipses %||% TRUE)
+  ellipse_level <- tb_num(style$ellipse_level, 0.95)
+  ellipse_level <- max(0.5, min(0.99, ellipse_level))
+  ellipse_alpha <- tb_num(style$ellipse_alpha, 0.25)
+  ellipse_alpha <- max(0, min(1, ellipse_alpha))
   if (show_ellipses) {
     group_counts <- table(scores$group)
-    ellipse_level <- 0.95
 
     compute_ellipse_bounds <- function(x, y, level) {
       valid <- !is.na(x) & !is.na(y)
@@ -5916,7 +5919,6 @@ tb_render_umap <- function(results, style, meta) {
   # ---- Ellipse / hull layers ----
   if (show_ellipses) {
     group_counts <- table(scores$group)
-    ellipse_alpha <- 0.25
 
     groups_with_ellipse <- names(group_counts[group_counts >= 4])
     groups_with_hull <- names(group_counts[group_counts >= 2 & group_counts < 4])
@@ -5928,7 +5930,7 @@ tb_render_umap <- function(results, style, meta) {
           p <- p + ggplot2::stat_ellipse(
             data = scores_for_ellipse,
             ggplot2::aes(x = UMAP1, y = UMAP2, color = group, fill = group),
-            type = "norm", level = 0.95,
+            type = "norm", level = ellipse_level,
             linewidth = 0.8, linetype = "solid",
             alpha = ellipse_alpha, geom = "polygon",
             show.legend = FALSE, inherit.aes = FALSE
@@ -5995,6 +5997,131 @@ tb_render_umap <- function(results, style, meta) {
   list(
     plots = list(umap = p),
     tables = list(umap_scores = scores[, setdiff(names(scores), "hover_text"), drop = FALSE])
+  )
+}
+
+tb_render_umap_gene <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
+
+  scores <- results$data$scores
+  if (is.null(scores) || !is.data.frame(scores) || nrow(scores) == 0) {
+    stop("umap_gene results$data$scores missing or empty.")
+  }
+
+  color_mode <- results$data$color_mode %||% results$params$color_mode %||% "none"
+  if (!color_mode %in% c("none", "target_list", "cluster")) color_mode <- "none"
+
+  pt_size  <- tb_num(style$point_size, 1.2)
+  pt_alpha <- tb_num(style$point_alpha, 0.6)
+  default_color <- style$default_color %||% "#888888"
+  target_color  <- style$target_color  %||% results$data$target_color %||% "#E74C3C"
+  target_size_mult <- max(1, tb_num(style$target_size_mult, 2))
+  show_target_labels <- isTRUE(style$show_target_labels %||% FALSE)
+  label_size <- tb_num(style$label_size, 3)
+
+  it <- as.logical(scores$is_target)
+  it[is.na(it)] <- FALSE
+  scores$is_target <- it
+
+  scores$hover_text <- sprintf(
+    "%s\n%s\nUMAP1: %.3f\nUMAP2: %.3f",
+    scores$display_id %||% scores$feature_id, scores$feature_id,
+    scores$UMAP1, scores$UMAP2
+  )
+
+  x_range <- range(scores$UMAP1, na.rm = TRUE)
+  y_range <- range(scores$UMAP2, na.rm = TRUE)
+  x_pad <- diff(x_range) * 0.05
+  y_pad <- diff(y_range) * 0.05
+  fixed_xlim <- c(x_range[1] - x_pad, x_range[2] + x_pad)
+  fixed_ylim <- c(y_range[1] - y_pad, y_range[2] + y_pad)
+
+  p <- ggplot2::ggplot(scores, ggplot2::aes(x = UMAP1, y = UMAP2, text = hover_text)) +
+    ggplot2::labs(x = "UMAP1", y = "UMAP2") +
+    tb_theme_base(tb_num(style$axis_text_size, 20),
+                  axis_style = style$axis_style %||% "clean") +
+    ggplot2::theme(
+      panel.border = ggplot2::element_rect(
+        color = "black", fill = NA,
+        linewidth = if (tolower(style$axis_style %||% "clean") == "bold") 1.5 else 0.5
+      ),
+      axis.line = ggplot2::element_blank()
+    )
+
+  if (color_mode == "cluster" && "cluster" %in% names(scores) &&
+      any(!is.na(scores$cluster))) {
+    cluster_colors <- results$data$cluster_colors %||% character(0)
+    scores$cluster_f <- factor(as.character(scores$cluster),
+                               levels = if (length(cluster_colors)) names(cluster_colors)
+                                        else sort(unique(as.character(scores$cluster))))
+    if (!length(cluster_colors)) {
+      n_k <- nlevels(scores$cluster_f)
+      cluster_colors <- grDevices::hcl.colors(max(1, n_k), palette = "Dark 3")
+      names(cluster_colors) <- levels(scores$cluster_f)
+    }
+    p <- p + ggplot2::geom_point(
+      data = scores,
+      ggplot2::aes(fill = cluster_f),
+      shape = 21, color = "black", stroke = 0.15,
+      size = pt_size, alpha = pt_alpha
+    ) +
+      ggplot2::scale_fill_manual(values = cluster_colors,
+                                 name = "Cluster") +
+      ggplot2::guides(fill = ggplot2::guide_legend(override.aes = list(size = 3, alpha = 1)))
+  } else if (color_mode == "target_list") {
+    bg <- scores[!scores$is_target, , drop = FALSE]
+    fg <- scores[ scores$is_target, , drop = FALSE]
+    if (nrow(bg) > 0) {
+      p <- p + ggplot2::geom_point(
+        data = bg,
+        fill = default_color, color = default_color,
+        shape = 21, stroke = 0,
+        size = pt_size, alpha = pt_alpha,
+        show.legend = FALSE
+      )
+    }
+    if (nrow(fg) > 0) {
+      fg$.cls <- "Target"
+      p <- p + ggplot2::geom_point(
+        data = fg,
+        ggplot2::aes(fill = .cls),
+        shape = 21, color = "black", stroke = 0.3,
+        size = pt_size * target_size_mult, alpha = min(1, pt_alpha + 0.3)
+      ) +
+        ggplot2::scale_fill_manual(values = c(Target = target_color), name = NULL)
+
+      if (show_target_labels && requireNamespace("ggrepel", quietly = TRUE)) {
+        p <- p + ggrepel::geom_text_repel(
+          data = fg,
+          ggplot2::aes(label = display_id),
+          size = label_size,
+          max.overlaps = Inf, min.segment.length = 0,
+          show.legend = FALSE, inherit.aes = TRUE
+        )
+      } else if (show_target_labels) {
+        p <- p + ggplot2::geom_text(
+          data = fg,
+          ggplot2::aes(label = display_id),
+          size = label_size, vjust = -1.2,
+          show.legend = FALSE, inherit.aes = TRUE
+        )
+      }
+    }
+  } else {
+    p <- p + ggplot2::geom_point(
+      data = scores,
+      fill = default_color, color = default_color,
+      shape = 21, stroke = 0,
+      size = pt_size, alpha = pt_alpha,
+      show.legend = FALSE
+    )
+  }
+
+  p <- p + ggplot2::coord_cartesian(xlim = fixed_xlim, ylim = fixed_ylim)
+
+  list(
+    plots = list(umap_gene = p),
+    tables = list(umap_gene_scores = scores[, setdiff(names(scores), c("hover_text", ".cls", "cluster_f")), drop = FALSE])
   )
 }
 
@@ -12238,6 +12365,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "dsilac_ratio_box_protein" = tb_render_dsilac_ratio_box_protein(results, style, meta),
     "pca"      = tb_render_pca(results, style, meta),
     "umap"     = tb_render_umap(results, style, meta),
+    "umap_gene" = tb_render_umap_gene(results, style, meta),
     "heatmap"  = tb_render_heatmap(results, style, meta),
     "ftest_heatmap" = tb_render_ftest_heatmap(results, style, meta),
     "fc_heatmap" = tb_render_fc_heatmap(results, style, meta),
