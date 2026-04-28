@@ -391,6 +391,24 @@ tf_render_fields <- function(step_id, kind, schema, values_list, prefix, schema_
         ui <- conditionalPanel(sprintf("input['%s'] == '%s'", ctrl_id, ctrl$val), ui)
       }
     }
+
+    if (nm == "target_list") {
+      ctrl <- by_name[["color_mode"]]
+      if (!is.null(ctrl) && identical(ctrl$type, "choice") &&
+          "target_list" %in% (ctrl$choices %||% character())) {
+        ctrl_id <- tf_field_id(step_id, prefix, ctrl)
+        ui <- conditionalPanel(sprintf("input['%s'] == 'target_list'", ctrl_id), ui)
+      }
+    }
+
+    if (nm == "n_clusters") {
+      ctrl <- by_name[["color_mode"]]
+      if (!is.null(ctrl) && identical(ctrl$type, "choice") &&
+          "cluster" %in% (ctrl$choices %||% character())) {
+        ctrl_id <- tf_field_id(step_id, prefix, ctrl)
+        ui <- conditionalPanel(sprintf("input['%s'] == 'cluster'", ctrl_id), ui)
+      }
+    }
     
     if (kind == "subloc" && nm == "mean_type") {
       ctrl_id <- sprintf("%s__s_show_global_mean", step_id)

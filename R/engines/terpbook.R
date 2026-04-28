@@ -6009,7 +6009,10 @@ tb_render_umap_gene <- function(results, style, meta) {
   }
 
   color_mode <- results$data$color_mode %||% results$params$color_mode %||% "none"
-  if (!color_mode %in% c("none", "target_list", "cluster")) color_mode <- "none"
+  if (!color_mode %in% c("sample_group", "none", "target_list", "cluster")) color_mode <- "none"
+  if (identical(color_mode, "sample_group") && !"sample_group" %in% names(scores)) {
+    color_mode <- "none"
+  }
 
   pt_size  <- tb_num(style$point_size, 1.2)
   pt_alpha <- tb_num(style$point_alpha, 0.6)
@@ -6023,11 +6026,29 @@ tb_render_umap_gene <- function(results, style, meta) {
   it[is.na(it)] <- FALSE
   scores$is_target <- it
 
-  scores$hover_text <- sprintf(
-    "%s\n%s\nUMAP1: %.3f\nUMAP2: %.3f",
-    scores$display_id %||% scores$feature_id, scores$feature_id,
-    scores$UMAP1, scores$UMAP2
-  )
+  if ("sample_group" %in% names(scores)) {
+    sg <- as.character(scores$sample_group)
+    sg[is.na(sg) | !nzchar(sg)] <- "(unassigned)"
+    scores$sample_group <- sg
+  }
+
+  if ("sample" %in% names(scores) && "value" %in% names(scores)) {
+    scores$hover_text <- sprintf(
+      "%s\n%s\nSample: %s\nSample group: %s\nValue: %.3f\nUMAP1: %.3f\nUMAP2: %.3f",
+      scores$display_id %||% scores$feature_id, scores$feature_id,
+      scores$sample,
+      if ("sample_group" %in% names(scores)) scores$sample_group else "N/A",
+      scores$value,
+      scores$UMAP1, scores$UMAP2
+    )
+  } else {
+    scores$hover_text <- sprintf(
+      "%s\n%s\nSample group: %s\nUMAP1: %.3f\nUMAP2: %.3f",
+      scores$display_id %||% scores$feature_id, scores$feature_id,
+      if ("sample_group" %in% names(scores)) scores$sample_group else "N/A",
+      scores$UMAP1, scores$UMAP2
+    )
+  }
 
   x_range <- range(scores$UMAP1, na.rm = TRUE)
   y_range <- range(scores$UMAP2, na.rm = TRUE)
@@ -6048,7 +6069,32 @@ tb_render_umap_gene <- function(results, style, meta) {
       axis.line = ggplot2::element_blank()
     )
 
-  if (color_mode == "cluster" && "cluster" %in% names(scores) &&
+  if (color_mode == "sample_group") {
+    scores$sample_group_f <- factor(scores$sample_group)
+    group_colors <- results$data$group_colors %||% character(0)
+    if (!length(group_colors)) {
+      group_colors <- grDevices::hcl.colors(max(1, nlevels(scores$sample_group_f)), palette = "Dark 3")
+      names(group_colors) <- levels(scores$sample_group_f)
+    } else {
+      missing <- levels(scores$sample_group_f)[!levels(scores$sample_group_f) %in% names(group_colors)]
+      if (length(missing) > 0) {
+        auto_colors <- grDevices::hcl.colors(length(missing), palette = "Dark 3")
+        names(auto_colors) <- missing
+        group_colors <- c(group_colors, auto_colors)
+      }
+    }
+    group_colors <- group_colors[levels(scores$sample_group_f)]
+
+    p <- p + ggplot2::geom_point(
+      data = scores,
+      ggplot2::aes(fill = sample_group_f),
+      shape = 21, color = "black", stroke = 0.15,
+      size = pt_size, alpha = pt_alpha
+    ) +
+      ggplot2::scale_fill_manual(values = group_colors,
+                                 name = "Sample group") +
+      ggplot2::guides(fill = ggplot2::guide_legend(override.aes = list(size = 3, alpha = 1)))
+  } else if (color_mode == "cluster" && "cluster" %in% names(scores) &&
       any(!is.na(scores$cluster))) {
     cluster_colors <- results$data$cluster_colors %||% character(0)
     scores$cluster_f <- factor(as.character(scores$cluster),
@@ -6121,7 +6167,7 @@ tb_render_umap_gene <- function(results, style, meta) {
 
   list(
     plots = list(umap_gene = p),
-    tables = list(umap_gene_scores = scores[, setdiff(names(scores), c("hover_text", ".cls", "cluster_f")), drop = FALSE])
+    tables = list(umap_gene_scores = scores[, setdiff(names(scores), c("hover_text", ".cls", "cluster_f", "sample_group_f")), drop = FALSE])
   )
 }
 

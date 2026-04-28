@@ -189,6 +189,7 @@ get_style_section <- function(field_name) {
     "show_row_labels", "show_labels", "venn_show_percentage",
     "show_pearson", "show_spearman", "show_kendall",
     "show_pathway_id", "show_go_id", "show_confidence",
+    "show_target_labels", "label_size",
     "show_group_labels", "group_label_size", "group_label_alpha",
     "group_label_color_mode", "group_label_flat_color", "group_label_bg",
     # Text sizes (font sizes for various text elements)
@@ -5248,6 +5249,26 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         nm <- as.character(f$name %||% "")
         !nm %in% c("label_genes_map", "label_targets_map", "highlight_groups_map")
       }, schema)
+      if (length(schema) == 0) return(div("No style controls for this engine."))
+    }
+
+    if (eng_lower == "umap_gene") {
+      res_umap_gene <- isolate(active_results())
+      cm <- res_umap_gene$data$color_mode %||% res_umap_gene$params$color_mode %||% "none"
+      if (!cm %in% c("sample_group", "none", "target_list", "cluster")) cm <- "none"
+      if (identical(cm, "sample_group") &&
+          (is.null(res_umap_gene$data$scores) ||
+           !"sample_group" %in% names(res_umap_gene$data$scores))) {
+        cm <- "none"
+      }
+
+      target_only <- c("target_color", "target_size_mult", "show_target_labels", "label_size")
+      if (!identical(cm, "target_list")) {
+        schema <- Filter(function(f) !as.character(f$name %||% "") %in% target_only, schema)
+      }
+      if (!cm %in% c("none", "target_list")) {
+        schema <- Filter(function(f) !identical(as.character(f$name %||% ""), "default_color"), schema)
+      }
       if (length(schema) == 0) return(div("No style controls for this engine."))
     }
 
