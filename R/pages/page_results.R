@@ -880,6 +880,27 @@ res_render_overview <- function(run_root, manifest, nodes_df, terpbook_filename 
             )
           )
         )
+      ),
+
+      # Compile figures panel
+      div(
+        class = "res-panel",
+        style = "flex: 0 0 auto;",
+        div(class = "res-panel-head"),
+        div(
+          class = "res-panel-body",
+          style = "padding: 16px;",
+          h4(style = "margin: 0 0 12px 0; font-weight: 800;", "Compile figures"),
+          div(
+            style = "display: flex; flex-direction: column; gap: 8px;",
+            actionButton(
+              "res_open_compose",
+              "Open layout composer",
+              class = "btn-sm",
+              style = "width: 100%; font-weight: 700;"
+            )
+          )
+        )
       )
     )
   )
@@ -3965,7 +3986,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       ),
       div(
         class = "res-compose-body",
-        style = "display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start;",
+        style = "display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: start;",
         div(
           class = "res-compose-controls",
           style = "display: flex; flex-direction: column; gap: 12px;",
@@ -4055,15 +4076,17 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       textInput("compose_layout_name", "Name", value = lay$name, width = "100%"),
       div(
         style = "display: grid; grid-template-columns: 1fr 1fr; gap: 8px;",
-        numericInput("compose_ncol", "Columns", value = lay$ncol, min = 1L, max = 8L, step = 1L),
-        numericInput("compose_nrow", "Rows",    value = lay$nrow, min = 1L, max = 8L, step = 1L)
+        numericInput("compose_ncol", "Columns", value = lay$ncol, min = 1L, max = 8L, step = 1L, width = "100%"),
+        numericInput("compose_nrow", "Rows",    value = lay$nrow, min = 1L, max = 8L, step = 1L, width = "100%")
       ),
       textInput("compose_widths",  "Column widths (comma-separated)",
                 value = paste(format(lay$widths, trim = TRUE), collapse = ", "),
                 width = "100%"),
       textInput("compose_heights", "Row heights (comma-separated)",
                 value = paste(format(lay$heights, trim = TRUE), collapse = ", "),
-                width = "100%")
+                width = "100%"),
+      checkboxInput("compose_hide_legends", "Hide all legends",
+                    value = isTRUE(lay$hide_legends))
     )
   })
 
@@ -4128,6 +4151,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   observeEvent(input$compose_heights, {
     compose_update_active_layout(function(lay) {
       lay$heights <- parse_numeric_csv(input$compose_heights, lay$nrow, fallback = 1)
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_hide_legends, {
+    val <- isTRUE(input$compose_hide_legends)
+    compose_update_active_layout(function(lay) {
+      lay$hide_legends <- val
       lay
     })
   }, ignoreInit = TRUE)
@@ -4247,9 +4278,9 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       div(
         style = "display: grid; grid-template-columns: 1fr 1fr; gap: 8px;",
         numericInput("compose_export_w", "Width",  value = lay$export$width_in,
-                     min = 1, step = 0.5),
+                     min = 1, step = 0.5, width = "100%"),
         numericInput("compose_export_h", "Height", value = lay$export$height_in,
-                     min = 1, step = 0.5)
+                     min = 1, step = 0.5, width = "100%")
       )
     )
   })
@@ -5595,25 +5626,6 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       )
     )
 
-    # Compose / Layouts pseudo-node — sentinel id "__compose__"
-    compose_active <- identical(rv$active_node_id, "__compose__")
-    btns <- tagAppendChildren(
-      btns,
-      actionButton(
-        "res_nav_compose",
-        label = tagList(
-          span(class = "res-step-num", "▦"),
-          span(class = "res-step-text", "Layouts")
-        ),
-        class = paste(
-          "res-node-btn",
-          "res-node-depth-0",
-          if (compose_active) "res-node-active" else ""
-        ),
-        style = "margin-left:0px; width: calc(100% - 0px);"
-      )
-    )
-
     for (i in seq_len(nrow(df))) {
       nid <- df$node_id[i]
 
@@ -5686,8 +5698,9 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     rv$active_node_id <- "overview"
   }, ignoreInit = TRUE)
 
-  # Observer for the Layouts (compose canvas) pseudo-node.
-  observeEvent(input$res_nav_compose, {
+  # Open the layout composer. Triggered from the Overview page's
+  # "Compile figures" panel (input$res_open_compose).
+  open_compose_workspace <- function() {
     .commit_style_debounced$flush()
     if (res_has_pending_changes()) {
       tryCatch(
@@ -5711,6 +5724,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     rv$switching_node <- TRUE
     rv$active_node_id <- "__compose__"
     compose_rev(isolate(compose_rev()) + 1L)
+  }
+
+  observeEvent(input$res_open_compose, {
+    open_compose_workspace()
   }, ignoreInit = TRUE)
 
   observe({

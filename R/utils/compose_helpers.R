@@ -28,15 +28,16 @@ compose_default_layout <- function(id = "layout_1", name = "Layout 1",
   cells <- vector("list", ncol * nrow)  # NULL = empty cell
 
   list(
-    id          = as.character(id),
-    name        = as.character(name),
-    ncol        = ncol,
-    nrow        = nrow,
-    widths      = rep(1, ncol),
-    heights     = rep(1, nrow),
-    cells       = cells,
-    annotation  = list(title = "", tag_levels = "A"),
-    export      = list(width_in = 8.5, height_in = 6, units = "in")
+    id           = as.character(id),
+    name         = as.character(name),
+    ncol         = ncol,
+    nrow         = nrow,
+    widths       = rep(1, ncol),
+    heights      = rep(1, nrow),
+    cells        = cells,
+    annotation   = list(title = "", tag_levels = "A"),
+    export       = list(width_in = 8.5, height_in = 6, units = "in"),
+    hide_legends = FALSE
   )
 }
 
@@ -103,16 +104,20 @@ compose_validate_layout <- function(layout) {
   if (!is.finite(h) || h <= 0) h <- 6
   exp <- list(width_in = w, height_in = h, units = "in")
 
+  hide_legends <- suppressWarnings(as.logical(layout$hide_legends %||% FALSE))
+  if (length(hide_legends) != 1L || is.na(hide_legends)) hide_legends <- FALSE
+
   list(
-    id         = as.character(layout$id %||% "layout_1"),
-    name       = as.character(layout$name %||% "Layout"),
-    ncol       = ncol,
-    nrow       = nrow,
-    widths     = widths,
-    heights    = heights,
-    cells      = cells,
-    annotation = ann,
-    export     = exp
+    id           = as.character(layout$id %||% "layout_1"),
+    name         = as.character(layout$name %||% "Layout"),
+    ncol         = ncol,
+    nrow         = nrow,
+    widths       = widths,
+    heights      = heights,
+    cells        = cells,
+    annotation   = ann,
+    export       = exp,
+    hide_legends = hide_legends
   )
 }
 
@@ -177,6 +182,10 @@ compose_build_patchwork <- function(layout, plot_lookup_fn) {
     title      = if (nzchar(ann$title %||% "")) ann$title else NULL,
     tag_levels = tag_levels
   )
+
+  if (isTRUE(layout$hide_legends)) {
+    combined <- combined & ggplot2::theme(legend.position = "none")
+  }
 
   combined
 }
