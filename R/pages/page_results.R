@@ -3943,10 +3943,17 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (is.null(lid) || !nzchar(lid)) return(invisible(FALSE))
     cur <- rv$layouts[[lid]]
     if (is.null(cur)) return(invisible(FALSE))
-    new <- tryCatch(mutator(compose_validate_layout(cur)),
+    cur_v <- compose_validate_layout(cur)
+    new <- tryCatch(mutator(cur_v),
                     error = function(e) NULL)
     if (is.null(new)) return(invisible(FALSE))
-    rv$layouts[[lid]] <- compose_validate_layout(new)
+    new_v <- compose_validate_layout(new)
+    # Idempotency guard: when an observer fires with a value that does not
+    # actually change the layout (e.g. an input recreated by renderUI re-
+    # echoing its own value back), skip the rev bump so we don't trigger
+    # another renderUI cycle and form a reactive loop.
+    if (identical(new_v, cur_v)) return(invisible(FALSE))
+    rv$layouts[[lid]] <- new_v
     rv$has_unsaved_changes <- TRUE
     rv$save_status <- "dirty"
     compose_rev(isolate(compose_rev()) + 1L)
@@ -4131,26 +4138,34 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     })
   }, ignoreInit = TRUE)
 
-  parse_numeric_csv <- function(s, n, fallback = 1) {
+  # Returns parsed numeric vector of length n, or NULL when the input is not a
+  # complete valid spec (e.g. user is mid-typing). Callers should treat NULL
+  # as "leave the field alone" rather than overwriting with a fallback —
+  # otherwise rapid keystrokes clobber each other and feed reactive loops.
+  parse_numeric_csv <- function(s, n) {
     parts <- strsplit(as.character(s %||% ""), "[,\\s]+", perl = TRUE)[[1]]
     parts <- parts[nzchar(parts)]
     nums <- suppressWarnings(as.numeric(parts))
     if (length(nums) != n || any(!is.finite(nums)) || any(nums <= 0)) {
-      return(rep(fallback, n))
+      return(NULL)
     }
     nums
   }
 
   observeEvent(input$compose_widths, {
     compose_update_active_layout(function(lay) {
-      lay$widths <- parse_numeric_csv(input$compose_widths, lay$ncol, fallback = 1)
+      parsed <- parse_numeric_csv(input$compose_widths, lay$ncol)
+      if (is.null(parsed)) return(lay)
+      lay$widths <- parsed
       lay
     })
   }, ignoreInit = TRUE)
 
   observeEvent(input$compose_heights, {
     compose_update_active_layout(function(lay) {
-      lay$heights <- parse_numeric_csv(input$compose_heights, lay$nrow, fallback = 1)
+      parsed <- parse_numeric_csv(input$compose_heights, lay$nrow)
+      if (is.null(parsed)) return(lay)
+      lay$heights <- parsed
       lay
     })
   }, ignoreInit = TRUE)
