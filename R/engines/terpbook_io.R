@@ -391,12 +391,16 @@ tb_publication_export_defaults <- function(style = NULL, aspect_ratio = 4 / 3) {
   style <- style %||% list()
 
   width_in <- suppressWarnings(as.numeric(style$export_width %||% style$width %||% 7.5))
-  if (!is.finite(width_in) || width_in <= 0) width_in <- 7.5
+  if (length(width_in) != 1L || !is.finite(width_in) || width_in <= 0) width_in <- 7.5
 
-  height_in <- suppressWarnings(as.numeric(style$export_height %||% style$height))
-  if (!is.finite(height_in) || height_in <= 0) {
+  # NOTE: must default the chain to NA_real_ so as.numeric(NULL) doesn't yield
+  # numeric(0); a zero-length logical breaks the `||` short-circuit below and
+  # silently aborts callers like the layout-composer download handler.
+  height_in <- suppressWarnings(as.numeric(
+    style$export_height %||% style$height %||% NA_real_))
+  if (length(height_in) != 1L || !is.finite(height_in) || height_in <= 0) {
     ar <- suppressWarnings(as.numeric(aspect_ratio))
-    if (!is.finite(ar) || ar <= 0) ar <- 4 / 3
+    if (length(ar) != 1L || !is.finite(ar) || ar <= 0) ar <- 4 / 3
     height_in <- width_in / ar
   }
 
