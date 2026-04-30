@@ -3041,10 +3041,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     terpbook_source_path = NULL,  # Absolute path of opened .terpbook (NULL for browser uploads)
     workspace_id = NULL,          # Stable workspace identifier for the open file
     last_autosave_at = NULL,      # Timestamp of the most recent successful flush to source
-    lock_heartbeat_token = 0L     # Token used to cancel pending heartbeat callbacks
+    lock_heartbeat_token = 0L,    # Token used to cancel pending heartbeat callbacks
+    layouts = list(),             # Patchwork composition layouts (see R/utils/compose_helpers.R)
+    active_layout_id = NULL       # Currently edited layout id when active_node_id == "__compose__"
   )
   style_rev <- reactiveVal(0L)
   pr_detail_shared_rev <- reactiveVal(0L)
+  compose_rev <- reactiveVal(0L)  # bumped whenever any layout edit lands; drives preview re-render
 
   # LRU trim for plotly cache — drop oldest entries when over limit
   trim_plotly_cache <- function() {
@@ -3523,6 +3526,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       rv$run_root <- man$run_root
       rv$manifest <- man$manifest
       rv$nodes_df <- nodes
+      rv$layouts <- tryCatch(compose_load_layouts(man$run_root),
+                             error = function(e) list())
+      rv$active_layout_id <- if (length(rv$layouts) > 0) names(rv$layouts)[[1]] else NULL
+      compose_rev(isolate(compose_rev()) + 1L)
       rv$load_warnings <- man$warnings %||% character()
       rv$pending_cluster_goora <- NULL
       rv$run_data_type <- man$manifest$data_type %||% "proteomics"
@@ -3822,7 +3829,514 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       }
     )
   })
-  
+
+  # ---- Compose canvas plot lookup --------------------------------------------
+  # Lazy plot fetch for the patchwork canvas. Renders the requested node on
+  # demand via terpbook_render_node() and caches the resulting ggplot list per
+  # (node_id) so width/height tweaks in the canvas don't re-run engines.
+  # The cache is invalidated whenever a source node's style/plotly/visibility
+  # cache mutates (style_rev() bumps).
+  compose_plot_cache <- reactiveValues(
+    by_node = list(),    # node_id -> named list of plots
+    style_stamp = 0L     # bumped on style_rev() to flush stale entries
+  )
+
+  observe({
+    style_rev()  # take a dependency
+    # Drop the entire compose cache on any style change. Cheap to rebuild on
+    # first access; safer than per-node invalidation when ancestors are involved.
+    compose_plot_cache$by_node <- list()
+    compose_plot_cache$style_stamp <- isolate(compose_plot_cache$style_stamp) + 1L
+  })
+
+  compose_get_plot <- function(node_id, plot_key) {
+    if (is.null(node_id) || !nzchar(node_id)) return(NULL)
+    if (is.null(plot_key) || !nzchar(plot_key)) return(NULL)
+    if (is.null(rv$nodes_df) || nrow(rv$nodes_df) == 0) return(NULL)
+
+    cache_key <- as.character(node_id)
+    cached <- isolate(compose_plot_cache$by_node[[cache_key]])
+    if (!is.null(cached) && plot_key %in% names(cached)) {
+      return(cached[[plot_key]])
+    }
+
+    idx <- match(node_id, rv$nodes_df$node_id)
+    if (!is.finite(idx)) return(NULL)
+    node_dir <- rv$nodes_df$node_dir[[idx]]
+    eng_id   <- tolower(rv$nodes_df$engine_id[[idx]] %||% "")
+    if (!nzchar(eng_id)) return(NULL)
+
+    res <- tryCatch(tb_load_results(node_dir), error = function(e) NULL)
+    if (is.null(res)) return(NULL)
+
+    effective_state <- tryCatch(
+      res_build_effective_state(node_id, node_dir),
+      error = function(e) list(style = list(), plotly = list(), visibility = list())
+    )
+    if (eng_id %in% c("goora", "1dgofcs", "2dgofcs")) {
+      effective_state$style$ontology_filter <- effective_state$style$ontology_filter %||% "all"
+    }
+    node_meta <- tryCatch(tb_node_meta(node_dir), error = function(e) NULL)
+
+    rend <- tryCatch(
+      terpbook_render_node(eng_id, res, effective_state,
+                           registry = res_registry(), node_meta = node_meta),
+      error = function(e) NULL
+    )
+    if (is.null(rend) || inherits(rend, "error")) return(NULL)
+
+    plots <- res_extract_ggplots(rend)
+    if (length(plots) == 0) return(NULL)
+
+    # Drop htmlwidgets — patchwork can't compose interactive widgets.
+    plots <- plots[vapply(plots, function(p) inherits(p, "ggplot") || inherits(p, "patchwork"),
+                          logical(1))]
+    if (length(plots) == 0) return(NULL)
+
+    isolate({
+      compose_plot_cache$by_node[[cache_key]] <- plots
+    })
+
+    if (plot_key %in% names(plots)) plots[[plot_key]] else NULL
+  }
+
+  # ---- Compose canvas helpers -----------------------------------------------
+
+  # Snapshot of the active layout for use in observers / preview.
+  compose_active_layout <- function() {
+    lid <- isolate(rv$active_layout_id)
+    if (is.null(lid) || !nzchar(lid)) return(NULL)
+    lay <- isolate(rv$layouts[[lid]])
+    if (is.null(lay)) return(NULL)
+    compose_validate_layout(lay)
+  }
+
+  # Reactive variant — depends on compose_rev() so consumers refresh on edits.
+  compose_active_layout_reactive <- reactive({
+    compose_rev()
+    compose_active_layout()
+  })
+
+  compose_update_active_layout <- function(mutator) {
+    lid <- rv$active_layout_id
+    if (is.null(lid) || !nzchar(lid)) return(invisible(FALSE))
+    cur <- rv$layouts[[lid]]
+    if (is.null(cur)) return(invisible(FALSE))
+    new <- tryCatch(mutator(compose_validate_layout(cur)),
+                    error = function(e) NULL)
+    if (is.null(new)) return(invisible(FALSE))
+    rv$layouts[[lid]] <- compose_validate_layout(new)
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+    compose_rev(isolate(compose_rev()) + 1L)
+    invisible(TRUE)
+  }
+
+  # Build choices for cell dropdowns: "label" -> "node_id::plot_key".
+  # Reused from the existing bulk export helper.
+  compose_cell_choices <- reactive({
+    compose_rev()  # refresh choices when layouts change too (cheap)
+    if (is.null(rv$nodes_df) || nrow(rv$nodes_df) == 0) return(list())
+    tryCatch(
+      res_build_graph_choices(
+        nodes_df                 = rv$nodes_df,
+        registry                 = res_registry(),
+        build_effective_state_fn = res_build_effective_state,
+        load_results_fn          = tb_load_results,
+        export_graph_name_fn     = res_export_graph_name,
+        node_numbers             = res_compute_node_numbers(rv$nodes_df)
+      ),
+      error = function(e) list()
+    )
+  })
+
+  compose_workspace_ui <- function() {
+    div(
+      class = "res-compose-workspace",
+      style = "padding: 12px; display: flex; flex-direction: column; gap: 12px;",
+      div(
+        class = "res-compose-header",
+        style = "display: flex; gap: 8px; align-items: center; flex-wrap: wrap;",
+        tags$h4("Layout composer", style = "margin: 0; flex: 0 0 auto;"),
+        div(style = "flex: 1;"),
+        uiOutput("compose_layout_picker", inline = TRUE),
+        actionButton("compose_new_layout", "+ New", class = "btn-sm"),
+        actionButton("compose_delete_layout", "Delete", class = "btn-sm btn-outline-danger")
+      ),
+      div(
+        class = "res-compose-body",
+        style = "display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start;",
+        div(
+          class = "res-compose-controls",
+          style = "display: flex; flex-direction: column; gap: 12px;",
+          uiOutput("compose_grid_controls"),
+          uiOutput("compose_cells"),
+          uiOutput("compose_annotation_controls"),
+          uiOutput("compose_export_controls"),
+          tags$hr(),
+          div(
+            style = "display: flex; gap: 6px; flex-wrap: wrap;",
+            downloadButton("compose_dl_png", "PNG",  class = "btn-sm btn-primary"),
+            downloadButton("compose_dl_pdf", "PDF",  class = "btn-sm btn-primary"),
+            downloadButton("compose_dl_svg", "SVG",  class = "btn-sm btn-primary")
+          ),
+          tags$small(
+            style = "color: #666;",
+            "SVG / PDF preserve vector text for editing in Illustrator."
+          )
+        ),
+        div(
+          class = "res-compose-preview-pane",
+          style = "min-height: 480px; background: #fafafa; border: 1px solid #e0e0e0; padding: 12px; overflow: auto;",
+          plotOutput("compose_preview", height = "640px")
+        )
+      )
+    )
+  }
+
+  # ---- Compose: layout picker ------------------------------------------------
+  output$compose_layout_picker <- renderUI({
+    compose_rev()
+    layouts <- rv$layouts %||% list()
+    if (length(layouts) == 0) {
+      return(tags$em("No layouts yet"))
+    }
+    choices <- setNames(names(layouts),
+                        vapply(layouts, function(l) as.character(l$name %||% l$id %||% ""),
+                               character(1)))
+    selectInput(
+      "compose_layout_pick", NULL,
+      choices = choices,
+      selected = rv$active_layout_id %||% names(layouts)[[1]],
+      width = "200px"
+    )
+  })
+
+  observeEvent(input$compose_layout_pick, {
+    val <- input$compose_layout_pick
+    if (is.null(val) || !nzchar(val)) return()
+    if (!val %in% names(rv$layouts %||% list())) return()
+    if (identical(val, rv$active_layout_id)) return()
+    rv$active_layout_id <- val
+    compose_rev(isolate(compose_rev()) + 1L)
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_new_layout, {
+    new_id <- compose_next_layout_id(rv$layouts %||% list())
+    n <- length(rv$layouts %||% list()) + 1L
+    lay <- compose_default_layout(id = new_id, name = paste("Layout", n),
+                                  ncol = 2L, nrow = 2L)
+    cur <- rv$layouts %||% list()
+    cur[[new_id]] <- lay
+    rv$layouts <- cur
+    rv$active_layout_id <- new_id
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+    compose_rev(isolate(compose_rev()) + 1L)
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_delete_layout, {
+    lid <- rv$active_layout_id
+    if (is.null(lid) || !(lid %in% names(rv$layouts %||% list()))) return()
+    cur <- rv$layouts
+    cur[[lid]] <- NULL
+    rv$layouts <- cur
+    rv$active_layout_id <- if (length(cur) > 0) names(cur)[[1]] else NULL
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+    compose_rev(isolate(compose_rev()) + 1L)
+  }, ignoreInit = TRUE)
+
+  # ---- Compose: grid controls (ncol/nrow + widths/heights + name) -----------
+  output$compose_grid_controls <- renderUI({
+    lay <- compose_active_layout_reactive()
+    if (is.null(lay)) return(NULL)
+    tagList(
+      textInput("compose_layout_name", "Name", value = lay$name, width = "100%"),
+      div(
+        style = "display: grid; grid-template-columns: 1fr 1fr; gap: 8px;",
+        numericInput("compose_ncol", "Columns", value = lay$ncol, min = 1L, max = 8L, step = 1L),
+        numericInput("compose_nrow", "Rows",    value = lay$nrow, min = 1L, max = 8L, step = 1L)
+      ),
+      textInput("compose_widths",  "Column widths (comma-separated)",
+                value = paste(format(lay$widths, trim = TRUE), collapse = ", "),
+                width = "100%"),
+      textInput("compose_heights", "Row heights (comma-separated)",
+                value = paste(format(lay$heights, trim = TRUE), collapse = ", "),
+                width = "100%")
+    )
+  })
+
+  observeEvent(input$compose_layout_name, {
+    val <- input$compose_layout_name
+    if (is.null(val)) return()
+    compose_update_active_layout(function(lay) {
+      lay$name <- as.character(val)
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_ncol, {
+    v <- suppressWarnings(as.integer(input$compose_ncol))
+    if (!is.finite(v) || v < 1L) return()
+    compose_update_active_layout(function(lay) {
+      lay$ncol <- v
+      lay$widths <- if (length(lay$widths) == v) lay$widths else rep(1, v)
+      total <- lay$ncol * lay$nrow
+      if (length(lay$cells) > total) {
+        lay$cells <- lay$cells[seq_len(total)]
+      } else if (length(lay$cells) < total) {
+        lay$cells <- c(lay$cells, vector("list", total - length(lay$cells)))
+      }
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_nrow, {
+    v <- suppressWarnings(as.integer(input$compose_nrow))
+    if (!is.finite(v) || v < 1L) return()
+    compose_update_active_layout(function(lay) {
+      lay$nrow <- v
+      lay$heights <- if (length(lay$heights) == v) lay$heights else rep(1, v)
+      total <- lay$ncol * lay$nrow
+      if (length(lay$cells) > total) {
+        lay$cells <- lay$cells[seq_len(total)]
+      } else if (length(lay$cells) < total) {
+        lay$cells <- c(lay$cells, vector("list", total - length(lay$cells)))
+      }
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  parse_numeric_csv <- function(s, n, fallback = 1) {
+    parts <- strsplit(as.character(s %||% ""), "[,\\s]+", perl = TRUE)[[1]]
+    parts <- parts[nzchar(parts)]
+    nums <- suppressWarnings(as.numeric(parts))
+    if (length(nums) != n || any(!is.finite(nums)) || any(nums <= 0)) {
+      return(rep(fallback, n))
+    }
+    nums
+  }
+
+  observeEvent(input$compose_widths, {
+    compose_update_active_layout(function(lay) {
+      lay$widths <- parse_numeric_csv(input$compose_widths, lay$ncol, fallback = 1)
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_heights, {
+    compose_update_active_layout(function(lay) {
+      lay$heights <- parse_numeric_csv(input$compose_heights, lay$nrow, fallback = 1)
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  # ---- Compose: per-cell dropdowns ------------------------------------------
+  output$compose_cells <- renderUI({
+    lay <- compose_active_layout_reactive()
+    if (is.null(lay)) return(NULL)
+    choices <- compose_cell_choices()
+    select_choices <- c(list("(empty)" = ""), as.list(choices))
+
+    rows <- lapply(seq_len(lay$nrow), function(r) {
+      cells <- lapply(seq_len(lay$ncol), function(c) {
+        idx <- (r - 1L) * lay$ncol + c
+        cell <- lay$cells[[idx]]
+        sel <- if (is.null(cell)) "" else paste(cell$node_id, cell$plot_key, sep = "::")
+        div(
+          style = "border: 1px dashed #d0d0d0; padding: 6px; border-radius: 4px;",
+          tags$small(paste0("R", r, " · C", c), style = "color: #888;"),
+          selectInput(
+            inputId = paste0("compose_cell_", idx),
+            label = NULL,
+            choices = select_choices,
+            selected = sel,
+            width = "100%"
+          )
+        )
+      })
+      div(
+        style = sprintf("display: grid; grid-template-columns: repeat(%d, 1fr); gap: 6px;",
+                        lay$ncol),
+        cells
+      )
+    })
+
+    tagList(
+      tags$label("Cells"),
+      div(style = "display: flex; flex-direction: column; gap: 6px;", rows)
+    )
+  })
+
+  # Wire one observer per cell index lazily (track with rv$nav_obs-style map).
+  compose_cell_obs <- list()
+  observe({
+    lay <- compose_active_layout_reactive()
+    if (is.null(lay)) return()
+    total <- lay$ncol * lay$nrow
+    for (i in seq_len(total)) {
+      if (is.null(compose_cell_obs[[as.character(i)]])) {
+        local({
+          idx <- i
+          inp_id <- paste0("compose_cell_", idx)
+          compose_cell_obs[[as.character(idx)]] <<- observeEvent(input[[inp_id]], {
+            val <- input[[inp_id]]
+            compose_update_active_layout(function(lay2) {
+              total2 <- lay2$ncol * lay2$nrow
+              if (idx > total2) return(lay2)
+              if (is.null(val) || !nzchar(val)) {
+                # Preserve the slot but null it out: [[<- with NULL removes.
+                lay2$cells[idx] <- list(NULL)
+              } else {
+                parts <- strsplit(val, "::", fixed = TRUE)[[1]]
+                if (length(parts) >= 2 && nzchar(parts[[1]]) && nzchar(parts[[2]])) {
+                  lay2$cells[[idx]] <- list(
+                    node_id  = parts[[1]],
+                    plot_key = parts[[2]],
+                    tag      = NULL,
+                    title    = NULL
+                  )
+                }
+              }
+              lay2
+            })
+          }, ignoreInit = TRUE)
+        })
+      }
+    }
+  })
+
+  # ---- Compose: annotation + export controls --------------------------------
+  output$compose_annotation_controls <- renderUI({
+    lay <- compose_active_layout_reactive()
+    if (is.null(lay)) return(NULL)
+    tagList(
+      textInput("compose_title", "Figure title (optional)",
+                value = lay$annotation$title %||% "", width = "100%"),
+      selectInput("compose_tag_levels", "Panel tags",
+                  choices = c("A, B, C..." = "A",
+                              "a, b, c..." = "a",
+                              "1, 2, 3..." = "1",
+                              "I, II, III..." = "I",
+                              "(none)" = "none"),
+                  selected = lay$annotation$tag_levels %||% "A",
+                  width = "100%")
+    )
+  })
+
+  observeEvent(input$compose_title, {
+    compose_update_active_layout(function(lay) {
+      lay$annotation$title <- as.character(input$compose_title %||% "")
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_tag_levels, {
+    compose_update_active_layout(function(lay) {
+      lay$annotation$tag_levels <- as.character(input$compose_tag_levels %||% "A")
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  output$compose_export_controls <- renderUI({
+    lay <- compose_active_layout_reactive()
+    if (is.null(lay)) return(NULL)
+    tagList(
+      tags$label("Export size (inches)"),
+      div(
+        style = "display: grid; grid-template-columns: 1fr 1fr; gap: 8px;",
+        numericInput("compose_export_w", "Width",  value = lay$export$width_in,
+                     min = 1, step = 0.5),
+        numericInput("compose_export_h", "Height", value = lay$export$height_in,
+                     min = 1, step = 0.5)
+      )
+    )
+  })
+
+  observeEvent(input$compose_export_w, {
+    v <- suppressWarnings(as.numeric(input$compose_export_w))
+    if (!is.finite(v) || v <= 0) return()
+    compose_update_active_layout(function(lay) {
+      lay$export$width_in <- v
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_export_h, {
+    v <- suppressWarnings(as.numeric(input$compose_export_h))
+    if (!is.finite(v) || v <= 0) return()
+    compose_update_active_layout(function(lay) {
+      lay$export$height_in <- v
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  # ---- Compose: live preview ------------------------------------------------
+  output$compose_preview <- renderPlot({
+    lay <- compose_active_layout_reactive()
+    if (is.null(lay)) {
+      plot.new(); text(0.5, 0.5, "No layout selected.")
+      return(invisible(NULL))
+    }
+    combined <- tryCatch(
+      compose_build_patchwork(lay, compose_get_plot),
+      error = function(e) {
+        plot.new(); text(0.5, 0.5, paste("Compose error:", conditionMessage(e)))
+        return(NULL)
+      }
+    )
+    if (is.null(combined)) {
+      plot.new(); text(0.5, 0.5, "Add at least one plot to see a preview.")
+      return(invisible(NULL))
+    }
+    suppressMessages(print(combined))
+  }, res = 110)
+
+  # ---- Compose: download handlers (PNG / PDF / SVG) -------------------------
+  compose_export_filename <- function(ext) {
+    lay <- compose_active_layout()
+    base <- if (!is.null(lay) && nzchar(lay$name %||% "")) lay$name else "layout"
+    base <- res_export_filename(base)
+    if (!nzchar(base)) base <- "layout"
+    paste0(base, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".", ext)
+  }
+
+  compose_download_content <- function(file, fmt) {
+    lay <- compose_active_layout()
+    if (is.null(lay)) stop("No layout to export.")
+    combined <- compose_build_patchwork(lay, compose_get_plot)
+    if (is.null(combined)) stop("Layout has no plots assigned.")
+    defs <- tb_publication_export_defaults(list())
+    w <- lay$export$width_in
+    h <- lay$export$height_in
+    if (toupper(fmt) == "PDF") {
+      ggplot2::ggsave(file, combined, width = w, height = h,
+                      units = "in", device = defs$pdf_device)
+    } else if (toupper(fmt) == "SVG") {
+      ggplot2::ggsave(file, combined, width = w, height = h,
+                      units = "in", device = defs$svg_device)
+    } else {
+      png_type <- if (capabilities("cairo")) "cairo-png" else NULL
+      ggplot2::ggsave(file, combined, width = w, height = h,
+                      units = "in", dpi = defs$dpi,
+                      device = grDevices::png, type = png_type)
+    }
+  }
+
+  output$compose_dl_png <- downloadHandler(
+    filename = function() compose_export_filename("png"),
+    content  = function(file) compose_download_content(file, "PNG")
+  )
+  output$compose_dl_pdf <- downloadHandler(
+    filename = function() compose_export_filename("pdf"),
+    content  = function(file) compose_download_content(file, "PDF")
+  )
+  output$compose_dl_svg <- downloadHandler(
+    filename = function() compose_export_filename("svg"),
+    content  = function(file) compose_download_content(file, "SVG")
+  )
+
   res_label_empty_state <- function() {
     list(id = NULL, plot_key = NULL, eng = NULL)
   }
@@ -5081,6 +5595,25 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       )
     )
 
+    # Compose / Layouts pseudo-node — sentinel id "__compose__"
+    compose_active <- identical(rv$active_node_id, "__compose__")
+    btns <- tagAppendChildren(
+      btns,
+      actionButton(
+        "res_nav_compose",
+        label = tagList(
+          span(class = "res-step-num", "▦"),
+          span(class = "res-step-text", "Layouts")
+        ),
+        class = paste(
+          "res-node-btn",
+          "res-node-depth-0",
+          if (compose_active) "res-node-active" else ""
+        ),
+        style = "margin-left:0px; width: calc(100% - 0px);"
+      )
+    )
+
     for (i in seq_len(nrow(df))) {
       nid <- df$node_id[i]
 
@@ -5151,6 +5684,33 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     }
     rv$switching_node <- TRUE  # FIX: Set flag before node switch
     rv$active_node_id <- "overview"
+  }, ignoreInit = TRUE)
+
+  # Observer for the Layouts (compose canvas) pseudo-node.
+  observeEvent(input$res_nav_compose, {
+    .commit_style_debounced$flush()
+    if (res_has_pending_changes()) {
+      tryCatch(
+        res_commit_pending_changes(trigger_source = "node_switch"),
+        error = function(e) message("[Node switch commit] Error: ", conditionMessage(e))
+      )
+      .commit_style_debounced$flush()
+    }
+    # Auto-create a default layout if none exist yet.
+    if (length(rv$layouts) == 0) {
+      lay <- compose_default_layout(id = "layout_1", name = "Layout 1",
+                                    ncol = 2L, nrow = 2L)
+      rv$layouts <- list(layout_1 = lay)
+      rv$active_layout_id <- "layout_1"
+      rv$has_unsaved_changes <- TRUE
+      rv$save_status <- "dirty"
+    } else if (is.null(rv$active_layout_id) ||
+               !(rv$active_layout_id %in% names(rv$layouts))) {
+      rv$active_layout_id <- names(rv$layouts)[[1]]
+    }
+    rv$switching_node <- TRUE
+    rv$active_node_id <- "__compose__"
+    compose_rev(isolate(compose_rev()) + 1L)
   }, ignoreInit = TRUE)
 
   observe({
@@ -6241,6 +6801,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     rv$has_unsaved_changes <- FALSE
     rv$save_status <- "saved"
     rv$last_autosave_at <- NULL
+    rv$layouts <- list()
+    rv$active_layout_id <- NULL
   }
 
   # Return button — autosave makes this a silent close. No modal.
@@ -7136,6 +7698,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           })
         }
 
+        # Persist patchwork composition layouts at the run_root level.
+        tryCatch(
+          compose_save_layouts(rv$run_root, rv$layouts %||% list()),
+          error = function(e) warning("Failed to save layouts.json: ", conditionMessage(e))
+        )
+
         # Zip the entire run directory
         parent_dir <- dirname(rv$run_root)
         if (!dir.exists(parent_dir)) {
@@ -7247,6 +7815,11 @@ page_results_server <- function(input, output, session, app_state = NULL) {
                  error = function(e) warning("Failed to save node ", node_id, ": ", conditionMessage(e)))
       }
 
+      tryCatch(
+        compose_save_layouts(rv$run_root, rv$layouts %||% list()),
+        error = function(e) warning("Failed to save layouts.json: ", conditionMessage(e))
+      )
+
       if (!silent) msterp_set_busy(session, TRUE, "Building archive...", percent = 60)
       parent_dir <- dirname(rv$run_root)
       run_folder <- basename(rv$run_root)
@@ -7342,6 +7915,11 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         warn_ui,
         res_render_overview(rv$run_root, rv$manifest, rv$nodes_df, rv$terpbook_filename, rv$has_unsaved_changes)
       ))
+    }
+
+    # Patchwork composition canvas — sentinel "__compose__" node id.
+    if (identical(rv$active_node_id, "__compose__")) {
+      return(tagList(warn_ui, compose_workspace_ui()))
     }
 
     node <- active_node_row()
