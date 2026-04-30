@@ -89,12 +89,13 @@ stats_umap_gene_run <- function(payload, params = NULL, context = NULL) {
   log_transform <- params$log_transform %||% "log2"
   scale_method <- params$scale_method %||% "zscore"
   missing_handling <- params$missing_handling %||% "drop_gene"
+  melted_minimal_inputs <- isTRUE(params$melted_minimal_inputs %||% TRUE)
   min_valid_fraction <- as.numeric(params$min_valid_fraction %||% 0.7)
-  variance_filter_top_n <- as.integer(params$variance_filter_top_n %||% 2000)
-  n_neighbors <- as.integer(params$n_neighbors %||% 15)
-  min_dist <- as.numeric(params$min_dist %||% 0.1)
+  variance_filter_top_n <- as.integer(params$variance_filter_top_n %||% 1000)
+  n_neighbors <- as.integer(params$n_neighbors %||% 100)
+  min_dist <- as.numeric(params$min_dist %||% 0.01)
   spread <- as.numeric(params$spread %||% 1)
-  n_epochs_param <- as.integer(params$n_epochs %||% 0)
+  n_epochs_param <- as.integer(params$n_epochs %||% 1000)
   init <- params$init %||% "spectral"
   metric <- params$metric %||% "euclidean"
   seed <- as.integer(params$seed %||% 42)
@@ -382,15 +383,25 @@ stats_umap_gene_run <- function(payload, params = NULL, context = NULL) {
     obs_replicate_delta <- obs_value - obs_group_mean
     obs_value_rank <- rank(obs_value, ties.method = "average") / max(length(obs_value), 1)
 
-    umap_input <- cbind(
-      value = obs_value,
-      feature_mean = obs_feature_mean,
-      feature_sd = obs_feature_sd,
-      group_mean = obs_group_mean,
-      group_delta = obs_group_delta,
-      replicate_delta = obs_replicate_delta,
-      value_rank = obs_value_rank
-    )
+    if (melted_minimal_inputs) {
+      umap_input <- cbind(
+        group_mean = obs_group_mean,
+        group_delta = obs_group_delta,
+        replicate_delta = obs_replicate_delta
+      )
+      add_log("INFO", "Melted UMAP input: minimal 3-column set (group_mean, group_delta, replicate_delta)")
+    } else {
+      umap_input <- cbind(
+        value = obs_value,
+        feature_mean = obs_feature_mean,
+        feature_sd = obs_feature_sd,
+        group_mean = obs_group_mean,
+        group_delta = obs_group_delta,
+        replicate_delta = obs_replicate_delta,
+        value_rank = obs_value_rank
+      )
+      add_log("INFO", "Melted UMAP input: full 7-column set")
+    }
     keep_obs <- stats::complete.cases(umap_input) & !is.na(obs_group) & nzchar(obs_group)
     if (sum(keep_obs) < 10) {
       add_log("WARN", sprintf("Insufficient complete melted observations for UMAP: %d", sum(keep_obs)))
