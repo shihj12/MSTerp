@@ -1098,7 +1098,19 @@ tb_render_spearman <- tb_render_scatter_correlation
   plot_key <- if (nzchar(comparison_name)) comparison_name else "volcano_plot"
   label_map_json <- style$label_genes_map %||% "{}"
   label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
-  manual_labs <- label_map[[plot_key]] %||% ""
+  # Belt-and-suspenders: if labels were committed under the legacy "volcano_plot"
+  # key (e.g. before res_plot_pick was populated for a multi-comp node), still
+  # render them on the per-comparison plot. The per-comparison key wins.
+  .has_text <- function(x) {
+    if (is.null(x)) return(FALSE)
+    s <- as.character(x)
+    length(s) > 0 && any(nzchar(s))
+  }
+  raw_labs <- label_map[[plot_key]]
+  if (!.has_text(raw_labs)) {
+    raw_labs <- label_map[["volcano_plot"]]
+  }
+  manual_labs <- raw_labs %||% ""
   manual_labs <- trimws(unlist(strsplit(as.character(manual_labs), "\n", fixed = TRUE)))
   manual_labs <- manual_labs[nzchar(manual_labs)]
   manual_labs <- intersect(manual_labs, df$gene)
@@ -1116,6 +1128,13 @@ tb_render_spearman <- tb_render_scatter_correlation
   }
 
   labs <- unique(c(manual_labs, topn_labs))
+
+  if (isTRUE(getOption("msterp.debug_labels", FALSE)) && length(labs) == 0 && length(label_map) > 0) {
+    message("[DEBUG-LABELS] volcano: empty labs but non-empty label_map. plot_key='", plot_key,
+            "' label_map_keys=[", paste(names(label_map), collapse = ","),
+            "] manual_raw='", paste(label_map[[plot_key]] %||% "", collapse = "|"),
+            "' df_gene_n=", length(df$gene))
+  }
 
   if (length(labs) > 0) {
     df_lab <- df[df$gene %in% labs, , drop = FALSE]
@@ -8218,6 +8237,11 @@ tb_render_rankplot <- function(results, style, meta) {
   label_genes <- label_map[["rankplot"]] %||% ""
   label_genes <- trimws(unlist(strsplit(as.character(label_genes), "\n", fixed = TRUE)))
   label_genes <- label_genes[nzchar(label_genes)]
+
+  if (isTRUE(getOption("msterp.debug_labels", FALSE)) && length(label_genes) == 0 && length(label_map) > 0) {
+    message("[DEBUG-LABELS] rankplot: empty labels but non-empty label_map. label_map_keys=[",
+            paste(names(label_map), collapse = ","), "]")
+  }
 
   if (length(label_genes) > 0) {
     df_labels <- df[df$gene %in% label_genes, , drop = FALSE]

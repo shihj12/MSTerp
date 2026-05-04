@@ -159,8 +159,19 @@ compose_build_patchwork <- function(layout, plot_lookup_fn) {
     if (is.null(p)) {
       return(placeholder("Plot unavailable"))
     }
-    if (!is.null(cell$title) && nzchar(cell$title)) {
+    is_patchwork <- inherits(p, "patchwork") && !inherits(p, "gg")
+    # `+ ggplot2::labs()` adds to the underlying ggplot, which is fine for a
+    # plain ggplot but a no-op (or wrong layer) on a composed patchwork —
+    # skip the per-cell title injection in the patchwork case.
+    if (!is_patchwork && !is.null(cell$title) && nzchar(cell$title)) {
       p <- p + ggplot2::labs(title = cell$title)
+    }
+    # Wrap composed patchworks (e.g. volcano with summary cards) so the
+    # outer tag walker treats them atomically. Without this, two volcanos
+    # in a single layout produce a tag/print-time error that surfaces in
+    # the Shiny client as "[object Object]".
+    if (is_patchwork) {
+      p <- patchwork::wrap_elements(full = p)
     }
     any_filled <<- TRUE
     p

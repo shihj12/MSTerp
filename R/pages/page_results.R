@@ -4325,18 +4325,23 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       plot.new(); text(0.5, 0.5, "No layout selected.")
       return(invisible(NULL))
     }
-    combined <- tryCatch(
-      compose_build_patchwork(lay, compose_get_plot),
-      error = function(e) {
-        plot.new(); text(0.5, 0.5, paste("Compose error:", conditionMessage(e)))
-        return(NULL)
+    # Wrap BOTH the build and the print: patchwork errors during the print
+    # phase (e.g. tag walking on nested patchworks) would otherwise propagate
+    # to Shiny's default error UI, which on the client surfaces as
+    # "[object Object]".
+    tryCatch({
+      combined <- compose_build_patchwork(lay, compose_get_plot)
+      if (is.null(combined)) {
+        plot.new(); text(0.5, 0.5, "Add at least one plot to see a preview.")
+        return(invisible(NULL))
       }
-    )
-    if (is.null(combined)) {
-      plot.new(); text(0.5, 0.5, "Add at least one plot to see a preview.")
-      return(invisible(NULL))
-    }
-    suppressMessages(print(combined))
+      suppressMessages(print(combined))
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("Compose render error:", conditionMessage(e)),
+           col = "red")
+      invisible(NULL)
+    })
   }, res = 110)
 
   # ---- Compose: download handlers (PNG / PDF / SVG) -------------------------
@@ -4509,6 +4514,29 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     labs[nzchar(labs)]
   }
 
+  # Canonical volcano plot key used as the JSON key in label_genes_map.
+  # Prefer (in order): the plot picker, the rendered plot names, the first
+  # comparison name from the active results, then the legacy "volcano_plot"
+  # literal. The legacy literal is only valid for single-comparison results;
+  # using it as a blind fallback on a multi-comparison node writes labels
+  # under a key the renderer (terpbook.R:1098) never reads.
+  res_volcano_plot_key <- function(default_key = "volcano_plot") {
+    pick <- input$res_plot_pick
+    if (!is.null(pick) && nzchar(pick)) return(as.character(pick))
+
+    plot_names <- rv$current_plot_names %||% character()
+    if (length(plot_names) > 0 && nzchar(plot_names[[1]])) return(as.character(plot_names[[1]]))
+
+    res <- tryCatch(active_results(), error = function(e) NULL)
+    comps <- res$data$comparisons
+    if (is.list(comps) && length(comps) > 0) {
+      nm <- names(comps)
+      if (length(nm) > 0 && nzchar(nm[[1]])) return(as.character(nm[[1]]))
+    }
+
+    as.character(default_key)
+  }
+
   res_update_volcano_label_map <- function(plot_key, labels, update_input = TRUE) {
     plot_key <- as.character(plot_key %||% "")
     if (!nzchar(plot_key)) return(invisible(NULL))
@@ -4527,7 +4555,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     key <- as.character(node_id %||% "")
     if (!nzchar(key)) return(invisible(NULL))
 
-    cur_style <- rv$cache_style_by_node[[key]] %||% list()
+    # Fall back to disk-merged effective style when the in-memory cache is
+    # empty so co-located style fields aren't lost when only the label map
+    # is being updated.
+    cur_style <- rv$cache_style_by_node[[key]] %||% (eff$style %||% list())
     cur_style$label_genes_map <- as.character(new_json)
     rv$cache_style_by_node[[key]] <- cur_style
 
@@ -4537,8 +4568,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     }
 
     if (isTRUE(update_input)) {
-      plot_names <- rv$current_plot_names %||% character()
-      current_plot <- input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "volcano_plot")
+      current_plot <- res_volcano_plot_key()
       if (identical(current_plot, plot_key)) {
         updateTextAreaInput(session, "res_volcano_label_genes", value = label_map[[plot_key]] %||% "")
       }
@@ -5093,9 +5123,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       label_map[[plot_key]] <- new_text
       new_json <- jsonlite::toJSON(label_map, auto_unbox = TRUE)
 
-      cur_style <- rv$cache_style_by_node[[key]] %||% list()
+      cur_style <- rv$cache_style_by_node[[key]] %||% (eff$style %||% list())
       cur_style$label_genes_map <- as.character(new_json)
       rv$cache_style_by_node[[key]] <- cur_style
+
+      if (isTRUE(getOption("msterp.debug_labels", FALSE))) {
+        message("[DEBUG-LABELS] commit volcano (trigger=", trigger_source, "): node=", key,
+                " plot_key='", plot_key, "' map_keys=[", paste(names(label_map), collapse = ","),
+                "] cache_keys=[", paste(names(cur_style), collapse = ","), "]")
+      }
 
       if (!is.null(nd)) {
         .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
@@ -5117,9 +5153,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       label_map[[plot_key]] <- new_text
       new_json <- jsonlite::toJSON(label_map, auto_unbox = TRUE)
 
-      cur_style <- rv$cache_style_by_node[[key]] %||% list()
+      cur_style <- rv$cache_style_by_node[[key]] %||% (eff$style %||% list())
       cur_style$label_genes_map <- as.character(new_json)
       rv$cache_style_by_node[[key]] <- cur_style
+
+      if (isTRUE(getOption("msterp.debug_labels", FALSE))) {
+        message("[DEBUG-LABELS] commit rankplot (trigger=", trigger_source, "): node=", key,
+                " plot_key='", plot_key, "' map_keys=[", paste(names(label_map), collapse = ","),
+                "] cache_keys=[", paste(names(cur_style), collapse = ","), "]")
+      }
 
       if (!is.null(nd)) {
         .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
@@ -6308,13 +6350,22 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       plot_names <- rv$current_plot_names %||% character()
       has_multi_plots <- length(plot_names) > 1
 
-      # For volcano: get per-plot label targets from label_targets_map / label_genes_map
+      # For volcano: get per-plot label targets from label_genes_map.
+      # NOTE: read/write/render all key on label_genes_map (terpbook.R:1099,
+      # res_update_volcano_label_map, etc.). The legacy label_targets_map
+      # field never receives writes — looking at it here just splits the
+      # display from the live state.
       volcano_label_input <- NULL
       if (eng_lower == "volcano") {
-        current_plot <- input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "volcano_plot")
-        label_map_json <- eff$style$label_targets_map %||% eff$style$label_genes_map %||% "{}"
+        current_plot <- res_volcano_plot_key()
+        label_map_json <- eff$style$label_genes_map %||% "{}"
         label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
-        current_labels <- label_map[[current_plot]] %||% ""
+        current_labels <- as.character(label_map[[current_plot]] %||% "")
+        if (length(current_labels) == 0 || !nzchar(current_labels[[1]])) {
+          # Honor labels written under the legacy "volcano_plot" key when no
+          # per-comparison entry exists yet.
+          current_labels <- as.character(label_map[["volcano_plot"]] %||% "")
+        }
         vol_ctx <- msterp_data_type_context(rv$run_data_type %||% "proteomics")
         vol_entity_cap <- paste0(toupper(substring(vol_ctx$entity_label, 1, 1)), substring(vol_ctx$entity_label, 2))
 
@@ -6741,6 +6792,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     prev_style <- rv$cache_style_by_node[[key]] %||% list()
     rv$cache_style_by_node[[key]] <- tb_style_merge_preserve_extras(prev_style, sparse, schema_names)
 
+    if (isTRUE(getOption("msterp.debug_labels", FALSE))) {
+      after_keys <- names(rv$cache_style_by_node[[key]]) %||% character()
+      extras <- setdiff(after_keys, schema_names)
+      message("[DEBUG-LABELS] schema-merge: node=", key,
+              " has_label_map=", isTRUE("label_genes_map" %in% after_keys),
+              " extras=[", paste(extras, collapse = ","), "]")
+    }
+
     prev <- rv$last_sparse_by_node[[key]] %||% NULL
     if (!isTRUE(tb_is_equal(prev, sparse))) {
       rv$last_sparse_by_node[[key]] <- sparse
@@ -6941,8 +7000,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     eng <- tolower(active_engine_id() %||% "")
     if (eng != "volcano") return()
 
-    plot_names <- rv$current_plot_names %||% character()
-    current_plot <- input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "volcano_plot")
+    current_plot <- res_volcano_plot_key()
     new_labels <- volcano_label_genes_debounced() %||% ""
 
     # Get current committed labels to check if there's actually a change
@@ -7005,9 +7063,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     label_map[[plot_key]] <- new_text
     new_json <- jsonlite::toJSON(label_map, auto_unbox = TRUE)
 
-    cur_style <- rv$cache_style_by_node[[key]] %||% list()
+    cur_style <- rv$cache_style_by_node[[key]] %||% (eff$style %||% list())
     cur_style$label_genes_map <- as.character(new_json)
     rv$cache_style_by_node[[key]] <- cur_style
+
+    if (isTRUE(getOption("msterp.debug_labels", FALSE))) {
+      message("[DEBUG-LABELS] volcano Apply: node=", key, " plot_key='", plot_key,
+              "' n_labels=", length(new_labels),
+              " cache_keys=[", paste(names(cur_style), collapse = ","), "]")
+    }
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
@@ -7113,9 +7177,9 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     eng <- tolower(active_engine_id() %||% "")
     if (eng != "volcano") return()
 
-    # Get current plot name
-    plot_names <- rv$current_plot_names %||% character()
-    current_plot <- input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "volcano_plot")
+    # Get current plot name (canonical resolver — handles multi-comp nodes
+    # before res_plot_pick is populated).
+    current_plot <- res_volcano_plot_key()
 
     # Load existing highlight groups from style
     eff <- isolate(active_effective_state())
@@ -7324,11 +7388,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       nzchar(trimws(g$genes)) || !grepl("^Group \\d+$", g$name)
     }, updated_groups)
 
-    # Get current plot
-    plot_names <- rv$current_plot_names %||% character()
+    # Get current plot (canonical resolver for volcano; rankplot only has one).
     eng_id <- tolower(active_engine_id() %||% "")
-    default_plot <- if (eng_id == "rankplot") "rankplot" else "volcano_plot"
-    current_plot <- input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else default_plot)
+    current_plot <- if (eng_id == "rankplot") {
+      "rankplot"
+    } else {
+      res_volcano_plot_key()
+    }
 
     # Update the highlight_groups_map JSON
     node_id <- rv$active_node_id
@@ -7430,9 +7496,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     label_map[[plot_key]] <- new_text
     new_json <- jsonlite::toJSON(label_map, auto_unbox = TRUE)
 
-    cur_style <- rv$cache_style_by_node[[key]] %||% list()
+    cur_style <- rv$cache_style_by_node[[key]] %||% (eff$style %||% list())
     cur_style$label_genes_map <- as.character(new_json)
     rv$cache_style_by_node[[key]] <- cur_style
+
+    if (isTRUE(getOption("msterp.debug_labels", FALSE))) {
+      message("[DEBUG-LABELS] rankplot Apply: node=", key, " plot_key='", plot_key,
+              "' n_labels=", length(new_labels),
+              " cache_keys=[", paste(names(cur_style), collapse = ","), "]")
+    }
 
     nd <- active_node_dir()
     if (!is.null(nd)) {
@@ -14951,6 +15023,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       # Commit any pending changes before generating download
       if (res_has_pending_changes()) {
         res_commit_pending_changes(trigger_source = "download")
+      }
+
+      if (isTRUE(getOption("msterp.debug_labels", FALSE))) {
+        nid <- as.character(rv$active_node_id %||% "")
+        cs <- rv$cache_style_by_node[[nid]] %||% list()
+        message("[DEBUG-LABELS] download: node=", nid,
+                " has_pending=", res_has_pending_changes(),
+                " cache_keys=[", paste(names(cs), collapse = ","),
+                "] has_label_map=", isTRUE("label_genes_map" %in% names(cs)))
       }
 
       rend <- active_rendered()
