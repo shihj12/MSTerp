@@ -3064,7 +3064,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     last_autosave_at = NULL,      # Timestamp of the most recent successful flush to source
     lock_heartbeat_token = 0L,    # Token used to cancel pending heartbeat callbacks
     layouts = list(),             # Patchwork composition layouts (see R/utils/compose_helpers.R)
-    active_layout_id = NULL       # Currently edited layout id when active_node_id == "__compose__"
+    active_layout_id = NULL,      # Currently edited layout id when active_node_id == "__compose__"
+    compose_selected_cell = NULL  # 1-based cell index in active layout; NULL = layout-mode sidebar
   )
   style_rev <- reactiveVal(0L)
   pr_detail_shared_rev <- reactiveVal(0L)
@@ -3982,6 +3983,29 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     div(
       class = "res-compose-workspace",
       style = "padding: 12px; display: flex; flex-direction: column; gap: 12px;",
+      tags$style(HTML(
+        ".compose-overlay-cell {
+           pointer-events: auto;
+           display: block;
+           width: 100%; height: 100%;
+           background: transparent;
+           border: 2px solid transparent;
+           border-radius: 4px;
+           cursor: pointer;
+           transition: border-color 120ms;
+         }
+         .compose-overlay-cell:hover { border-color: rgba(0, 102, 204, 0.45); }
+         .compose-overlay-cell-selected { border-color: #0066cc !important; }
+         .compose-overlay-cell-empty {
+           border-color: #d0d0d0;
+           border-style: dashed;
+         }
+         .compose-overlay-cell-empty:hover { border-color: #0066cc; }
+         .res-compose-cell-editor-header {
+           display: flex; align-items: center; gap: 8px;
+           padding-bottom: 6px; border-bottom: 1px solid #e0e0e0;
+         }"
+      )),
       div(
         class = "res-compose-header",
         style = "display: flex; gap: 8px; align-items: center; flex-wrap: wrap;",
@@ -3997,8 +4021,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         div(
           class = "res-compose-controls",
           style = "display: flex; flex-direction: column; gap: 12px;",
+          uiOutput("compose_cell_editor"),
           uiOutput("compose_grid_controls"),
-          uiOutput("compose_cells"),
           uiOutput("compose_annotation_controls"),
           uiOutput("compose_export_controls"),
           tags$hr(),
@@ -4015,8 +4039,9 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         ),
         div(
           class = "res-compose-preview-pane",
-          style = "min-height: 480px; background: #fafafa; border: 1px solid #e0e0e0; padding: 12px; overflow: auto;",
-          plotOutput("compose_preview", height = "640px")
+          style = "position: relative; min-height: 480px; background: #fafafa; border: 1px solid #e0e0e0; padding: 12px; overflow: auto;",
+          plotOutput("compose_preview", height = "640px"),
+          uiOutput("compose_cell_overlay")
         )
       )
     )
@@ -4046,6 +4071,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (!val %in% names(rv$layouts %||% list())) return()
     if (identical(val, rv$active_layout_id)) return()
     rv$active_layout_id <- val
+    rv$compose_selected_cell <- NULL
     compose_rev(isolate(compose_rev()) + 1L)
   }, ignoreInit = TRUE)
 
@@ -4058,6 +4084,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     cur[[new_id]] <- lay
     rv$layouts <- cur
     rv$active_layout_id <- new_id
+    rv$compose_selected_cell <- NULL
     rv$has_unsaved_changes <- TRUE
     rv$save_status <- "dirty"
     compose_rev(isolate(compose_rev()) + 1L)
@@ -4070,6 +4097,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     cur[[lid]] <- NULL
     rv$layouts <- cur
     rv$active_layout_id <- if (length(cur) > 0) names(cur)[[1]] else NULL
+    rv$compose_selected_cell <- NULL
     rv$has_unsaved_changes <- TRUE
     rv$save_status <- "dirty"
     compose_rev(isolate(compose_rev()) + 1L)
@@ -4079,6 +4107,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   output$compose_grid_controls <- renderUI({
     lay <- compose_active_layout_reactive()
     if (is.null(lay)) return(NULL)
+    if (!is.null(rv$compose_selected_cell)) return(NULL)
     tagList(
       textInput("compose_layout_name", "Name", value = lay$name, width = "100%"),
       div(
@@ -4120,6 +4149,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       }
       lay
     })
+    sel <- rv$compose_selected_cell
+    if (!is.null(sel)) {
+      lay_now <- compose_active_layout()
+      if (!is.null(lay_now) && sel > lay_now$ncol * lay_now$nrow) {
+        rv$compose_selected_cell <- NULL
+      }
+    }
   }, ignoreInit = TRUE)
 
   observeEvent(input$compose_nrow, {
@@ -4136,6 +4172,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       }
       lay
     })
+    sel <- rv$compose_selected_cell
+    if (!is.null(sel)) {
+      lay_now <- compose_active_layout()
+      if (!is.null(lay_now) && sel > lay_now$ncol * lay_now$nrow) {
+        rv$compose_selected_cell <- NULL
+      }
+    }
   }, ignoreInit = TRUE)
 
   # Returns parsed numeric vector of length n, or NULL when the input is not a
@@ -4178,85 +4221,203 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     })
   }, ignoreInit = TRUE)
 
-  # ---- Compose: per-cell dropdowns ------------------------------------------
-  output$compose_cells <- renderUI({
+  # ---- Compose: clickable cell overlay (sits over the preview) --------------
+  # A transparent CSS-grid of actionLinks positioned absolutely over the plot.
+  # Clicking a cell sets rv$compose_selected_cell, which swaps the sidebar
+  # between layout-mode and cell-mode controls.
+  output$compose_cell_overlay <- renderUI({
     lay <- compose_active_layout_reactive()
     if (is.null(lay)) return(NULL)
-    choices <- compose_cell_choices()
-    select_choices <- c(list("(empty)" = ""), as.list(choices))
-
-    rows <- lapply(seq_len(lay$nrow), function(r) {
-      cells <- lapply(seq_len(lay$ncol), function(c) {
-        idx <- (r - 1L) * lay$ncol + c
-        cell <- lay$cells[[idx]]
-        sel <- if (is.null(cell)) "" else paste(cell$node_id, cell$plot_key, sep = "::")
-        div(
-          style = "border: 1px dashed #d0d0d0; padding: 6px; border-radius: 4px;",
-          tags$small(paste0("R", r, " · C", c), style = "color: #888;"),
-          selectInput(
-            inputId = paste0("compose_cell_", idx),
-            label = NULL,
-            choices = select_choices,
-            selected = sel,
-            width = "100%"
-          )
-        )
-      })
-      div(
-        style = sprintf("display: grid; grid-template-columns: repeat(%d, 1fr); gap: 6px;",
-                        lay$ncol),
-        cells
+    selected <- rv$compose_selected_cell
+    widths_css  <- paste(sprintf("%.4ffr", lay$widths),  collapse = " ")
+    heights_css <- paste(sprintf("%.4ffr", lay$heights), collapse = " ")
+    total <- lay$ncol * lay$nrow
+    links <- lapply(seq_len(total), function(idx) {
+      is_sel   <- !is.null(selected) && selected == idx
+      is_empty <- is.null(lay$cells[[idx]])
+      cls <- paste0(
+        "compose-overlay-cell",
+        if (is_sel) " compose-overlay-cell-selected" else "",
+        if (is_empty) " compose-overlay-cell-empty" else ""
+      )
+      title_attr <- if (is_empty) "Click to add a plot" else "Click to edit this panel"
+      actionLink(
+        inputId = paste0("compose_cell_select_", idx),
+        label = NULL,
+        class = cls,
+        title = title_attr
       )
     })
-
-    tagList(
-      tags$label("Cells"),
-      div(style = "display: flex; flex-direction: column; gap: 6px;", rows)
+    div(
+      style = sprintf(
+        "position: absolute; inset: 12px; display: grid; grid-template-columns: %s; grid-template-rows: %s; gap: 0; pointer-events: none;",
+        widths_css, heights_css
+      ),
+      links
     )
   })
 
-  # Wire one observer per cell index lazily (track with rv$nav_obs-style map).
-  compose_cell_obs <- list()
+  # Lazy click-observers, one per cell index. Bodies are single-line state
+  # assignments — no layout mutation, so not in the reactive-loop path.
+  compose_cell_click_obs <- list()
   observe({
     lay <- compose_active_layout_reactive()
     if (is.null(lay)) return()
     total <- lay$ncol * lay$nrow
     for (i in seq_len(total)) {
-      if (is.null(compose_cell_obs[[as.character(i)]])) {
+      key <- as.character(i)
+      if (is.null(compose_cell_click_obs[[key]])) {
         local({
           idx <- i
-          inp_id <- paste0("compose_cell_", idx)
-          compose_cell_obs[[as.character(idx)]] <<- observeEvent(input[[inp_id]], {
-            val <- input[[inp_id]]
-            compose_update_active_layout(function(lay2) {
-              total2 <- lay2$ncol * lay2$nrow
-              if (idx > total2) return(lay2)
-              if (is.null(val) || !nzchar(val)) {
-                # Preserve the slot but null it out: [[<- with NULL removes.
-                lay2$cells[idx] <- list(NULL)
-              } else {
-                parts <- strsplit(val, "::", fixed = TRUE)[[1]]
-                if (length(parts) >= 2 && nzchar(parts[[1]]) && nzchar(parts[[2]])) {
-                  lay2$cells[[idx]] <- list(
-                    node_id  = parts[[1]],
-                    plot_key = parts[[2]],
-                    tag      = NULL,
-                    title    = NULL
-                  )
-                }
-              }
-              lay2
-            })
+          inp_id <- paste0("compose_cell_select_", idx)
+          compose_cell_click_obs[[as.character(idx)]] <<- observeEvent(input[[inp_id]], {
+            # Bound check against current layout — observer outlives layout shrinks.
+            cur_lay <- compose_active_layout()
+            if (is.null(cur_lay)) return()
+            if (idx > cur_lay$ncol * cur_lay$nrow) return()
+            rv$compose_selected_cell <- idx
           }, ignoreInit = TRUE)
         })
       }
     }
   })
 
+  # ---- Compose: cell editor (sidebar swaps to this when a cell is selected) -
+  output$compose_cell_editor <- renderUI({
+    lay <- compose_active_layout_reactive()
+    if (is.null(lay)) return(NULL)
+    idx <- rv$compose_selected_cell
+    if (is.null(idx)) return(NULL)
+    total <- lay$ncol * lay$nrow
+    if (idx > total) return(NULL)
+
+    # Freeze inputs until the regenerated UI re-supplies them — prevents a
+    # stale input value (from the previously-selected cell) from firing the
+    # cell-mode mutation observers and writing to the wrong cell.
+    freezeReactiveValue(input, "compose_cell_plot")
+    freezeReactiveValue(input, "compose_cell_title")
+    freezeReactiveValue(input, "compose_cell_tag")
+    freezeReactiveValue(input, "compose_cell_hide_legend")
+
+    cell <- lay$cells[[idx]]
+    r <- ((idx - 1L) %/% lay$ncol) + 1L
+    c <- ((idx - 1L) %%  lay$ncol) + 1L
+    choices <- compose_cell_choices()
+    select_choices <- c(list("(empty)" = ""), as.list(choices))
+    sel <- if (is.null(cell)) "" else paste(cell$node_id, cell$plot_key, sep = "::")
+
+    tagList(
+      div(
+        class = "res-compose-cell-editor-header",
+        actionButton("compose_cell_back", "← Back to layout",
+                     class = "btn-sm btn-outline-secondary"),
+        tags$strong(sprintf("Cell R%d · C%d", r, c),
+                    style = "margin-left: auto; color: #444;")
+      ),
+      selectInput(
+        "compose_cell_plot", "Plot",
+        choices = select_choices, selected = sel, width = "100%"
+      ),
+      textInput(
+        "compose_cell_title", "Panel title (optional)",
+        value = cell$title %||% "", width = "100%"
+      ),
+      textInput(
+        "compose_cell_tag", "Tag override (optional)",
+        value = cell$tag %||% "", width = "100%",
+        placeholder = "e.g. B*, fig 1a"
+      ),
+      checkboxInput(
+        "compose_cell_hide_legend", "Hide legend on this panel",
+        value = isTRUE(cell$hide_legend)
+      )
+    )
+  })
+
+  observeEvent(input$compose_cell_back, {
+    rv$compose_selected_cell <- NULL
+  }, ignoreInit = TRUE)
+
+  # Cell-mode mutation observers. Each reads rv$compose_selected_cell at fire
+  # time (not as a reactive dep) so the mutation always targets whichever cell
+  # is currently active.
+  observeEvent(input$compose_cell_plot, {
+    idx <- rv$compose_selected_cell
+    if (is.null(idx)) return()
+    val <- input$compose_cell_plot
+    compose_update_active_layout(function(lay) {
+      total <- lay$ncol * lay$nrow
+      if (idx > total) return(lay)
+      if (is.null(val) || !nzchar(val)) {
+        lay$cells[idx] <- list(NULL)
+      } else {
+        parts <- strsplit(val, "::", fixed = TRUE)[[1]]
+        if (length(parts) >= 2 && nzchar(parts[[1]]) && nzchar(parts[[2]])) {
+          existing <- lay$cells[[idx]]
+          lay$cells[[idx]] <- list(
+            node_id     = parts[[1]],
+            plot_key    = parts[[2]],
+            tag         = if (is.null(existing)) NULL else existing$tag,
+            title       = if (is.null(existing)) NULL else existing$title,
+            hide_legend = if (is.null(existing)) NULL else existing$hide_legend
+          )
+        }
+      }
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_cell_title, {
+    idx <- rv$compose_selected_cell
+    if (is.null(idx)) return()
+    val <- as.character(input$compose_cell_title %||% "")
+    compose_update_active_layout(function(lay) {
+      total <- lay$ncol * lay$nrow
+      if (idx > total) return(lay)
+      cell <- lay$cells[[idx]]
+      if (is.null(cell)) return(lay)  # title on empty cell is a no-op
+      cell$title <- if (nzchar(val)) val else NULL
+      lay$cells[[idx]] <- cell
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_cell_tag, {
+    idx <- rv$compose_selected_cell
+    if (is.null(idx)) return()
+    val <- as.character(input$compose_cell_tag %||% "")
+    compose_update_active_layout(function(lay) {
+      total <- lay$ncol * lay$nrow
+      if (idx > total) return(lay)
+      cell <- lay$cells[[idx]]
+      if (is.null(cell)) return(lay)
+      cell$tag <- if (nzchar(val)) val else NULL
+      lay$cells[[idx]] <- cell
+      lay
+    })
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$compose_cell_hide_legend, {
+    idx <- rv$compose_selected_cell
+    if (is.null(idx)) return()
+    val <- isTRUE(input$compose_cell_hide_legend)
+    compose_update_active_layout(function(lay) {
+      total <- lay$ncol * lay$nrow
+      if (idx > total) return(lay)
+      cell <- lay$cells[[idx]]
+      if (is.null(cell)) return(lay)
+      # Persist TRUE explicitly; collapse FALSE to NULL to keep JSON clean.
+      cell$hide_legend <- if (val) TRUE else NULL
+      lay$cells[[idx]] <- cell
+      lay
+    })
+  }, ignoreInit = TRUE)
+
   # ---- Compose: annotation + export controls --------------------------------
   output$compose_annotation_controls <- renderUI({
     lay <- compose_active_layout_reactive()
     if (is.null(lay)) return(NULL)
+    if (!is.null(rv$compose_selected_cell)) return(NULL)
     tagList(
       textInput("compose_title", "Figure title (optional)",
                 value = lay$annotation$title %||% "", width = "100%"),
@@ -4288,6 +4449,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   output$compose_export_controls <- renderUI({
     lay <- compose_active_layout_reactive()
     if (is.null(lay)) return(NULL)
+    if (!is.null(rv$compose_selected_cell)) return(NULL)
     tagList(
       tags$label("Export size (inches)"),
       div(
@@ -5780,6 +5942,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     }
     rv$switching_node <- TRUE
     rv$active_node_id <- "__compose__"
+    rv$compose_selected_cell <- NULL
     compose_rev(isolate(compose_rev()) + 1L)
   }
 

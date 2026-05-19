@@ -80,11 +80,17 @@ compose_validate_layout <- function(layout) {
     nid <- as.character(cell$node_id %||% "")
     pkey <- as.character(cell$plot_key %||% "")
     if (!nzchar(nid) || !nzchar(pkey)) return(NULL)
+    hl <- cell$hide_legend
+    if (!is.null(hl)) {
+      hl <- suppressWarnings(as.logical(hl))
+      if (length(hl) != 1L || is.na(hl)) hl <- NULL
+    }
     list(
-      node_id  = nid,
-      plot_key = pkey,
-      tag      = if (is.null(cell$tag)) NULL else as.character(cell$tag),
-      title    = if (is.null(cell$title)) NULL else as.character(cell$title)
+      node_id     = nid,
+      plot_key    = pkey,
+      tag         = if (is.null(cell$tag)) NULL else as.character(cell$tag),
+      title       = if (is.null(cell$title)) NULL else as.character(cell$title),
+      hide_legend = hl
     )
   })
 
@@ -165,6 +171,12 @@ compose_build_patchwork <- function(layout, plot_lookup_fn) {
     # skip the per-cell title injection in the patchwork case.
     if (!is_patchwork && !is.null(cell$title) && nzchar(cell$title)) {
       p <- p + ggplot2::labs(title = cell$title)
+    }
+    if (!is.null(cell$tag) && nzchar(cell$tag)) {
+      p <- p + ggplot2::labs(tag = cell$tag)
+    }
+    if (isTRUE(cell$hide_legend)) {
+      p <- p + ggplot2::theme(legend.position = "none")
     }
     # Wrap composed patchworks (e.g. volcano with summary cards) so the
     # outer tag walker treats them atomically. Without this, two volcanos
