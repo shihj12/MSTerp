@@ -10,6 +10,41 @@
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
+#' Z-score each feature within each sample group.
+#'
+#' For every row (feature) of `mat`, and within each distinct group of columns,
+#' standardise that row's within-group values: (x - group_mean) / group_sd.
+#' Groups with <2 samples or zero within-group variance (SD == 0 or NA) cannot
+#' be scaled, so those entries are centred only (effectively 0).
+#'
+#' @param mat    Numeric matrix, features x samples (rows = features).
+#' @param groups Character vector, length ncol(mat); group label per column.
+#' @return Numeric matrix, same shape/dimnames as `mat`.
+nr_scale_within_groups <- function(mat, groups) {
+  mat <- as.matrix(mat)
+  groups <- as.character(groups)
+  if (length(groups) != ncol(mat)) {
+    stop(sprintf("nr_scale_within_groups: groups length (%d) != ncol(mat) (%d)",
+                 length(groups), ncol(mat)))
+  }
+  out <- mat
+  for (g in unique(groups)) {
+    cols <- which(groups == g)
+    if (length(cols) == 0) next
+    sub <- mat[, cols, drop = FALSE]
+    row_means <- rowMeans(sub, na.rm = TRUE)
+    row_sds   <- apply(sub, 1, stats::sd, na.rm = TRUE)
+    centred <- sub - row_means
+    scaled  <- centred / row_sds
+    bad <- !is.finite(row_sds) | row_sds == 0      # 1-sample / zero-variance group
+    if (any(bad)) scaled[bad, ] <- centred[bad, , drop = FALSE]
+    scaled[!is.finite(scaled)] <- 0                # NaN from all-NA rows / 0/0
+    out[, cols] <- scaled
+  }
+  dimnames(out) <- dimnames(mat)
+  out
+}
+
 # =========================================================
 # Analysis Level Normalization
 # =========================================================

@@ -162,6 +162,17 @@ stats_umap_run <- function(payload, params = NULL, context = NULL) {
     row_means <- rowMeans(mat, na.rm = TRUE)
     mat <- mat - row_means
     add_log("INFO", "Applied per-feature mean-centering (covariance)")
+  } else if (scale_method == "zscore_group") {
+    grp_vec <- as.character(samples$group_name)[
+      match(colnames(mat), as.character(samples$sample_col))]
+    small <- names(which(table(grp_vec, useNA = "ifany") < 2))
+    if (length(small)) {
+      add_log("WARN", sprintf(
+        "Z-score (within group): %d group(s) have <2 samples (%s) - those samples centered only",
+        length(small), paste(small, collapse = ", ")))
+    }
+    mat <- nr_scale_within_groups(mat, grp_vec)
+    add_log("INFO", "Applied per-feature z-score scaling within each sample group")
   } else {
     add_log("INFO", "No scaling applied (raw values)")
   }

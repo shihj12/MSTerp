@@ -9017,6 +9017,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       if (identical(plot_key, "pca_scree")) return("Scree")
     }
 
+    if (eng_id == "gene_barchart") {
+      # Batch export: plot_key is the gene name; use it verbatim so gene
+      # symbols (which may contain underscores) are preserved exactly.
+      return(trimws(plot_key))
+    }
+
     if (eng_id %in% c("idquant_overlap", "idquant_overlap_detected", "idquant_overlap_quantified")) {
       plot_type <- tolower(as.character(style$overlap_plot_type %||% res$params$overlap_plot_type %||% "upset"))
       group_count <- NA_integer_
@@ -15505,20 +15511,53 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         }
         node_meta <- tb_node_meta(node_dir)
 
-        # Render with full effective_state (style + plotly + visibility)
-        rend <- tryCatch(
-          terpbook_render_node(eng_id, res, effective_state, registry = registry, node_meta = node_meta),
-          error = function(e) NULL
-        )
-        if (is.null(rend)) next
+        if (identical(eng_id, "gene_barchart")) {
+          # Batch export: the single gene bar chart checkbox exports ALL genes,
+          # one file per gene. The in-page download path is separate and
+          # unaffected (it still exports only the displayed gene).
+          genes <- unique(as.character(res$data$genes %||% character()))
+          genes <- genes[nzchar(genes)]
+          if (length(genes) == 0) next
 
-        plots <- res_extract_ggplots(rend)
-        if (length(plots) == 0) next
+          plots <- list()
+          for (g in genes) {
+            es_g <- effective_state
+            es_g$style <- es_g$style %||% list()
+            es_g$style$selected_gene <- g
+            rend_g <- tryCatch(
+              terpbook_render_node(eng_id, res, es_g, registry = registry, node_meta = node_meta),
+              error = function(e) NULL
+            )
+            if (is.null(rend_g)) next
+            p_list <- res_extract_ggplots(rend_g)
+            p_g <- p_list[["gene_barchart"]] %||%
+              (if (length(p_list) > 0) p_list[[1]] else NULL)
+            if (!is.null(p_g)) plots[[g]] <- p_g
+          }
+          if (length(plots) == 0) next
 
-        plot_rows <- selected_df[selected_df$node_id == node_id, , drop = FALSE]
-        if (nrow(plot_rows) == 0) next
+          plot_rows <- data.frame(
+            node_id  = rep(node_id, length(plots)),
+            plot_key = names(plots),
+            stringsAsFactors = FALSE
+          )
+          force_plot_label <- TRUE
+        } else {
+          # Render with full effective_state (style + plotly + visibility)
+          rend <- tryCatch(
+            terpbook_render_node(eng_id, res, effective_state, registry = registry, node_meta = node_meta),
+            error = function(e) NULL
+          )
+          if (is.null(rend)) next
 
-        force_plot_label <- length(plots) > 1
+          plots <- res_extract_ggplots(rend)
+          if (length(plots) == 0) next
+
+          plot_rows <- selected_df[selected_df$node_id == node_id, , drop = FALSE]
+          if (nrow(plot_rows) == 0) next
+
+          force_plot_label <- length(plots) > 1
+        }
         for (i_plot in seq_len(nrow(plot_rows))) {
           plot_key <- plot_rows$plot_key[[i_plot]]
           if (!nzchar(plot_key) || !(plot_key %in% names(plots))) next

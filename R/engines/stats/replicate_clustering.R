@@ -62,6 +62,7 @@ stats_replicate_clustering_run <- function(payload, params = NULL, context = NUL
   distance_method <- params$distance_method %||% "pearson"
   linkage_method <- params$linkage_method %||% "complete"
   log_transform <- params$log_transform %||% "log10"
+  scale_method <- params$scale_method %||% "none"
 
   # Mask any non-finite values carried over from earlier steps so complete.cases
   # can remove them (it catches NA/NaN but not Inf).
@@ -97,6 +98,20 @@ stats_replicate_clustering_run <- function(payload, params = NULL, context = NUL
                          stringsAsFactors = FALSE)
       )
     ))
+  }
+
+  # Optional: z-score each feature within each sample group before clustering.
+  if (identical(scale_method, "zscore_group")) {
+    grp_vec <- as.character(samples$group_name)[
+      match(colnames(mat_complete), as.character(samples$sample_col))]
+    small <- names(which(table(grp_vec, useNA = "ifany") < 2))
+    if (length(small)) {
+      add_log("WARN", sprintf(
+        "Z-score (within group): %d group(s) have <2 samples (%s) - those samples centered only",
+        length(small), paste(small, collapse = ", ")))
+    }
+    add_log("INFO", "Applying Z-score scaling within each sample group...")
+    mat_complete <- nr_scale_within_groups(mat_complete, grp_vec)
   }
 
   # Compute distance matrix on samples (columns)

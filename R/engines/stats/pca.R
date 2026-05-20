@@ -139,6 +139,29 @@ stats_pca_run <- function(payload, params = NULL, context = NULL) {
       # Standardize ranks to have mean 0, sd 1
       (r - mean(r)) / sd(r)
     })
+  } else if (scale_method == "zscore_group") {
+    # Z-score each protein within each sample group separately.
+    grp_vec <- as.character(samples$group_name)[
+      match(colnames(mat_complete), as.character(samples$sample_col))]
+    small <- names(which(table(grp_vec, useNA = "ifany") < 2))
+    if (length(small)) {
+      add_log("WARN", sprintf(
+        "Z-score (within group): %d group(s) have <2 samples (%s) - those samples centered only",
+        length(small), paste(small, collapse = ", ")))
+    }
+    add_log("INFO", "Applying Z-score scaling within each sample group...")
+    mat_scaled <- t(nr_scale_within_groups(mat_complete, grp_vec))
+    # Zero-variance removal MUST run AFTER per-group scaling: a protein constant
+    # within every group but differing between groups has non-zero global
+    # variance yet becomes all-zero after this transform.
+    col_vars <- apply(mat_scaled, 2, var, na.rm = TRUE)
+    zero_var <- col_vars == 0 | is.na(col_vars)
+    if (any(zero_var)) {
+      add_log("INFO", sprintf("Removing %d zero-variance features after scaling", sum(zero_var)))
+      mat_scaled   <- mat_scaled[, !zero_var, drop = FALSE]
+      mat_complete <- mat_complete[!zero_var, , drop = FALSE]
+      ids_complete <- ids_complete[!zero_var, , drop = FALSE]
+    }
   } else if (scale_method == "zscore") {
     # Standard Z-score scaling (per protein across samples)
     # Remove zero-variance columns first (scale() cannot divide by SD=0)
