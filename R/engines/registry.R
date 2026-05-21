@@ -1819,9 +1819,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         ),
         msterp_schema_field("scale_method", "choice", "Scaling method",
           default = "none",
-          choices = c("none", "zscore_group"),
-          choice_labels = c("None", "Z-score (within sample group)"),
-          help = "None keeps raw (log-transformed) values. Z-score (within sample group) standardises each feature within each group; needs >=2 replicates per group when using correlation distance."
+          choices = c("none", "zscore_sample"),
+          choice_labels = c("None", "Z-score (per sample)"),
+          help = "None keeps raw (log-transformed) values. Z-score (per sample) standardises each sample column to mean 0 / SD 1 across all features."
         )
       ),
       style_schema = c(
@@ -1865,10 +1865,10 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field(
           "scale_method", "choice", "Scaling method",
           default = "zscore",
-          choices = c("zscore", "zscore_group", "rank", "pareto", "covariance"),
-          choice_labels = c("Z-score (correlation)", "Z-score (within sample group)",
+          choices = c("zscore", "zscore_sample", "rank", "pareto", "covariance"),
+          choice_labels = c("Z-score (correlation)", "Z-score (per sample)",
                             "Rank", "Pareto (center / sqrt SD)", "Covariance (center only)"),
-          help = "Z-score for standard PCA; Z-score (within sample group) standardises each feature within each group separately; rank is robust to non-normal data; Pareto dampens high-variance features without fully equalising them; covariance centers only (covariance-PCA)"
+          help = "Z-score for standard PCA; Z-score (per sample) standardises each sample column to mean 0 / SD 1 across all features - useful when comparing datasets at different intensity scales; rank is robust to non-normal data; Pareto dampens high-variance features without fully equalising them; covariance centers only (covariance-PCA)"
         ),
         msterp_schema_field("n_pcs", "int", "Number of PCs", default = 3, min = 2, max = 20),
         msterp_schema_field("top_n", "int", "Top N IDs (pos/neg)", default = 50, min = 1, max = 500),
@@ -1934,10 +1934,10 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
                             default = "log2", choices = c("log2", "log10", "none")),
         msterp_schema_field("scale_method", "choice", "Scaling",
                             default = "zscore",
-                            choices = c("zscore", "zscore_group", "pareto", "covariance", "none"),
-                            choice_labels = c("Z-score", "Z-score (within sample group)",
+                            choices = c("zscore", "zscore_sample", "pareto", "covariance", "none"),
+                            choice_labels = c("Z-score", "Z-score (per sample)",
                                               "Pareto", "Covariance (center only)", "None"),
-                            help = "zscore: per-feature standardisation. zscore_group: standardise each feature within each sample group separately. pareto: divide by sqrt(SD), dampens high-variance features. covariance: mean-center only. none: raw values."),
+                            help = "zscore: per-feature standardisation. zscore_sample: standardise each sample column to mean 0 / SD 1 across all features. pareto: divide by sqrt(SD), dampens high-variance features. covariance: mean-center only. none: raw values."),
         msterp_schema_field("missing_handling", "choice", "Missing value handling",
                             default = "drop_gene",
                             choices = c("drop_gene", "min_impute", "zero_impute"),

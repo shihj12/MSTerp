@@ -80,6 +80,8 @@ stats_pca_run <- function(payload, params = NULL, context = NULL) {
   # - covariance / none: mean-center only (covariance-PCA); "none" kept as alias
   scale_method <- params$scale_method %||% "zscore"
   if (identical(scale_method, "none")) scale_method <- "covariance"
+  # Back-compat: the old "zscore_group" option is now per-sample z-scoring.
+  if (identical(scale_method, "zscore_group")) scale_method <- "zscore_sample"
 
   # Apply log transform
   if (log_transform == "log10") {
@@ -139,29 +141,12 @@ stats_pca_run <- function(payload, params = NULL, context = NULL) {
       # Standardize ranks to have mean 0, sd 1
       (r - mean(r)) / sd(r)
     })
-  } else if (scale_method == "zscore_group") {
-    # Z-score each protein within each sample group separately.
-    grp_vec <- as.character(samples$group_name)[
-      match(colnames(mat_complete), as.character(samples$sample_col))]
-    small <- names(which(table(grp_vec, useNA = "ifany") < 2))
-    if (length(small)) {
-      add_log("WARN", sprintf(
-        "Z-score (within group): %d group(s) have <2 samples (%s) - those samples centered only",
-        length(small), paste(small, collapse = ", ")))
-    }
-    add_log("INFO", "Applying Z-score scaling within each sample group...")
-    mat_scaled <- t(nr_scale_within_groups(mat_complete, grp_vec))
-    # Zero-variance removal MUST run AFTER per-group scaling: a protein constant
-    # within every group but differing between groups has non-zero global
-    # variance yet becomes all-zero after this transform.
-    col_vars <- apply(mat_scaled, 2, var, na.rm = TRUE)
-    zero_var <- col_vars == 0 | is.na(col_vars)
-    if (any(zero_var)) {
-      add_log("INFO", sprintf("Removing %d zero-variance features after scaling", sum(zero_var)))
-      mat_scaled   <- mat_scaled[, !zero_var, drop = FALSE]
-      mat_complete <- mat_complete[!zero_var, , drop = FALSE]
-      ids_complete <- ids_complete[!zero_var, , drop = FALSE]
-    }
+  } else if (scale_method == "zscore_sample") {
+    # Z-score each sample (column) to mean 0 / SD 1 across all features, then
+    # mean-centre each feature so prcomp (center = FALSE) receives centred data.
+    add_log("INFO", "Applying Z-score scaling within each sample (column)...")
+    mat_scaled <- scale(t(nr_scale_within_samples(mat_complete)),
+                        center = TRUE, scale = FALSE)
   } else if (scale_method == "zscore") {
     # Standard Z-score scaling (per protein across samples)
     # Remove zero-variance columns first (scale() cannot divide by SD=0)
@@ -195,6 +180,23 @@ stats_pca_run <- function(payload, params = NULL, context = NULL) {
     # "none" is also routed here for backwards compatibility.
     add_log("INFO", "Applying covariance centering (mean-center only)...")
     mat_scaled <- scale(mat_t, center = TRUE, scale = FALSE)
+  }
+
+  # Defensive: zero-variance removal or degenerate scaling can empty mat_scaled.
+  # prcomp() throws "a dimension is zero" on a matrix with no rows/columns.
+  if (nrow(mat_scaled) < 2 || ncol(mat_scaled) < 2) {
+    return(list(
+      engine_id = "pca",
+      params = params,
+      data = list(
+        scores = data.frame(sample = character(0), group = character(0),
+                            PC1 = numeric(0), PC2 = numeric(0),
+                            stringsAsFactors = FALSE),
+        log = data.frame(time = format(Sys.time()), level = "WARN",
+                         message = "Insufficient data for PCA after scaling (no variable features remain)",
+                         stringsAsFactors = FALSE)
+      )
+    ))
   }
 
   # Run PCA

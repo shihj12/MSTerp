@@ -10,37 +10,23 @@
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
-#' Z-score each feature within each sample group.
+#' Z-score each sample (column) of a matrix.
 #'
-#' For every row (feature) of `mat`, and within each distinct group of columns,
-#' standardise that row's within-group values: (x - group_mean) / group_sd.
-#' Groups with <2 samples or zero within-group variance (SD == 0 or NA) cannot
-#' be scaled, so those entries are centred only (effectively 0).
+#' Standardises every column to mean 0, SD 1 across all features:
+#' (x - col_mean) / col_sd. Columns with zero or undefined SD (a sample whose
+#' features are all identical) are centred only. NA cells are ignored in the
+#' mean/SD; any non-finite result is set to 0.
 #'
-#' @param mat    Numeric matrix, features x samples (rows = features).
-#' @param groups Character vector, length ncol(mat); group label per column.
+#' @param mat Numeric matrix, features x samples (rows = features).
 #' @return Numeric matrix, same shape/dimnames as `mat`.
-nr_scale_within_groups <- function(mat, groups) {
+nr_scale_within_samples <- function(mat) {
   mat <- as.matrix(mat)
-  groups <- as.character(groups)
-  if (length(groups) != ncol(mat)) {
-    stop(sprintf("nr_scale_within_groups: groups length (%d) != ncol(mat) (%d)",
-                 length(groups), ncol(mat)))
-  }
-  out <- mat
-  for (g in unique(groups)) {
-    cols <- which(groups == g)
-    if (length(cols) == 0) next
-    sub <- mat[, cols, drop = FALSE]
-    row_means <- rowMeans(sub, na.rm = TRUE)
-    row_sds   <- apply(sub, 1, stats::sd, na.rm = TRUE)
-    centred <- sub - row_means
-    scaled  <- centred / row_sds
-    bad <- !is.finite(row_sds) | row_sds == 0      # 1-sample / zero-variance group
-    if (any(bad)) scaled[bad, ] <- centred[bad, , drop = FALSE]
-    scaled[!is.finite(scaled)] <- 0                # NaN from all-NA rows / 0/0
-    out[, cols] <- scaled
-  }
+  col_means <- colMeans(mat, na.rm = TRUE)
+  col_sds   <- apply(mat, 2, stats::sd, na.rm = TRUE)
+  bad <- !is.finite(col_sds) | col_sds == 0   # flat column -> centre only
+  col_sds[bad] <- 1
+  out <- sweep(sweep(mat, 2, col_means, "-"), 2, col_sds, "/")
+  out[!is.finite(out)] <- 0
   dimnames(out) <- dimnames(mat)
   out
 }

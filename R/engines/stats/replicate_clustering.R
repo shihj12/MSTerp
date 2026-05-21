@@ -100,18 +100,12 @@ stats_replicate_clustering_run <- function(payload, params = NULL, context = NUL
     ))
   }
 
-  # Optional: z-score each feature within each sample group before clustering.
-  if (identical(scale_method, "zscore_group")) {
-    grp_vec <- as.character(samples$group_name)[
-      match(colnames(mat_complete), as.character(samples$sample_col))]
-    small <- names(which(table(grp_vec, useNA = "ifany") < 2))
-    if (length(small)) {
-      add_log("WARN", sprintf(
-        "Z-score (within group): %d group(s) have <2 samples (%s) - those samples centered only",
-        length(small), paste(small, collapse = ", ")))
-    }
-    add_log("INFO", "Applying Z-score scaling within each sample group...")
-    mat_complete <- nr_scale_within_groups(mat_complete, grp_vec)
+  # Optional: z-score each sample (column) before clustering.
+  # Back-compat: the old "zscore_group" option is now per-sample z-scoring.
+  if (identical(scale_method, "zscore_group")) scale_method <- "zscore_sample"
+  if (identical(scale_method, "zscore_sample")) {
+    add_log("INFO", "Applying Z-score scaling within each sample (column)...")
+    mat_complete <- nr_scale_within_samples(mat_complete)
   }
 
   # Compute distance matrix on samples (columns)
