@@ -8413,6 +8413,13 @@ tb_render_rankplot <- function(results, style, meta) {
     df$gene <- df$gene_id %||% df$protein_id %||% ""
   }
   df$gene <- as.character(df$gene)
+  # Normalize gene-group strings to primary gene
+  # (e.g. "ATP5MC2;ATP5MC3" -> "ATP5MC2"). This is what users type when
+  # labeling, and what's shown in tooltips.
+  df$gene <- vapply(strsplit(df$gene, ";", fixed = TRUE), function(x) {
+    x <- trimws(x); x <- x[nzchar(x)]
+    if (length(x) > 0) x[[1]] else ""
+  }, character(1))
   df$tooltip_text <- sprintf(
     "%s\nRank: %s\n%s: %s",
     df$gene,
