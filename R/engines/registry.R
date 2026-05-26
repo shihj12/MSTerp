@@ -3658,8 +3658,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         list(
           msterp_schema_field(
             "y_axis_title", "string", "Y-axis title",
-            default = "log2 Fold Change",
-            help = "Label for the Y-axis."
+            default = "",
+            help = "Y-axis label. Leave empty to auto-generate as log₂(B/A) using the comparison group names."
           ),
           msterp_schema_field(
             "rank_axis_mode", "choice", "Rank axis mode",

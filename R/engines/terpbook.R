@@ -8293,11 +8293,32 @@ tb_render_rankplot <- function(results, style, meta) {
 
 # ---- FC Rank Plot (log2 fold-change vs rank per comparison) -----------------
 
-.tb_fc_rankplot_single_plot <- function(df, style, meta, comparison_name) {
+.tb_fc_rankplot_single_plot <- function(df, style, meta, comparison_name,
+                                         group_a = NULL, group_b = NULL) {
   tb_require_pkg("ggplot2")
   tb_require_pkg("ggiraph")
 
-  y_axis_title <- style$y_axis_title %||% "log2 Fold Change"
+  # Y-axis: if user provided a non-empty title use it verbatim;
+  # otherwise auto-build log2(B/A) with subscript 2 from the comparison group names.
+  flip_fc <- isTRUE(style$flip_fc %||% FALSE)
+  y_axis_user <- as.character(style$y_axis_title %||% "")
+  use_auto_y <- !nzchar(trimws(y_axis_user)) || identical(y_axis_user, "log2 Fold Change")
+  if (use_auto_y && !is.null(group_a) && !is.null(group_b) && nzchar(group_a) && nzchar(group_b)) {
+    # Flip swaps numerator/denominator
+    num <- if (flip_fc) group_a else group_b
+    denom <- if (flip_fc) group_b else group_a
+    y_axis_label <- bquote(log[2] ~ "(" * .(num) / .(denom) * ")")
+    y_axis_title_text <- sprintf("log2(%s/%s)", num, denom)  # for tooltips
+  } else if (use_auto_y) {
+    y_axis_label <- "log2 Fold Change"
+    y_axis_title_text <- "log2 Fold Change"
+  } else {
+    y_axis_label <- y_axis_user
+    y_axis_title_text <- y_axis_user
+  }
+  # Maintain previous variable name where used downstream for tooltip strings
+  y_axis_title <- y_axis_title_text
+
   highlight_mode <- style$highlight_mode %||% "none"
   point_color <- style$point_color %||% "#B0B0B0"
   highlight_color_top <- style$highlight_color_top %||% "#FF4242"
@@ -8312,7 +8333,7 @@ tb_render_rankplot <- function(results, style, meta) {
   if (!rank_axis_mode %in% c("rank", "percent_rank")) rank_axis_mode <- "rank"
 
   # 1. flip_fc — negate log2fc (rank recomputed below from flipped values)
-  if (isTRUE(style$flip_fc %||% FALSE) && !is.null(df$log2fc)) {
+  if (flip_fc && !is.null(df$log2fc)) {
     df$log2fc <- -df$log2fc
   }
 
@@ -8410,7 +8431,7 @@ tb_render_rankplot <- function(results, style, meta) {
     ggplot2::scale_x_continuous(labels = if (identical(rank_axis_mode, "percent_rank")) waiver() else format_k_suffix, expand = c(0, 0)) +
     ggplot2::scale_y_continuous(expand = c(0, 0)) +
     ggplot2::coord_cartesian(xlim = xlim, ylim = ylim, clip = "on") +
-    ggplot2::labs(x = if (identical(rank_axis_mode, "percent_rank")) "% Rank" else "Rank", y = y_axis_title) +
+    ggplot2::labs(x = if (identical(rank_axis_mode, "percent_rank")) "% Rank" else "Rank", y = y_axis_label) +
     tb_theme_base(axis_text_size, axis_style = axis_style)
 
   if (show_zero_line) {
@@ -8558,7 +8579,10 @@ tb_render_fc_rankplot <- function(results, style, meta) {
     df <- comp$points
     if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) next
 
-    p <- .tb_fc_rankplot_single_plot(df, style, meta, comparison_name = comp_name)
+    p <- .tb_fc_rankplot_single_plot(df, style, meta,
+                                       comparison_name = comp_name,
+                                       group_a = comp$group_a,
+                                       group_b = comp$group_b)
     plots[[comp_name]] <- p
 
     sets_by_comp[[comp_name]] <- list(
