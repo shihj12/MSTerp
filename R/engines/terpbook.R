@@ -8291,6 +8291,301 @@ tb_render_rankplot <- function(results, style, meta) {
   )
 }
 
+# ---- FC Rank Plot (log2 fold-change vs rank per comparison) -----------------
+
+.tb_fc_rankplot_single_plot <- function(df, style, meta, comparison_name) {
+  tb_require_pkg("ggplot2")
+  tb_require_pkg("ggiraph")
+
+  y_axis_title <- style$y_axis_title %||% "log2 Fold Change"
+  highlight_mode <- style$highlight_mode %||% "none"
+  point_color <- style$point_color %||% "#B0B0B0"
+  highlight_color_top <- style$highlight_color_top %||% "#FF4242"
+  highlight_color_bottom <- style$highlight_color_bottom %||% "#4245FF"
+  point_size <- tb_num(style$point_size, 2)
+  point_alpha <- tb_num(style$point_alpha, 0.7)
+  axis_text_size <- tb_num(style$axis_text_size, 20)
+  axis_style <- style$axis_style %||% "clean"
+  show_zero_line <- isTRUE(style$show_zero_line %||% TRUE)
+
+  rank_axis_mode <- style$rank_axis_mode %||% "rank"
+  if (!rank_axis_mode %in% c("rank", "percent_rank")) rank_axis_mode <- "rank"
+
+  # 1. flip_fc — negate log2fc (rank recomputed below from flipped values)
+  if (isTRUE(style$flip_fc %||% FALSE) && !is.null(df$log2fc)) {
+    df$log2fc <- -df$log2fc
+  }
+
+  # 2. min_replicates filter (BOTH groups)
+  min_reps <- tb_num(style$min_replicates, 1)
+  if (min_reps > 1 && all(c("n_a", "n_b") %in% names(df))) {
+    keep <- df$n_a >= min_reps & df$n_b >= min_reps
+    df <- df[keep, , drop = FALSE]
+  }
+
+  # 3. Recompute rank descending: rank 1 = highest displayed log2fc (leftmost)
+  if (nrow(df) > 0) {
+    df$rank <- rank(-df$log2fc, ties.method = "average", na.last = "keep")
+  }
+
+  # 4. Optional percent rank
+  if (identical(rank_axis_mode, "percent_rank") && nrow(df) > 0) {
+    max_rank <- max(df$rank, na.rm = TRUE)
+    if (is.finite(max_rank) && max_rank > 0) {
+      df$rank <- df$rank / max_rank * 100
+    }
+  }
+
+  # 5. Highlighting
+  df$highlight <- "none"
+  highlighted_top <- character(0)
+  highlighted_bottom <- character(0)
+
+  if (highlight_mode == "threshold" && nrow(df) > 0) {
+    above <- suppressWarnings(as.numeric(style$threshold_highlight_above))
+    below <- suppressWarnings(as.numeric(style$threshold_highlight_below))
+    if (!is.na(above) && is.finite(above)) {
+      mask <- df$log2fc > above
+      df$highlight[mask] <- "top"
+      highlighted_top <- df$protein_id[mask]
+    }
+    if (!is.na(below) && is.finite(below)) {
+      mask <- df$log2fc < below
+      df$highlight[mask] <- "bottom"
+      highlighted_bottom <- df$protein_id[mask]
+    }
+  } else if (highlight_mode == "topn" && nrow(df) > 0) {
+    top_n <- suppressWarnings(as.integer(style$topn_top %||% 0))
+    bottom_n <- suppressWarnings(as.integer(style$topn_bottom %||% 0))
+    if (!is.na(top_n) && top_n > 0) {
+      mask <- df$rank <= top_n
+      df$highlight[mask] <- "top"
+      highlighted_top <- df$protein_id[mask]
+    }
+    if (!is.na(bottom_n) && bottom_n > 0) {
+      max_rank <- max(df$rank, na.rm = TRUE)
+      mask <- df$rank > (max_rank - bottom_n)
+      df$highlight[mask] <- "bottom"
+      highlighted_bottom <- df$protein_id[mask]
+    }
+  }
+
+  color_map <- c(
+    "none" = point_color,
+    "top" = highlight_color_top,
+    "bottom" = highlight_color_bottom
+  )
+  df$highlight <- factor(df$highlight, levels = c("none", "bottom", "top"))
+  df <- df[order(df$highlight), , drop = FALSE]
+
+  # Symmetric y-limits around 0; x starts at 0
+  if (nrow(df) > 0) {
+    x_max <- max(df$rank, na.rm = TRUE); if (!is.finite(x_max)) x_max <- 1
+    y_abs <- max(abs(df$log2fc), na.rm = TRUE); if (!is.finite(y_abs) || y_abs == 0) y_abs <- 1
+  } else {
+    x_max <- 1; y_abs <- 1
+  }
+  xlim <- c(0, x_max * 1.05)
+  ylim <- c(-y_abs * 1.05, y_abs * 1.05)
+
+  if (is.null(df$gene)) {
+    df$gene <- df$gene_id %||% df$protein_id %||% ""
+  }
+  df$gene <- as.character(df$gene)
+  df$tooltip_text <- sprintf(
+    "%s\nRank: %s\n%s: %s",
+    df$gene,
+    formatC(df$rank, digits = 4, format = "fg"),
+    y_axis_title,
+    formatC(df$log2fc, digits = 4, format = "fg")
+  )
+  df$data_id_val <- as.character(df$protein_id %||% df$gene)
+
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = rank, y = log2fc, color = highlight)) +
+    ggiraph::geom_point_interactive(
+      ggplot2::aes(tooltip = .data$tooltip_text, data_id = .data$data_id_val),
+      size = point_size, alpha = point_alpha
+    ) +
+    ggplot2::scale_color_manual(values = color_map, guide = "none") +
+    ggplot2::scale_x_continuous(labels = if (identical(rank_axis_mode, "percent_rank")) waiver() else format_k_suffix, expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(expand = c(0, 0)) +
+    ggplot2::coord_cartesian(xlim = xlim, ylim = ylim, clip = "on") +
+    ggplot2::labs(x = if (identical(rank_axis_mode, "percent_rank")) "% Rank" else "Rank", y = y_axis_title) +
+    tb_theme_base(axis_text_size, axis_style = axis_style)
+
+  if (show_zero_line) {
+    p <- p + ggplot2::geom_hline(yintercept = 0, linetype = "dashed",
+                                 color = "grey50", linewidth = 0.4)
+  }
+
+  # ---- Highlight Groups Overlay ----
+  highlight_map_json <- style$highlight_groups_map %||% "{}"
+  highlight_map <- tryCatch(jsonlite::fromJSON(highlight_map_json, simplifyVector = FALSE),
+                            error = function(e) list())
+  highlight_groups <- highlight_map[[comparison_name]] %||%
+                      highlight_map[["fc_rankplot"]] %||% list()
+
+  if (length(highlight_groups) > 0 && nrow(df) > 0) {
+    gene_to_group <- list()
+    for (g in highlight_groups) {
+      genes <- trimws(unlist(strsplit(as.character(g$genes %||% ""), "\n", fixed = TRUE)))
+      genes <- genes[nzchar(genes)]
+      for (gene in genes) gene_to_group[[gene]] <- g
+    }
+    group_to_genes <- list()
+    for (gene in names(gene_to_group)) {
+      gid <- gene_to_group[[gene]]$id
+      group_to_genes[[gid]] <- c(group_to_genes[[gid]], gene)
+    }
+
+    groups_with_data <- character()
+    for (g in highlight_groups) {
+      gid <- g$id
+      genes_in_group <- group_to_genes[[gid]]
+      if (length(genes_in_group) == 0) next
+      df_hl <- df[df$gene %in% genes_in_group, , drop = FALSE]
+      if (nrow(df_hl) == 0) next
+
+      group_name <- g$name %||% gid
+      fill_color <- g$color %||% "#FF6600"
+      has_outline <- isTRUE(g$outline)
+      outline_width <- as.numeric(g$outline_width %||% 1)
+
+      df_hl$highlight_group <- factor(group_name, levels = group_name)
+      groups_with_data <- c(groups_with_data, group_name)
+
+      df_hl$tooltip_text <- sprintf(
+        "%s\nGroup: %s\nRank: %s\n%s: %s",
+        df_hl$gene, group_name,
+        formatC(df_hl$rank, digits = 4, format = "fg"),
+        y_axis_title,
+        formatC(df_hl$log2fc, digits = 4, format = "fg")
+      )
+      df_hl$data_id_val <- as.character(df_hl$protein_id %||% df_hl$gene)
+
+      if (has_outline) {
+        p <- p + ggiraph::geom_point_interactive(
+          data = df_hl,
+          ggplot2::aes(x = rank, y = log2fc, fill = highlight_group,
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
+          shape = 21, size = point_size + 0.5,
+          color = "black", stroke = outline_width,
+          inherit.aes = FALSE
+        )
+      } else {
+        p <- p + ggiraph::geom_point_interactive(
+          data = df_hl,
+          ggplot2::aes(x = rank, y = log2fc, fill = highlight_group,
+                       tooltip = .data$tooltip_text, data_id = .data$data_id_val),
+          shape = 21, size = point_size + 0.5,
+          color = fill_color, stroke = 0.5,
+          inherit.aes = FALSE
+        )
+      }
+    }
+
+    if (length(groups_with_data) > 0) {
+      fill_values <- stats::setNames(
+        sapply(highlight_groups, function(g) g$color %||% "#FF6600"),
+        sapply(highlight_groups, function(g) g$name %||% g$id)
+      )
+      fill_values <- fill_values[names(fill_values) %in% groups_with_data]
+      p <- p + ggplot2::scale_fill_manual(
+        values = fill_values,
+        name = "Highlight",
+        guide = ggplot2::guide_legend(order = 2)
+      )
+    }
+  }
+
+  # ---- Manual labels ----
+  label_font_size <- tb_num(style$label_font_size, 12)
+  label_map_json <- style$label_targets_map %||% style$label_genes_map %||% "{}"
+  label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE),
+                        error = function(e) list())
+  label_genes <- label_map[[comparison_name]] %||% label_map[["fc_rankplot"]] %||% ""
+  label_genes <- trimws(unlist(strsplit(as.character(label_genes), "\n", fixed = TRUE)))
+  label_genes <- label_genes[nzchar(label_genes)]
+
+  if (length(label_genes) > 0 && nrow(df) > 0) {
+    df_labels <- df[df$gene %in% label_genes, , drop = FALSE]
+    if (nrow(df_labels) > 0) {
+      tb_require_pkg("ggrepel")
+      label_size <- label_font_size / 3
+      p <- p + ggplot2::geom_point(
+        data = df_labels,
+        ggplot2::aes(x = rank, y = log2fc),
+        shape = 21, color = "black", fill = NA,
+        size = point_size + 1.5, stroke = 0.8,
+        inherit.aes = FALSE, show.legend = FALSE
+      )
+      p <- p + ggrepel::geom_text_repel(
+        data = df_labels,
+        ggplot2::aes(x = rank, y = log2fc, label = gene),
+        size = label_size, color = "black",
+        max.overlaps = Inf, box.padding = 0.5, point.padding = 0.5,
+        force_pull = 0.5, min.segment.length = 0,
+        segment.size = 0.3, segment.color = "grey40",
+        inherit.aes = FALSE, show.legend = FALSE
+      )
+    }
+  }
+
+  attr(p, "highlighted_top") <- unique(highlighted_top)
+  attr(p, "highlighted_bottom") <- unique(highlighted_bottom)
+  p
+}
+
+tb_render_fc_rankplot <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
+
+  comparisons <- results$data$comparisons %||% list()
+
+  if (length(comparisons) == 0) {
+    error_msg <- results$data$error %||% "No comparisons available for FC rank plot"
+    p <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = error_msg, size = 5, color = "gray50") +
+      ggplot2::theme_void()
+    return(list(plots = list(fc_rankplot = p), tables = list(), sets = list()))
+  }
+
+  plots <- list()
+  sets_by_comp <- list()
+
+  for (comp_name in names(comparisons)) {
+    comp <- comparisons[[comp_name]]
+    df <- comp$points
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) next
+
+    p <- .tb_fc_rankplot_single_plot(df, style, meta, comparison_name = comp_name)
+    plots[[comp_name]] <- p
+
+    sets_by_comp[[comp_name]] <- list(
+      highlighted_top    = attr(p, "highlighted_top") %||% character(0),
+      highlighted_bottom = attr(p, "highlighted_bottom") %||% character(0)
+    )
+  }
+
+  if (length(plots) == 0) {
+    p <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = "No data in any comparison", size = 5, color = "gray50") +
+      ggplot2::theme_void()
+    return(list(plots = list(fc_rankplot = p), tables = list(), sets = list()))
+  }
+
+  all_top <- unique(unlist(lapply(sets_by_comp, `[[`, "highlighted_top"), use.names = FALSE))
+  all_bottom <- unique(unlist(lapply(sets_by_comp, `[[`, "highlighted_bottom"), use.names = FALSE))
+  flat_sets <- list(
+    highlighted_top = all_top,
+    highlighted_bottom = all_bottom,
+    by_comparison = sets_by_comp
+  )
+
+  list(plots = plots, tables = list(), sets = flat_sets)
+}
+
 # ---- Heatmap ----------------------------------------------------------------
 
 # NOTE: We calculate extra space needed for custom gtable additions (group bars,
@@ -12445,6 +12740,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "volcano"  = tb_render_volcano(results, style, meta),
     "ma_plot"  = tb_render_ma_plot(results, style, meta),
     "rankplot" = tb_render_rankplot(results, style, meta),
+    "fc_rankplot" = tb_render_fc_rankplot(results, style, meta),
     "goora"    = tb_render_goora(results, style, meta),
     "1dgofcs"  = tb_render_1dgofcs(results, style, meta),
     "2dgofcs"  = tb_render_2dgofcs(results, style, meta),

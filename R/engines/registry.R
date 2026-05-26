@@ -3623,6 +3623,147 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       render_spec = list(plots = c("rankplot"), tables = character(0), tabs = NULL)
     ),
 
+    fc_rankplot = list(
+      engine_id = "fc_rankplot",
+      label = "FC Rank Plot",
+      category = "comparison",
+      supported_data_types = c("proteomics", "metabolomics"),
+      description = "Scatter of log2 fold-change vs rank for each pairwise group comparison (highest FC = rank 1, leftmost).",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein", "metabolite"),
+      requirements = list(
+        min_groups = 2,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("protein", "metabolite")
+      ),
+      params_schema = list(
+        msterp_schema_field(
+          "control_only", "bool", "Only compare against control",
+          default = FALSE,
+          help = "When a control group is defined, only generate comparisons against control."
+        ),
+        msterp_schema_field(
+          "fc_transform", "choice", "Fold-change transform",
+          default = "log2", choices = c("none", "log2", "log10"),
+          help = "Pseudo-count transform applied before subtraction. Ignored when data is already log-transformed."
+        ),
+        msterp_schema_field(
+          "is_log_transformed", "bool", "Data is already log-transformed",
+          default = FALSE, advanced = TRUE,
+          help = "Enable if your data is already log2-transformed. Skips log2(x+1) and uses direct subtraction for FC."
+        )
+      ),
+      style_schema = c(
+        list(
+          msterp_schema_field(
+            "y_axis_title", "string", "Y-axis title",
+            default = "log2 Fold Change",
+            help = "Label for the Y-axis."
+          ),
+          msterp_schema_field(
+            "rank_axis_mode", "choice", "Rank axis mode",
+            default = "rank", choices = c("rank", "percent_rank"),
+            choice_labels = c("Rank", "% Rank"),
+            help = "Display rank as absolute rank or as percent rank (rank / max rank * 100)."
+          ),
+          msterp_schema_field(
+            "min_replicates", "int", "Min replicates per group",
+            default = 1, min = 1, max = 100,
+            help = "Minimum non-NA replicates required in BOTH groups. Features below threshold are excluded; ranks recompute after filtering."
+          ),
+          msterp_schema_field(
+            "highlight_mode", "choice", "Highlight mode",
+            default = "none", choices = c("none", "threshold", "topn"),
+            choice_labels = c("None", "By FC threshold", "By top N"),
+            help = "How to highlight points: by log2FC threshold or by rank."
+          ),
+          msterp_schema_field(
+            "threshold_highlight_above", "num", "Highlight FC above",
+            default = NA,
+            help = "Highlight points with log2FC above this value (up in displayed direction)."
+          ),
+          msterp_schema_field(
+            "threshold_highlight_below", "num", "Highlight FC below",
+            default = NA,
+            help = "Highlight points with log2FC below this value (down in displayed direction)."
+          ),
+          msterp_schema_field(
+            "topn_top", "int", "Top N (highest FC, leftmost)",
+            default = 0, min = 0, max = 5000,
+            help = "Number of highest-FC features to highlight (rank 1..N)."
+          ),
+          msterp_schema_field(
+            "topn_bottom", "int", "Bottom N (lowest FC, rightmost)",
+            default = 0, min = 0, max = 5000,
+            help = "Number of lowest-FC features to highlight (right side of plot)."
+          ),
+          msterp_schema_field(
+            "point_color", "string", "Point color",
+            default = "#B0B0B0", advanced = TRUE,
+            help = "Color for non-highlighted points."
+          ),
+          msterp_schema_field(
+            "highlight_color_top", "string", "Highlight color (top/above)",
+            default = "#FF4242", advanced = TRUE,
+            help = "Color for highlighted top/above-threshold (up) points."
+          ),
+          msterp_schema_field(
+            "highlight_color_bottom", "string", "Highlight color (bottom/below)",
+            default = "#4245FF", advanced = TRUE,
+            help = "Color for highlighted bottom/below-threshold (down) points."
+          ),
+          msterp_schema_field(
+            "point_size", "num", "Point size",
+            default = 2, min = 0.5, max = 10, advanced = TRUE
+          ),
+          msterp_schema_field(
+            "point_alpha", "num", "Point opacity",
+            default = 0.7, min = 0, max = 1, advanced = TRUE
+          ),
+          msterp_schema_field(
+            "label_font_size", "int", "Label font size",
+            default = 12, min = 6, max = 30, advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_zero_line", "bool", "Show y=0 reference line",
+            default = TRUE, advanced = TRUE,
+            help = "Horizontal dashed line at log2FC = 0."
+          )
+        ),
+        mk_style(width = 8, height = 6, axis_text_size = 20)
+      ),
+      viewer_schema = list(
+        msterp_schema_field(
+          "selected_comparison", "choice", "Comparison",
+          default = "", choices = c(""),
+          help = "Select which pairwise comparison to display."
+        ),
+        msterp_schema_field(
+          "flip_fc", "bool", "Flip fold change direction",
+          default = FALSE,
+          help = "Negate log2FC values (swap up/down). Rank order is recomputed so highest FC stays leftmost."
+        ),
+        msterp_schema_field(
+          "label_targets_map", "string", "Per-plot labels (JSON)",
+          default = "{}"
+        ),
+        msterp_schema_field(
+          "highlight_groups_map", "string", "Per-plot highlight groups (JSON)",
+          default = "{}"
+        )
+      ),
+      outputs = list(
+        figures = c("fc_rankplot"),
+        tables = character(0),
+        interactive = TRUE,
+        plotly_allowed = FALSE,
+        default_plot_mode = "ggplot",
+        click_target = "target"
+      ),
+      render_spec = list(plots = c("fc_rankplot"), tables = character(0), tabs = NULL)
+    ),
+
     # ----------------------------
     # Enrichment
     # ----------------------------

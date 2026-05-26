@@ -164,7 +164,7 @@ get_style_section <- function(field_name) {
     # Filter selectors
     "ontology_filter", "pathway_db", "pathway_db_filter", "class_level",
     # Group/comparison selectors
-    "selected_group",
+    "selected_group", "selected_comparison",
     # Line type selector
     "line_type",
     # CV plot mode
@@ -3086,6 +3086,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   # These accumulate changes without triggering re-renders until committed
   pending_volcano_labels <- reactiveVal(NULL)      # Pending gene label text: list(plot_key, text)
   pending_rankplot_labels <- reactiveVal(NULL)     # Pending rankplot gene label text: list(plot_key, text)
+  pending_fc_rankplot_labels <- reactiveVal(NULL)  # Pending fc_rankplot gene label text: list(plot_key, text)
   pending_label_positions <- reactiveVal(list())   # Pending position changes: list(plot_key -> label_id -> {x, y, x_range, y_range})
   pending_term_labels <- reactiveVal(list())       # Pending term label edits: list(original_term -> new_value)
   highlight_groups_state <- reactiveVal(list())    # Temporary state for highlight groups modal
@@ -3310,6 +3311,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   # Debounce the rankplot label genes input (500ms delay)
   rankplot_label_genes_debounced <- debounce(
     reactive({ input$res_rankplot_label_genes }),
+    millis = 500
+  )
+
+  # Debounce the fc_rankplot label genes input (500ms delay)
+  fc_rankplot_label_genes_debounced <- debounce(
+    reactive({ input$res_fc_rankplot_label_genes }),
     millis = 500
   )
 
@@ -4699,6 +4706,31 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     as.character(default_key)
   }
 
+  # FC Rankplot: per-comparison plot key (mirrors volcano selection logic)
+  res_fc_rankplot_plot_key <- function(default_key = "fc_rankplot") {
+    pick <- input$res_plot_pick
+    if (!is.null(pick) && nzchar(pick)) return(as.character(pick))
+
+    res <- tryCatch(active_results(), error = function(e) NULL)
+    eff <- tryCatch(active_effective_state(), error = function(e) NULL)
+    sel <- eff$style$selected_comparison %||% ""
+    if (nzchar(sel)) return(as.character(sel))
+
+    nm <- res$data$comparison_names %||% names(res$data$comparisons %||% list())
+    if (length(nm) > 0 && nzchar(nm[[1]])) return(as.character(nm[[1]]))
+
+    as.character(default_key)
+  }
+
+  # FC Rankplot: label list from style label_targets_map JSON keyed by comparison
+  res_fc_rankplot_label_list <- function(style, plot_key) {
+    map_json <- style$label_targets_map %||% style$label_genes_map %||% "{}"
+    map <- tryCatch(jsonlite::fromJSON(map_json, simplifyVector = FALSE), error = function(e) list())
+    genes <- map[[plot_key]] %||% ""
+    genes <- trimws(unlist(strsplit(as.character(genes), "\n", fixed = TRUE)))
+    unique(genes[nzchar(genes)])
+  }
+
   res_update_volcano_label_map <- function(plot_key, labels, update_input = TRUE) {
     plot_key <- as.character(plot_key %||% "")
     if (!nzchar(plot_key)) return(invisible(NULL))
@@ -5244,16 +5276,18 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   res_has_pending_changes <- function() {
     has_volcano_labels <- !is.null(pending_volcano_labels())
     has_rankplot_labels <- !is.null(pending_rankplot_labels())
+    has_fc_rankplot_labels <- !is.null(pending_fc_rankplot_labels())
     has_positions <- length(pending_label_positions()) > 0
     has_term_edits <- length(pending_term_labels()) > 0
     has_style <- .commit_style_debounced$has_pending()
-    has_volcano_labels || has_rankplot_labels || has_positions || has_term_edits || has_style
+    has_volcano_labels || has_rankplot_labels || has_fc_rankplot_labels || has_positions || has_term_edits || has_style
   }
 
   # Clear pending changes without committing (e.g., on data reload)
   res_discard_pending_changes <- function() {
     pending_volcano_labels(NULL)
     pending_rankplot_labels(NULL)
+    pending_fc_rankplot_labels(NULL)
     pending_label_positions(list())
     pending_term_labels(list())
   }
@@ -5331,6 +5365,30 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
       pending_rankplot_labels(NULL)
       sections <- c(sections, "rankplot_labels")
+    }
+
+    # 1c. Commit pending fc_rankplot labels (if any)
+    pending_fc_rp <- isolate(pending_fc_rankplot_labels())
+    if (!is.null(pending_fc_rp)) {
+      plot_key <- pending_fc_rp$plot_key
+      new_text <- pending_fc_rp$text
+
+      eff <- isolate(active_effective_state())
+      label_map_json <- eff$style$label_targets_map %||% eff$style$label_genes_map %||% "{}"
+      label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
+      label_map[[plot_key]] <- new_text
+      new_json <- jsonlite::toJSON(label_map, auto_unbox = TRUE)
+
+      cur_style <- rv$cache_style_by_node[[key]] %||% (eff$style %||% list())
+      cur_style$label_targets_map <- as.character(new_json)
+      rv$cache_style_by_node[[key]] <- cur_style
+
+      if (!is.null(nd)) {
+        .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
+      }
+
+      pending_fc_rankplot_labels(NULL)
+      sections <- c(sections, "fc_rankplot_labels")
     }
 
     # 2. Commit pending label positions (if any)
@@ -5489,7 +5547,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
   res_engine_uses_girafe <- function(eng, results = NULL) {
     if (is.null(eng)) return(FALSE)
     eng <- tolower(eng)
-    if (eng %in% c("volcano", "rankplot")) return(TRUE)
+    if (eng %in% c("volcano", "rankplot", "fc_rankplot")) return(TRUE)
     if (identical(eng, "peptide_region")) {
       pr_mode <- tolower(as.character(results$data$mode %||% "overview"))
       return(identical(pr_mode, "detail"))
@@ -6040,8 +6098,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       }
     }
 
-    # Avoid rendering raw JSON maps since volcano and rankplot have custom UI controls
-    if (eng_lower %in% c("volcano", "rankplot")) {
+    # Avoid rendering raw JSON maps since volcano/rankplot/fc_rankplot have custom UI controls
+    if (eng_lower %in% c("volcano", "rankplot", "fc_rankplot")) {
       schema <- Filter(function(f) {
         nm <- as.character(f$name %||% "")
         !nm %in% c("label_genes_map", "label_targets_map", "highlight_groups_map")
@@ -6087,7 +6145,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (length(wh_idx) > 0) schema <- schema[-wh_idx]
 
     view_mode_field <- NULL
-    if (eng_lower %in% c("volcano", "2dgofcs", "rankplot", "idquant_id_quant")) {
+    if (eng_lower %in% c("volcano", "2dgofcs", "rankplot", "fc_rankplot", "idquant_id_quant")) {
       view_mode_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "view_mode"), logical(1)))
       if (length(view_mode_idx) > 0) {
         view_mode_field <- schema[[view_mode_idx[[1]]]]
@@ -6253,6 +6311,28 @@ page_results_server <- function(input, output, session, app_state = NULL) {
             v_eff <- group_choices[[1]]
           }
           selected_group_ui <- res_field_ui_core(rv$active_node_id, sg_field, value_override = v_eff, dynamic_choices = group_choices)
+        }
+      }
+    } else if (eng_lower == "fc_rankplot") {
+      # FC Rankplot: per-comparison selector populated from results data$comparison_names
+      res <- isolate(active_results())
+      comparison_choices <- NULL
+      if (!is.null(res)) {
+        comparison_choices <- res$data$comparison_names %||% names(res$data$comparisons %||% list())
+        comparison_choices <- as.character(comparison_choices)
+        comparison_choices <- comparison_choices[nzchar(comparison_choices)]
+      }
+
+      sg_idx <- which(vapply(schema, function(f) identical(as.character(f$name %||% ""), "selected_comparison"), logical(1)))
+      if (length(sg_idx) > 0) {
+        sg_field <- schema[[sg_idx[[1]]]]
+        schema <- schema[-sg_idx[[1]]]
+        if (!is.null(comparison_choices) && length(comparison_choices) > 0) {
+          v_eff <- eff$style[[sg_field$name]] %||% sg_field$default
+          if (!nzchar(v_eff %||% "") || !(v_eff %in% comparison_choices)) {
+            v_eff <- comparison_choices[[1]]
+          }
+          selected_group_ui <- res_field_ui_core(rv$active_node_id, sg_field, value_override = v_eff, dynamic_choices = comparison_choices)
         }
       }
     }
@@ -6826,6 +6906,60 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       )
     }
 
+    # FC Rankplot label input + highlight button (per-comparison)
+    fc_rankplot_label_input_ui <- NULL
+    if (eng_lower == "fc_rankplot") {
+      plot_key <- res_fc_rankplot_plot_key()
+      label_map_json <- eff$style$label_targets_map %||% eff$style$label_genes_map %||% "{}"
+      label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
+      current_labels <- label_map[[plot_key]] %||% ""
+      fr_ctx <- msterp_data_type_context(rv$run_data_type %||% "proteomics")
+      fr_entity_cap <- paste0(toupper(substring(fr_ctx$entity_label, 1, 1)), substring(fr_ctx$entity_label, 2))
+
+      fc_rankplot_label_input_ui <- div(
+        style = "margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-light);",
+        tags$h6(
+          style = "font-weight: 600; margin-bottom: 10px; color: var(--text-primary);",
+          paste0(fr_entity_cap, " Labels")
+        ),
+        tags$small(
+          class = "text-muted d-block",
+          style = "margin-bottom: 8px;",
+          sprintf("Labels are per-comparison. Current: %s", plot_key)
+        ),
+        textAreaInput(
+          "res_fc_rankplot_label_genes",
+          label = tagList(
+            paste0(paste0(toupper(substring(fr_ctx$entity_plural, 1, 1)), substring(fr_ctx$entity_plural, 2)), " to label"),
+            uiOutput("res_fc_rankplot_labels_pending_badge", inline = TRUE)
+          ),
+          value = as.character(current_labels),
+          rows = 4,
+          placeholder = sprintf("Enter %s, one per line", fr_ctx$entity_plural)
+        ),
+        div(
+          style = "margin-top: 6px; display: flex; gap: 8px; align-items: center;",
+          actionButton(
+            "res_fc_rankplot_labels_apply",
+            "Apply Labels",
+            class = "btn-sm btn-outline-primary",
+            style = "flex-shrink: 0;"
+          ),
+          tags$small(
+            class = "text-muted",
+            style = "flex: 1;",
+            "Positions of existing labels are preserved"
+          )
+        ),
+        actionButton(
+          "res_fc_rankplot_highlight_btn",
+          "Highlight Groups...",
+          class = "btn-sm btn-outline-secondary",
+          style = "margin-top: 8px; width: 100%;"
+        )
+      )
+    }
+
     tagList(
       view_mode_ui,
       pr_view_switch_ui,   # Graph/Table toggle for peptide_region (top of style panel)
@@ -6846,7 +6980,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       gene_barchart_panel_ui,  # Gene bar chart creation for heatmap engines
       peptide_region_detail_panel_ui,  # Protein detail view creation for peptide_region
       rankplot_label_input_ui,  # Gene labels for rankplot
-      rankplot_goora_panel_ui   # GO-ORA for rankplot highlighted genes
+      rankplot_goora_panel_ui,  # GO-ORA for rankplot highlighted genes
+      fc_rankplot_label_input_ui  # Gene labels for fc_rankplot (per-comparison)
       # Apply button and reset override removed - updates happen automatically
     )
     }, error = function(e) {
@@ -6882,7 +7017,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
     schema <- res_viewer_schema(edef)
     eng_lower <- tolower(eng %||% "")
-    if (eng_lower %in% c("volcano", "rankplot")) {
+    if (eng_lower %in% c("volcano", "rankplot", "fc_rankplot")) {
       schema <- Filter(function(f) {
         nm <- as.character(f$name %||% "")
         !nm %in% c("label_genes_map", "label_targets_map", "highlight_groups_map")
@@ -7403,6 +7538,56 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     ))
   }, ignoreInit = TRUE)
 
+  # Open highlight groups modal for FC RANK PLOT
+  observeEvent(input$res_fc_rankplot_highlight_btn, {
+    req(rv$loaded, rv$active_node_id)
+    eng <- tolower(active_engine_id() %||% "")
+    if (eng != "fc_rankplot") return()
+
+    current_plot <- res_fc_rankplot_plot_key()
+
+    eff <- isolate(active_effective_state())
+    map_json <- eff$style$highlight_groups_map %||% "{}"
+    map <- tryCatch(jsonlite::fromJSON(map_json, simplifyVector = FALSE), error = function(e) list())
+    groups <- map[[current_plot]] %||% list()
+
+    if (length(groups) == 0) {
+      groups <- list(list(
+        id = paste0("hg_1_", format(Sys.time(), "%H%M%S")),
+        name = "Group 1",
+        color = "#FF6600",
+        outline = FALSE,
+        outline_width = 1,
+        genes = ""
+      ))
+    }
+
+    rv$hl_modal_gen <- (rv$hl_modal_gen %||% 0L) + 1L
+    hl_ns_prefix(paste0("res_hl_g", rv$hl_modal_gen))
+    highlight_groups_state(groups)
+
+    showModal(modalDialog(
+      title = paste("Highlight Groups -", current_plot),
+      size = "l",
+      easyClose = FALSE,
+      div(
+        style = "margin-bottom: 16px;",
+        actionButton("res_hl_add_group", "+ Add Group", class = "btn btn-sm btn-primary")
+      ),
+      uiOutput("res_hl_groups_container"),
+      tags$script(HTML(
+        "$(document).off('change.hl_outline').on('change.hl_outline', 'input[type=\"checkbox\"][id*=\"_outline_\"]:not([id*=\"_outline_width_\"])', function() {",
+        "  var containerId = this.id.replace(/_outline_(\\d+)$/, '_outline_width_container_$1');",
+        "  if (this.checked) $('#' + containerId).show(); else $('#' + containerId).hide();",
+        "});"
+      )),
+      footer = tagList(
+        actionButton("res_hl_apply", "Apply", class = "btn btn-primary"),
+        modalButton("Cancel")
+      )
+    ))
+  }, ignoreInit = TRUE)
+
   # Open highlight groups modal for RANK PLOT
   observeEvent(input$res_rankplot_highlight_btn, {
     req(rv$loaded, rv$active_node_id)
@@ -7551,10 +7736,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       nzchar(trimws(g$genes)) || !grepl("^Group \\d+$", g$name)
     }, updated_groups)
 
-    # Get current plot (canonical resolver for volcano; rankplot only has one).
+    # Get current plot (canonical resolver for volcano; rankplot single; fc_rankplot per-comparison).
     eng_id <- tolower(active_engine_id() %||% "")
     current_plot <- if (eng_id == "rankplot") {
       "rankplot"
+    } else if (eng_id == "fc_rankplot") {
+      res_fc_rankplot_plot_key()
     } else {
       res_volcano_plot_key()
     }
@@ -7686,6 +7873,87 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     )
   }, ignoreInit = TRUE)
 
+  # ---- FC Rankplot label observers (per-comparison) ----
+  observeEvent(fc_rankplot_label_genes_debounced(), {
+    req(rv$loaded, rv$active_node_id)
+    eng <- tolower(active_engine_id() %||% "")
+    if (eng != "fc_rankplot") return()
+
+    plot_key <- res_fc_rankplot_plot_key()
+    new_labels <- fc_rankplot_label_genes_debounced() %||% ""
+
+    eff <- isolate(active_effective_state())
+    label_map_json <- eff$style$label_targets_map %||% eff$style$label_genes_map %||% "{}"
+    label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
+    current_committed <- label_map[[plot_key]] %||% ""
+
+    if (!identical(new_labels, current_committed)) {
+      pending_fc_rankplot_labels(list(
+        plot_key = plot_key,
+        text = new_labels
+      ))
+    } else {
+      pending_fc_rankplot_labels(NULL)
+    }
+  }, ignoreInit = TRUE)
+
+  output$res_fc_rankplot_labels_pending_badge <- renderUI({
+    pending <- pending_fc_rankplot_labels()
+    if (is.null(pending)) return(NULL)
+    tags$span(
+      class = "badge bg-warning text-dark ms-1",
+      style = "font-size: 10px; vertical-align: middle;",
+      "pending"
+    )
+  })
+
+  observeEvent(input$res_fc_rankplot_labels_apply, {
+    req(rv$loaded, rv$active_node_id)
+    eng <- tolower(active_engine_id() %||% "")
+    if (eng != "fc_rankplot") return()
+
+    pending <- pending_fc_rankplot_labels()
+    if (is.null(pending)) {
+      showNotification("No pending label changes to apply.", type = "message")
+      return()
+    }
+
+    plot_key <- pending$plot_key
+    new_text <- pending$text
+
+    new_labels <- strsplit(new_text, "\\s*[,\n]+\\s*")[[1]]
+    new_labels <- trimws(new_labels)
+    new_labels <- new_labels[nzchar(new_labels)]
+
+    node_id <- rv$active_node_id
+    key <- as.character(node_id %||% "")
+
+    eff <- isolate(active_effective_state())
+    label_map_json <- eff$style$label_targets_map %||% eff$style$label_genes_map %||% "{}"
+    label_map <- tryCatch(jsonlite::fromJSON(label_map_json, simplifyVector = FALSE), error = function(e) list())
+    label_map[[plot_key]] <- new_text
+    new_json <- jsonlite::toJSON(label_map, auto_unbox = TRUE)
+
+    cur_style <- rv$cache_style_by_node[[key]] %||% (eff$style %||% list())
+    cur_style$label_targets_map <- as.character(new_json)
+    rv$cache_style_by_node[[key]] <- cur_style
+
+    nd <- active_node_dir()
+    if (!is.null(nd)) {
+      .commit_style_debounced$call(node_dir = nd, payload = list(style = cur_style))
+    }
+
+    pending_fc_rankplot_labels(NULL)
+    rv$has_unsaved_changes <- TRUE
+    rv$save_status <- "dirty"
+    style_rev(isolate(style_rev()) + 1L)
+
+    showNotification(
+      paste0("Applied ", length(new_labels), " label(s). Existing positions preserved."),
+      type = "message"
+    )
+  }, ignoreInit = TRUE)
+
   observeEvent(list(rv$active_node_id, input$res_plot_pick, input$res_enrichment_tabs), {
     res_clear_label_selected()
   }, ignoreInit = TRUE)
@@ -7723,13 +7991,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
   observeEvent(input$res_label_plot_click, {
     eng <- tolower(active_engine_id() %||% "")
-    if (!(eng %in% c("volcano", "2dgofcs", "rankplot"))) return()
+    if (!(eng %in% c("volcano", "2dgofcs", "rankplot", "fc_rankplot"))) return()
 
     plot_names <- rv$current_plot_names %||% character()
     plot_key <- if (identical(eng, "volcano")) {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "volcano_plot")
     } else if (identical(eng, "rankplot")) {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "rankplot")
+    } else if (identical(eng, "fc_rankplot")) {
+      input$res_plot_pick %||% res_fc_rankplot_plot_key()
     } else {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "2dgofcs_plot")
     }
@@ -7739,13 +8009,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
   observeEvent(input$res_label_plot_dblclick, {
     eng <- tolower(active_engine_id() %||% "")
-    if (!(eng %in% c("volcano", "2dgofcs", "rankplot"))) return()
+    if (!(eng %in% c("volcano", "2dgofcs", "rankplot", "fc_rankplot"))) return()
 
     plot_names <- rv$current_plot_names %||% character()
     plot_key <- if (identical(eng, "volcano")) {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "volcano_plot")
     } else if (identical(eng, "rankplot")) {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "rankplot")
+    } else if (identical(eng, "fc_rankplot")) {
+      input$res_plot_pick %||% res_fc_rankplot_plot_key()
     } else {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "2dgofcs_plot")
     }
@@ -7755,13 +8027,15 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
   observeEvent(input$res_plot_hover, {
     eng <- tolower(active_engine_id() %||% "")
-    if (!(eng %in% c("volcano", "2dgofcs", "rankplot"))) return()
+    if (!(eng %in% c("volcano", "2dgofcs", "rankplot", "fc_rankplot"))) return()
 
     plot_names <- rv$current_plot_names %||% character()
     plot_key <- if (identical(eng, "volcano")) {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "volcano_plot")
     } else if (identical(eng, "rankplot")) {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "rankplot")
+    } else if (identical(eng, "fc_rankplot")) {
+      input$res_plot_pick %||% res_fc_rankplot_plot_key()
     } else {
       input$res_plot_pick %||% (if (length(plot_names) > 0) plot_names[[1]] else "2dgofcs_plot")
     }
@@ -9331,6 +9605,18 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     tb_ggplot_to_girafe(p, style = style, girafe_id = "res_rankplot_girafe")
   })
 
+  output$res_fc_rankplot_girafe <- ggiraph::renderGirafe({
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "fc_rankplot")) return(NULL)
+
+    plot_key <- res_active_plot_name() %||% res_fc_rankplot_plot_key()
+    p <- res_girafe_ggplot(plot_key)
+    if (is.null(p)) return(NULL)
+
+    style <- active_effective_state()$style %||% list()
+    tb_ggplot_to_girafe(p, style = style, girafe_id = "res_fc_rankplot_girafe")
+  })
+
   # Click-to-search for volcano / rankplot uses ggiraph's first-class
   # single-selection mechanism. opts_selection(type = "single") in
   # tb_ggplot_to_girafe makes a click on a point set input$<girafe_id>_selected
@@ -9364,6 +9650,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     .res_handle_girafe_pick(input$res_rankplot_girafe_selected)
     session$sendCustomMessage("res_clear_girafe_selection",
                               list(id = "res_rankplot_girafe"))
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
+
+  observeEvent(input$res_fc_rankplot_girafe_selected, {
+    eng <- tolower(active_engine_id() %||% "")
+    if (!identical(eng, "fc_rankplot")) return()
+    .res_handle_girafe_pick(input$res_fc_rankplot_girafe_selected)
+    session$sendCustomMessage("res_clear_girafe_selection",
+                              list(id = "res_fc_rankplot_girafe"))
   }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
   # Track the SHAPE signal for the outer plot container. Only re-fires
@@ -9437,8 +9731,10 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     # Single-mode girafe rendering for volcano/rankplot. Same ggplot also
     # backs the static export path (the hidden plotOutput keeps download/copy
     # working off res_extract_ggplots).
-    if (eng %in% c("volcano", "rankplot")) {
-      girafe_id <- if (identical(eng, "volcano")) "res_volcano_girafe" else "res_rankplot_girafe"
+    if (eng %in% c("volcano", "rankplot", "fc_rankplot")) {
+      girafe_id <- if (identical(eng, "volcano")) "res_volcano_girafe"
+                   else if (identical(eng, "fc_rankplot")) "res_fc_rankplot_girafe"
+                   else "res_rankplot_girafe"
       return(
         div(
           class = "res-plot-interact res-girafe-wrap",
@@ -9704,7 +10000,7 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
   output$res_hover_ui <- renderUI({
     eng <- tolower(active_engine_id() %||% "")
-    if (!(eng %in% c("volcano", "2dgofcs", "rankplot"))) return(NULL)
+    if (!(eng %in% c("volcano", "2dgofcs", "rankplot", "fc_rankplot"))) return(NULL)
 
     st <- active_effective_state()$style %||% list()
     if (!isTRUE(res_is_interactive_view(st))) return(NULL)

@@ -1009,7 +1009,7 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
     paired_cfg <- s$paired %||% list()
     paired_enabled <- isTRUE(paired_cfg$enabled)
 
-    if (paired_enabled && eid %in% c("volcano", "pca", "rankplot")) {
+    if (paired_enabled && eid %in% c("volcano", "pca", "rankplot", "fc_rankplot")) {
       children <- list()
 
       # Get parent compute params and style (thresholds that define child gene lists)
@@ -1566,6 +1566,96 @@ nr_compile_run_plan <- function(terpflow, formatted, registry = NULL) {
             )
           }
         }
+
+      } else if (eid == "fc_rankplot") {
+        # FC Rankplot -> GO-ORA children per pairwise comparison
+        # Frozen at compile time: highlight thresholds, min_replicates, flip_fc.
+
+        goora_params <- paired_cfg$params %||% list()
+        goora_style <- paired_cfg$style %||% list()
+
+        highlight_mode <- parent_style$highlight_mode %||% "topn"
+        topn_top <- as.integer(parent_style$topn_top %||% 50)
+        topn_bottom <- as.integer(parent_style$topn_bottom %||% 50)
+        threshold_above <- parent_style$threshold_highlight_above
+        threshold_below <- parent_style$threshold_highlight_below
+        min_replicates <- as.integer(parent_style$min_replicates %||% 1)
+        flip_fc <- isTRUE(parent_style$flip_fc %||% FALSE)
+
+        groups <- meta$groups$group_name %||% character()
+        is_control_raw <- meta$groups$is_control %||% rep(FALSE, length(groups))
+        is_control <- if (is.character(is_control_raw)) {
+          tolower(as.character(is_control_raw)) %in% c("true", "t", "1", "yes")
+        } else {
+          as.logical(is_control_raw)
+        }
+        is_control[is.na(is_control)] <- FALSE
+
+        control_only <- isTRUE(parent_params$control_only)
+        control_idx <- which(is_control)
+        has_control <- length(control_idx) == 1
+
+        if (length(groups) >= 2) {
+          for (gi in seq_len(length(groups) - 1)) {
+            for (gj in (gi + 1):length(groups)) {
+              if (control_only && has_control) {
+                if (!gi %in% control_idx && !gj %in% control_idx) next
+              }
+
+              grp_a <- groups[gi]
+              grp_b <- groups[gj]
+
+              if (has_control && gj %in% control_idx && !(gi %in% control_idx)) {
+                tmp <- grp_a; grp_a <- grp_b; grp_b <- tmp
+              }
+
+              comparison_label <- paste0(grp_b, "_vs_", grp_a)
+              comparison_label_safe <- gsub("[^A-Za-z0-9_]", "_", comparison_label)
+
+              child_id_top <- paste0(comparison_label_safe, "_top_goora")
+              children[[child_id_top]] <- list(
+                view_id = child_id_top,
+                label = sprintf("%s Top (GO-ORA)", comparison_label),
+                engine_id = "goora",
+                params = c(
+                  goora_params,
+                  list(
+                    direction = "top",
+                    comparison = comparison_label,
+                    highlight_mode = highlight_mode,
+                    topn_top = topn_top,
+                    threshold_above = threshold_above,
+                    min_replicates = min_replicates,
+                    flip_fc = flip_fc,
+                    source = sprintf("fc_rankplot:%s", step_entry$step_id)
+                  )
+                ),
+                style = merge_style_defaults("goora", goora_style)
+              )
+
+              child_id_bottom <- paste0(comparison_label_safe, "_bottom_goora")
+              children[[child_id_bottom]] <- list(
+                view_id = child_id_bottom,
+                label = sprintf("%s Bottom (GO-ORA)", comparison_label),
+                engine_id = "goora",
+                params = c(
+                  goora_params,
+                  list(
+                    direction = "bottom",
+                    comparison = comparison_label,
+                    highlight_mode = highlight_mode,
+                    topn_bottom = topn_bottom,
+                    threshold_below = threshold_below,
+                    min_replicates = min_replicates,
+                    flip_fc = flip_fc,
+                    source = sprintf("fc_rankplot:%s", step_entry$step_id)
+                  )
+                ),
+                style = merge_style_defaults("goora", goora_style)
+              )
+            }
+          }
+        }
       }
 
       if (length(children) > 0) {
@@ -2008,7 +2098,7 @@ nr_build_step_payload <- function(ctx, step, registry = NULL) {
 #' @return Character vector of valid engine IDs
 nr_engine_ids <- function() {
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
-    "pca", "umap", "umap_gene", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
+    "pca", "umap", "umap_gene", "volcano", "ma_plot", "rankplot", "fc_rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
     "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
@@ -2031,7 +2121,7 @@ nr_engine_ids <- function() {
 nr_implemented_engines <- function() {
   # All engines in this list have implementations in R/engines/stats/
   c("dataprocessor", "half_life", "idquant", "spearman", "scatter_correlation", "hor_dis", "vert_dis",
-    "pca", "umap", "umap_gene", "volcano", "ma_plot", "rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
+    "pca", "umap", "umap_gene", "volcano", "ma_plot", "rankplot", "fc_rankplot", "goora", "1dgofcs", "2dgofcs", "subloc", "heatmap", "ftest_heatmap",
     "fc_heatmap", "fc_ftest_heatmap", "pathway_fc_heatmap",
     "peptide_aggregate_to_protein",
     "idquant_id_quant", "idquant_average_value",
@@ -2195,6 +2285,7 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "volcano"       = stats_volcano_run(payload, payload$params, context),
     "ma_plot"       = stats_ma_plot_run(payload, payload$params, context),
     "rankplot"      = stats_rankplot_run(payload, payload$params, context),
+    "fc_rankplot"   = stats_fc_rankplot_run(payload, payload$params, context),
     "goora"         = stats_goora_run(payload, payload$params, context),
     "1dgofcs"       = stats_1dgofcs_run(payload, payload$params, context),
     "2dgofcs"       = stats_2dgofcs_run(payload, payload$params, context),
@@ -3168,6 +3259,83 @@ nr_build_child_payload <- function(child_def, parent_engine, parent_sets,
     }
 
     # Map to gene symbols
+    query_proteins <- map_ids_to_gene_symbols(query_proteins)
+    query_proteins <- query_proteins[!is.na(query_proteins) & nzchar(query_proteins)]
+    query_proteins <- query_proteins[!duplicated(query_proteins)]
+
+    payload$query_proteins <- query_proteins
+    payload$n_query <- length(query_proteins)
+  }
+
+  # FC Rankplot -> GO-ORA: Use highlighted proteins from specified comparison
+  else if (parent_engine == "fc_rankplot" && child_engine == "goora") {
+    direction_local <- child_params$direction %||% "top"
+    comparison <- child_params$comparison %||% ""
+    highlight_mode <- child_params$highlight_mode %||% "topn"
+
+    comps <- parent_sets$comparisons
+    if (is.null(comps) || !is.list(comps) || !(comparison %in% names(comps))) {
+      return(list(ok = FALSE, error = sprintf(
+        "Parent fc_rankplot missing comparison '%s'", comparison)))
+    }
+    points <- comps[[comparison]]$points
+    if (is.null(points) || !is.data.frame(points) || nrow(points) == 0) {
+      return(list(ok = FALSE, error = sprintf(
+        "No points for comparison '%s'", comparison)))
+    }
+
+    # Apply min_replicates filter (BOTH groups)
+    min_reps <- suppressWarnings(as.integer(child_params$min_replicates %||% 1))
+    if (!is.na(min_reps) && min_reps > 1 && all(c("n_a", "n_b") %in% names(points))) {
+      points <- points[points$n_a >= min_reps & points$n_b >= min_reps, , drop = FALSE]
+    }
+
+    # Apply flip
+    if (isTRUE(child_params$flip_fc) && "log2fc" %in% names(points)) {
+      points$log2fc <- -points$log2fc
+    }
+
+    # Rerank descending by displayed log2fc (rank 1 = highest)
+    if (nrow(points) > 0) {
+      points$rank <- rank(-points$log2fc, ties.method = "average", na.last = "keep")
+    }
+
+    if (nrow(points) == 0) {
+      return(list(ok = FALSE, error = sprintf(
+        "No features after filters for comparison '%s'", comparison)))
+    }
+
+    query_proteins <- character()
+    if (highlight_mode == "topn") {
+      if (direction_local == "top") {
+        topn <- as.integer(child_params$topn_top %||% 50)
+        points <- points[order(points$rank), , drop = FALSE]
+        query_proteins <- head(points$protein_id, topn)
+      } else {
+        bottomn <- as.integer(child_params$topn_bottom %||% 50)
+        points <- points[order(points$rank, decreasing = TRUE), , drop = FALSE]
+        query_proteins <- head(points$protein_id, bottomn)
+      }
+    } else if (highlight_mode == "threshold") {
+      if (direction_local == "top") {
+        thr <- suppressWarnings(as.numeric(child_params$threshold_above))
+        if (!is.na(thr) && is.finite(thr)) {
+          query_proteins <- points$protein_id[points$log2fc > thr]
+        }
+      } else {
+        thr <- suppressWarnings(as.numeric(child_params$threshold_below))
+        if (!is.na(thr) && is.finite(thr)) {
+          query_proteins <- points$protein_id[points$log2fc < thr]
+        }
+      }
+    }
+
+    if (length(query_proteins) == 0) {
+      return(list(ok = FALSE, error = sprintf(
+        "No highlighted proteins for direction '%s' in '%s'",
+        direction_local, comparison)))
+    }
+
     query_proteins <- map_ids_to_gene_symbols(query_proteins)
     query_proteins <- query_proteins[!is.na(query_proteins) & nzchar(query_proteins)]
     query_proteins <- query_proteins[!duplicated(query_proteins)]
