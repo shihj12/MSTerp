@@ -8545,7 +8545,26 @@ tb_render_rankplot <- function(results, style, meta) {
   label_genes <- label_genes[nzchar(label_genes)]
 
   if (length(label_genes) > 0 && nrow(df) > 0) {
-    df_labels <- df[df$gene %in% label_genes, , drop = FALSE]
+    # Tolerant matching: case-insensitive, splits semicolon/comma-grouped IDs,
+    # and accepts either a gene symbol OR a UniProt accession as input.
+    label_norm <- tolower(trimws(label_genes))
+    label_norm <- label_norm[nzchar(label_norm)]
+    candidate_cols <- intersect(
+      c("gene", "gene_id", "gene_symbol", "display_id", "protein_id", "primary_id"),
+      names(df)
+    )
+    match_mask <- rep(FALSE, nrow(df))
+    for (col in candidate_cols) {
+      raw <- as.character(df[[col]])
+      for (i in seq_along(raw)) {
+        if (match_mask[[i]]) next
+        if (is.na(raw[[i]]) || !nzchar(raw[[i]])) next
+        toks <- tolower(trimws(strsplit(raw[[i]], "[;,]")[[1]]))
+        toks <- toks[nzchar(toks)]
+        if (any(toks %in% label_norm)) match_mask[[i]] <- TRUE
+      }
+    }
+    df_labels <- df[match_mask, , drop = FALSE]
     if (nrow(df_labels) > 0) {
       tb_require_pkg("ggrepel")
       label_size <- label_font_size / 3
