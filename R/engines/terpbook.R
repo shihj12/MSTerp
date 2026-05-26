@@ -8427,7 +8427,13 @@ tb_render_rankplot <- function(results, style, meta) {
     y_axis_title,
     formatC(df$log2fc, digits = 4, format = "fg")
   )
-  df$data_id_val <- as.character(df$protein_id %||% df$gene)
+  # data_id_val drives ggiraph click → res_show_uniprot_summary; force it to
+  # the primary uniprot so grouped IDs like "P12345;P67890" don't get queried as a unit.
+  df$data_id_val <- vapply(
+    strsplit(as.character(df$protein_id %||% df$gene), ";", fixed = TRUE),
+    function(x) { x <- trimws(x); x <- x[nzchar(x)]; if (length(x) > 0) x[[1]] else "" },
+    character(1)
+  )
 
   p <- ggplot2::ggplot(df, ggplot2::aes(x = rank, y = log2fc, color = highlight)) +
     ggiraph::geom_point_interactive(
@@ -8437,9 +8443,12 @@ tb_render_rankplot <- function(results, style, meta) {
     ggplot2::scale_color_manual(values = color_map, guide = "none") +
     ggplot2::scale_x_continuous(labels = if (identical(rank_axis_mode, "percent_rank")) waiver() else format_k_suffix, expand = c(0, 0)) +
     ggplot2::scale_y_continuous(expand = c(0, 0)) +
-    ggplot2::coord_cartesian(xlim = xlim, ylim = ylim, clip = "on") +
+    # clip="off" so ggrepel labels at rank 1 / rank N (leftmost/rightmost)
+    # can extend into the plot margin rather than being clipped to the panel.
+    ggplot2::coord_cartesian(xlim = xlim, ylim = ylim, clip = "off") +
     ggplot2::labs(x = if (identical(rank_axis_mode, "percent_rank")) "% Rank" else "Rank", y = y_axis_label) +
-    tb_theme_base(axis_text_size, axis_style = axis_style)
+    tb_theme_base(axis_text_size, axis_style = axis_style) +
+    ggplot2::theme(plot.margin = ggplot2::margin(t = 8, r = 30, b = 8, l = 30))
 
   if (show_zero_line) {
     p <- p + ggplot2::geom_hline(yintercept = 0, linetype = "dashed",
