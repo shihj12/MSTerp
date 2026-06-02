@@ -16729,13 +16729,14 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
             points <- comp$points
             if (!is.null(points) && nrow(points) > 0) {
-              up_data <- points[points$protein_id %in% sig_up, , drop = FALSE]
-              down_data <- points[points$protein_id %in% sig_down, , drop = FALSE]
-
-              if (nrow(up_data) > 0) up_data$direction <- "up"
-              if (nrow(down_data) > 0) down_data$direction <- "down"
-
-              marker_data <- rbind(up_data, down_data)
+              # Include all proteins (sig up/down AND non-sig). Derive the
+              # direction column from each point's significance status so the
+              # exported sheet can be filtered for up / down / ns.
+              marker_data <- points
+              marker_data$direction <- ifelse(
+                marker_data$protein_id %in% sig_up, "up",
+                ifelse(marker_data$protein_id %in% sig_down, "down", "ns")
+              )
 
               if (nrow(marker_data) > 0) {
                 # Add source context columns
