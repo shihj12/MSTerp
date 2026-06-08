@@ -659,6 +659,15 @@ page_format_server <- function(input, output, session, app_state) {
   # Max groups for pre-registering dynamic observers (SILAC rep buttons, column modals)
   silac_max_groups <- 20L
 
+  # Input-version nonce: bumped on reset / new-file load so that SILAC H/L dropdown
+  # IDs change, discarding any client-retained selections from a previously loaded
+  # file (Shiny keeps input values for removed inputs; same-named columns would
+  # otherwise bleed through). Stable within one file session so toggling unrelated
+  # controls preserves the user's H/L pairings.
+  fmt_input_nonce <- reactiveVal(0L)
+  silac_h_id <- function(i, r) paste0("fmt_silac_h_", fmt_input_nonce(), "_", i, "_", r)
+  silac_l_id <- function(i, r) paste0("fmt_silac_l_", fmt_input_nonce(), "_", i, "_", r)
+
   
   ensure_group_slots <- function(n) {
     n <- as.integer(n)
@@ -802,8 +811,8 @@ page_format_server <- function(input, output, session, app_state) {
           "2",
           "Assign sample groups",
           numericInput("fmt_ngroups", "Number of sample groups", value = 2, min = 1, max = 20, step = 1),
-          uiOutput("fmt_control_group_ui"),
-          uiOutput("fmt_group_bins_ui")
+          uiOutput("fmt_group_bins_ui"),
+          uiOutput("fmt_control_group_ui")
         ) else NULL,
         if (has_data) fmt_step_ui(
           "3",
@@ -858,6 +867,7 @@ page_format_server <- function(input, output, session, app_state) {
 
     # Auto-reset all previous state (same as fmt_reset)
     old_ng <- input$fmt_ngroups %||% 2
+    fmt_input_nonce(isolate(fmt_input_nonce()) + 1L)
     fmt_clear_built()
     fmt_raw(NULL)
     fmt_upload(NULL)
@@ -935,6 +945,7 @@ page_format_server <- function(input, output, session, app_state) {
   observeEvent(input$fmt_reset, {
     old_ng <- input$fmt_ngroups %||% 2
 
+    fmt_input_nonce(isolate(fmt_input_nonce()) + 1L)
     fmt_upload(NULL)
     fmt_raw(NULL)
     fmt_state$cols <- list()
@@ -1169,8 +1180,8 @@ page_format_server <- function(input, output, session, app_state) {
       for (gi in seq_len(ng)) {
         nreps <- fmt_state$silac_nreps[[gi]] %||% 1L
         for (ri in seq_len(nreps)) {
-          h_val <- input[[paste0("fmt_silac_h_", gi, "_", ri)]] %||% ""
-          l_val <- input[[paste0("fmt_silac_l_", gi, "_", ri)]] %||% ""
+          h_val <- input[[silac_h_id(gi, ri)]] %||% ""
+          l_val <- input[[silac_l_id(gi, ri)]] %||% ""
           if (nzchar(h_val)) all_assigned <- c(all_assigned, h_val)
           if (nzchar(l_val)) all_assigned <- c(all_assigned, l_val)
         }
@@ -1219,8 +1230,8 @@ page_format_server <- function(input, output, session, app_state) {
               tagList(
                 tags$p(tags$strong("Pair Heavy / Light columns per replicate:")),
                 lapply(seq_len(nreps), function(r) {
-                  h_id <- paste0("fmt_silac_h_", i, "_", r)
-                  l_id <- paste0("fmt_silac_l_", i, "_", r)
+                  h_id <- silac_h_id(i, r)
+                  l_id <- silac_l_id(i, r)
 
                   # Build choices: available columns + currently selected value (so it stays selected)
                   cur_h <- isolate(input[[h_id]] %||% "")
@@ -1398,8 +1409,8 @@ page_format_server <- function(input, output, session, app_state) {
       for (gi in seq_len(ng)) {
         nreps <- fmt_state$silac_nreps[[gi]] %||% 1L
         for (ri in seq_len(nreps)) {
-          h_val <- input[[paste0("fmt_silac_h_", gi, "_", ri)]] %||% ""
-          l_val <- input[[paste0("fmt_silac_l_", gi, "_", ri)]] %||% ""
+          h_val <- input[[silac_h_id(gi, ri)]] %||% ""
+          l_val <- input[[silac_l_id(gi, ri)]] %||% ""
           if (nzchar(h_val)) assigned <- c(assigned, h_val)
           if (nzchar(l_val)) assigned <- c(assigned, l_val)
         }
@@ -1454,8 +1465,8 @@ page_format_server <- function(input, output, session, app_state) {
     for (gi in seq_len(ng)) {
       nreps <- isolate(fmt_state$silac_nreps[[gi]]) %||% 1L
       for (ri in seq_len(nreps)) {
-        input[[paste0("fmt_silac_h_", gi, "_", ri)]]
-        input[[paste0("fmt_silac_l_", gi, "_", ri)]]
+        input[[silac_h_id(gi, ri)]]
+        input[[silac_l_id(gi, ri)]]
       }
     }
     fmt_clear_built()
@@ -1662,8 +1673,8 @@ page_format_server <- function(input, output, session, app_state) {
       for (i in seq_len(ng)) {
         nreps <- fmt_state$silac_nreps[[i]] %||% 1L
         for (r in seq_len(nreps)) {
-          h_col <- input[[paste0("fmt_silac_h_", i, "_", r)]] %||% ""
-          l_col <- input[[paste0("fmt_silac_l_", i, "_", r)]] %||% ""
+          h_col <- input[[silac_h_id(i, r)]] %||% ""
+          l_col <- input[[silac_l_id(i, r)]] %||% ""
 
           if (!nzchar(h_col) || !nzchar(l_col)) {
             stop(sprintf("Group '%s' Rep %d: both Heavy and Light columns must be selected.",
@@ -1806,8 +1817,8 @@ page_format_server <- function(input, output, session, app_state) {
         for (gi in seq_len(ng)) {
           nreps <- fmt_state$silac_nreps[[gi]] %||% 1L
           for (ri in seq_len(nreps)) {
-            h_val <- input[[paste0("fmt_silac_h_", gi, "_", ri)]] %||% ""
-            l_val <- input[[paste0("fmt_silac_l_", gi, "_", ri)]] %||% ""
+            h_val <- input[[silac_h_id(gi, ri)]] %||% ""
+            l_val <- input[[silac_l_id(gi, ri)]] %||% ""
             if (!nzchar(h_val) || !nzchar(l_val)) {
               gname <- input[[paste0("fmt_gname_", gi)]] %||% paste0("Group ", gi)
               errs <- c(errs, sprintf("%s Rep %d: select both Heavy and Light columns.", gname, ri))

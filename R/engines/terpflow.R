@@ -620,7 +620,7 @@ msterp_terpflow_add_step <- function(flow, section_id, engine_id, registry = NUL
             params = msterp_schema_defaults(child_eng$params_schema),
             paired = NULL,
             sequential = NULL,
-            system_generated = lock_substeps
+            system_generated = lock_substeps && !identical(default_eids[[k]], "half_life")
           )
         }
       }
