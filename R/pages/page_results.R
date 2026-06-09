@@ -3507,6 +3507,16 @@ page_results_server <- function(input, output, session, app_state = NULL) {
       tb_cache_clear()
     }
 
+    # Per-node render-state caches are keyed by node id, which is stable across
+    # datasets (e.g. "peptide_region"). They must be cleared on load or the new
+    # dataset inherits the previous dataset's style/visibility/plotly/track
+    # state — only the package-level .tb_cache is cleared above. The active node
+    # is re-seeded from disk by the load observer once active_node_id is set.
+    rv$cache_style_by_node <- list()
+    rv$cache_plotly_by_node <- list()
+    rv$cache_vis_by_node <- list()
+    rv$last_sparse_by_node <- list()
+
     msterp_set_busy(session, TRUE, "Loading terpbook...", percent = 0)
     on.exit(msterp_set_busy(session, FALSE), add = TRUE)
 
@@ -16747,6 +16757,27 @@ page_results_server <- function(input, output, session, app_state = NULL) {
                 openxlsx::addWorksheet(wb, sheet_name)
                 openxlsx::writeData(wb, sheet_name, marker_data)
               }
+            }
+          }
+        }
+
+        # --- Peptide Region overview (compartment, CV, FC disparity) ---
+        if (identical(eng, "peptide_region") && identical(kind, "step")) {
+          p_dir <- df$node_dir[i]
+          p_label <- df$label[i] %||% df$step_label[i] %||% "Peptide Region"
+          p_label <- res_pretty_label(p_label, engine_id = "peptide_region")
+          res <- tb_load_results(p_dir)
+
+          if (!is.null(res) && !is.null(res$data) &&
+              identical(res$data$mode %||% "overview", "overview")) {
+            scores <- res$data$protein_scores
+            if (!is.null(scores) && is.data.frame(scores) && nrow(scores) > 0) {
+              marker_data <- scores
+              marker_data$source_analysis <- p_label
+
+              sheet_name <- make_sheet_name(p_label)
+              openxlsx::addWorksheet(wb, sheet_name)
+              openxlsx::writeData(wb, sheet_name, marker_data)
             }
           }
         }
