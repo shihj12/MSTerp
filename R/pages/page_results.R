@@ -223,6 +223,8 @@ get_style_section <- function(field_name) {
     "x_range_mode", "y_range_mode", "xy_range_mode", "y_limit_mode",
     # Min/max values
     "x_min", "x_max", "y_min", "y_max", "xy_min", "xy_max", "ymax_protein",
+    # Volcano y-axis p-value source toggle
+    "y_pval_raw",
     # Axis styling
     "axis_style", "axis_text_size",
     # Plot dimensions (width/height of the plot itself, in inches)
@@ -4802,7 +4804,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (length(hide_ids) > 0) df <- df[!(df$gene %in% hide_ids), , drop = FALSE]
 
     apply_fdr <- comp$comparison$apply_fdr %||% res$params$apply_fdr %||% TRUE
-    if (isTRUE(apply_fdr) && !is.null(df$padj)) {
+    # Display p-value must match .tb_volcano_single_plot(): raw pval when y_pval_raw is on
+    # (FDR results only), otherwise padj when apply_fdr, otherwise raw pval. Keeps hover/
+    # click hit-testing and saved label positions aligned with the rendered plot.
+    y_pval_raw <- isTRUE(apply_fdr) && isTRUE(style$y_pval_raw %||% FALSE) && !is.null(df$pval)
+    if (y_pval_raw) {
+      pvec <- df$pval
+    } else if (isTRUE(apply_fdr) && !is.null(df$padj)) {
       pvec <- df$padj
     } else {
       pvec <- df$pval %||% df$p %||% df$padj
@@ -6115,6 +6123,16 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         !nm %in% c("label_genes_map", "label_targets_map", "highlight_groups_map")
       }, schema)
       if (length(schema) == 0) return(div("No style controls for this engine."))
+    }
+
+    # Volcano: the raw-p-axis toggle only makes sense for FDR-corrected results.
+    # Hide it when the result was computed without FDR (backward compatible).
+    if (eng_lower == "volcano") {
+      res_v <- isolate(active_results())
+      apply_fdr_v <- res_v$params$apply_fdr %||% TRUE
+      if (!isTRUE(apply_fdr_v)) {
+        schema <- Filter(function(f) !identical(as.character(f$name %||% ""), "y_pval_raw"), schema)
+      }
     }
 
     if (eng_lower == "umap_gene") {

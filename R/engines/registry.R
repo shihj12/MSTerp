@@ -3373,7 +3373,12 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field("x_max", "num", "X max", default = 7, advanced = TRUE),
           msterp_schema_field("y_range_mode", "choice", "Y range", default = "auto",
                               choices = c("auto", "manual"), advanced = TRUE),
-          msterp_schema_field("y_max", "num", "Y max", default = 7, advanced = TRUE)
+          msterp_schema_field("y_max", "num", "Y max", default = 7, advanced = TRUE),
+          msterp_schema_field(
+            "y_pval_raw", "bool", "Y-axis: raw p-value (color by p-adj)",
+            default = FALSE, advanced = TRUE,
+            help = "When FDR correction is on, plot raw p-values on the y-axis while significance coloring still uses the p-adj threshold. Only applies to FDR-corrected results."
+          )
         ),
         common_style,
         list(

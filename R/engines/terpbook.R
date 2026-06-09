@@ -883,18 +883,36 @@ tb_render_spearman <- tb_render_scatter_correlation
   col_dn <- style$col_sig_down %||% "#4242FF"
   col_ns <- style$col_nonsig %||% "#B0B0B0"
 
-  # FIX: Use padj when apply_fdr=TRUE, otherwise use raw pval
-  # This ensures the y-axis matches what was used for significance calling
+  # Coloring/significance p-value: padj when apply_fdr=TRUE, otherwise raw pval.
+  # This is the value compared against p_thr to classify up/down (frozen for GO children).
   if (isTRUE(apply_fdr) && !is.null(df$padj)) {
-    pvec <- df$padj
+    sig_vec <- df$padj
+  } else {
+    sig_vec <- df$pval %||% df$p %||% df$padj
+  }
+  if (is.null(sig_vec)) stop("volcano points missing p-value column (expected pval, p, or padj).")
+  sig_vec <- suppressWarnings(as.numeric(sig_vec))
+  sig_vec <- pmax(sig_vec, 1e-300)
+  sig_vec[!is.finite(sig_vec)] <- 1
+  df$pval_sig <- sig_vec
+
+  # Display p-value for the y-axis. Normally matches the coloring value, but when
+  # y_pval_raw is on (FDR results only) we plot raw p-values while coloring still
+  # uses the p-adj threshold above.
+  y_pval_raw <- isTRUE(apply_fdr) && isTRUE(style$y_pval_raw %||% FALSE) && !is.null(df$pval)
+  if (y_pval_raw) {
+    pvec <- suppressWarnings(as.numeric(df$pval))
+    y_axis_label_p <- expression(-log[10](p))
+    hover_p_label <- "p-value"
+  } else if (isTRUE(apply_fdr) && !is.null(df$padj)) {
+    pvec <- df$pval_sig
     y_axis_label_p <- expression(-log[10](p[adj]))
     hover_p_label <- "p-adj"
   } else {
-    pvec <- df$pval %||% df$p %||% df$padj
+    pvec <- df$pval_sig
     y_axis_label_p <- expression(-log[10](p))
     hover_p_label <- "p-value"
   }
-  if (is.null(pvec)) stop("volcano points missing p-value column (expected pval, p, or padj).")
   pvec <- suppressWarnings(as.numeric(pvec))
   pvec <- pmax(pvec, 1e-300)
   pvec[!is.finite(pvec)] <- 1
@@ -902,10 +920,10 @@ tb_render_spearman <- tb_render_scatter_correlation
   df$neglog10p <- -log10(df$pval_display)
   df$neglog10p <- pmax(df$neglog10p, 0)  # Ensure no points render below y=0 axis
 
-  # FIX: Use pval_display for significance coloring (matches y-axis)
+  # Significance coloring always uses pval_sig (p-adj threshold), independent of y-axis
   df$sig <- "nonsig"
-  df$sig[df$log2fc >= max(fc_thr) & df$pval_display <= p_thr] <- "up"
-  df$sig[df$log2fc <= min(fc_thr) & df$pval_display <= p_thr] <- "down"
+  df$sig[df$log2fc >= max(fc_thr) & df$pval_sig <= p_thr] <- "up"
+  df$sig[df$log2fc <= min(fc_thr) & df$pval_sig <= p_thr] <- "down"
 
   # Optional hide list MUST happen before ggplot() so it actually hides points
   hide_ids <- unique(as.character(meta$visibility$hide_ids %||% character()))
@@ -947,6 +965,10 @@ tb_render_spearman <- tb_render_scatter_correlation
     hover_p_label,
     df$pval_display
   )
+  # When y-axis shows raw p but coloring uses p-adj, surface both values
+  if (y_pval_raw) {
+    df$tooltip_text <- sprintf("%s\np-adj: %.2e", df$tooltip_text, df$pval_sig)
+  }
   df$data_id_val <- df$gene
 
   p <- ggplot2::ggplot(df, ggplot2::aes(x = log2fc, y = neglog10p)) +
@@ -1010,6 +1032,9 @@ tb_render_spearman <- tb_render_scatter_correlation
         hover_p_label,
         df_hl$pval_display
       )
+      if (y_pval_raw) {
+        df_hl$tooltip_text <- sprintf("%s\np-adj: %.2e", df_hl$tooltip_text, df_hl$pval_sig)
+      }
       df_hl$data_id_val <- df_hl$gene
 
       if (has_outline) {
@@ -1062,8 +1087,19 @@ tb_render_spearman <- tb_render_scatter_correlation
 
   if (isTRUE(style$show_cut_lines %||% FALSE)) {
     p <- p +
-      ggplot2::geom_vline(xintercept = c(min(fc_thr), max(fc_thr)), linetype = "dotted", color = "black") +
-      ggplot2::geom_hline(yintercept = -log10(p_thr), linetype = "dotted", color = "black")
+      ggplot2::geom_vline(xintercept = c(min(fc_thr), max(fc_thr)), linetype = "dotted", color = "black")
+    # Horizontal cutoff: normally at the p threshold. When y_pval_raw is on, the axis is
+    # raw p but coloring uses p-adj, so draw the line at the FDR boundary (the largest raw
+    # p that still passes the p-adj threshold) to match the color boundary. Omit if none pass.
+    if (y_pval_raw) {
+      sig_by_p <- df$pval_sig <= p_thr & is.finite(df$pval)
+      if (any(sig_by_p, na.rm = TRUE)) {
+        hline_y <- -log10(max(df$pval[sig_by_p], na.rm = TRUE))
+        p <- p + ggplot2::geom_hline(yintercept = hline_y, linetype = "dotted", color = "black")
+      }
+    } else {
+      p <- p + ggplot2::geom_hline(yintercept = -log10(p_thr), linetype = "dotted", color = "black")
+    }
   }
 
   # FIX: Dynamic x-axis label reflects comparison (e.g., log2(BafA1/Control))
@@ -1121,7 +1157,7 @@ tb_render_spearman <- tb_render_scatter_correlation
   if (top_n > 0) {
     df_sig <- df[df$sig != "nonsig", , drop = FALSE]
     if (nrow(df_sig) > 0) {
-      ord <- order(df_sig$pval_display, -abs(df_sig$log2fc))
+      ord <- order(df_sig$pval_sig, -abs(df_sig$log2fc))
       df_sig <- df_sig[ord, , drop = FALSE]
       topn_labs <- as.character(df_sig$gene[seq_len(min(top_n, nrow(df_sig)))])
     }
