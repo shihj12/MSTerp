@@ -47,6 +47,8 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
           (Get-Content desktop-webview2\installer.iss) -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$version`"" | Set-Content desktop-webview2\installer.iss
+          # Bundle the version for the running app (Home screen reads app/VERSION).
+          Set-Content -Path VERSION -Value $version -NoNewline -Encoding ascii
           Write-Host "Installer version set to: $version"
 
       - name: Build installer

@@ -51,6 +51,7 @@ Source: "..\terpbase\*"; DestDir: "{app}\app\terpbase"; Flags: ignoreversion rec
 Source: "..\complexbase\*"; DestDir: "{app}\app\complexbase"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\metabobase\*"; DestDir: "{app}\app\metabobase"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\contaminants.txt"; DestDir: "{app}\app"; Flags: ignoreversion
+Source: "..\VERSION"; DestDir: "{app}\app"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

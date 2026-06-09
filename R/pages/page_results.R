@@ -16762,7 +16762,11 @@ page_results_server <- function(input, output, session, app_state = NULL) {
         }
 
         # --- Peptide Region overview (compartment, CV, FC disparity) ---
-        if (identical(eng, "peptide_region") && identical(kind, "step")) {
+        # Peptide Region runs as a child substep inside the peptide_analysis /
+        # dsilac_peptide_analysis containers, so its overview node is kind
+        # "view" (not "step"). Match on engine_id + mode == "overview"; the
+        # mode guard excludes the detail drill-down views (also kind "view").
+        if (identical(eng, "peptide_region")) {
           p_dir <- df$node_dir[i]
           p_label <- df$label[i] %||% df$step_label[i] %||% "Peptide Region"
           p_label <- res_pretty_label(p_label, engine_id = "peptide_region")

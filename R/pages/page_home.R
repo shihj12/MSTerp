@@ -474,7 +474,7 @@ page_home_ui <- function() {
         div(
           class = "footer-row",
           tags$span("The Hao Research Group @ The University of Maryland"),
-          tags$span("Version 1.0")
+          tags$span(paste0("Version ", msterp_app_version()))
         ),
         div(
           class = "footer-links",
