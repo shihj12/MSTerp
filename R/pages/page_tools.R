@@ -13,6 +13,7 @@ source(file.path("R", "pages", "tools", "tool_pathway_fcs.R"), local = FALSE)
 source(file.path("R", "pages", "tools", "tool_terpbase.R"), local = FALSE)
 source(file.path("R", "pages", "tools", "tool_id_reconcile.R"), local = FALSE)
 source(file.path("R", "pages", "tools", "tool_venn.R"), local = FALSE)
+source(file.path("R", "pages", "tools", "tool_upset.R"), local = FALSE)
 # ComplexBase and MetaboBase builders removed from UI — use scripts/ to rebuild
 # source(file.path("R", "pages", "tools", "tool_complexbase.R"), local = FALSE)
 # source(file.path("R", "pages", "tools", "tool_metabobase.R"), local = FALSE)
@@ -217,6 +218,13 @@ tools_landing_ui <- function() {
       tags$p("Compare overlaps between 2-6 lists of items (genes, proteins, metabolites, etc.)."),
       actionButton("tools_open_venn", "Open Venn Diagram", class = "btn btn-primary")
     ),
+    # UpSet Plot card
+    div(
+      class = "card",
+      tags$h3("UpSet Plot"),
+      tags$p("Visualize intersections between many lists (2-10) — scales past the Venn diagram's set limit."),
+      actionButton("tools_open_upset", "Open UpSet Plot", class = "btn btn-primary")
+    ),
     # QC snapshots card
     div(
       class = "card",
@@ -345,6 +353,14 @@ page_tools_server <- function(input, output, session, app_state) {
     status_level = NULL
   )
 
+  # Reactive values for UpSet Plot
+  rv_upset <- reactiveValues(
+    plot = NULL,
+    regions = NULL,
+    status_msg = NULL,
+    status_level = NULL
+  )
+
 
   # Shared TerpBase loading function
   tools_load_terpbase <- function(path, rv_target) {
@@ -398,6 +414,8 @@ page_tools_server <- function(input, output, session, app_state) {
       tools_id_reconcile_ui()
     } else if (tool == "venn") {
       tools_venn_ui()
+    } else if (tool == "upset") {
+      tools_upset_ui()
     } else {
       tools_landing_ui()
     }
@@ -596,6 +614,15 @@ page_tools_server <- function(input, output, session, app_state) {
     current_tool("landing")
   }, ignoreInit = TRUE)
 
+  # Navigation for UpSet Plot
+  observeEvent(input$tools_open_upset, {
+    current_tool("upset")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$tools_upset_back, {
+    current_tool("landing")
+  }, ignoreInit = TRUE)
+
   # Helper to restore parameters after UI is rendered
   # Uses observe + invalidateLater for a delayed update without shinyjs
   tools_restore_after_delay <- function(restore_fn, delay_ms = 150) {
@@ -749,6 +776,7 @@ page_tools_server <- function(input, output, session, app_state) {
   tools_terpbase_server(input, output, session, app_state, rv_terpbase)
   tools_id_reconcile_server(input, output, session, app_state, rv_reconcile)
   tools_venn_server(input, output, session, app_state, rv_venn)
+  tools_upset_server(input, output, session, app_state, rv_upset)
 
   # Store current_tool in session$userData for child modules to access
   session$userData$tools_current_tool <- current_tool
