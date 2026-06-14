@@ -3791,9 +3791,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         ),
         msterp_schema_field(
           "fc_transform", "choice", "Fold-change transform",
-          default = "log2", choices = c("none", "log2", "log10"),
-          choice_labels = c("Already log-transformed", "log₂", "log₁₀"),
-          help = "How to compute fold change. 'Already log-transformed' takes the direct mean difference; log₂ / log₁₀ apply that log to the means first. The X-axis is labelled to match."
+          default = "log2", choices = c("log2", "log10", "prelog"),
+          choice_labels = c("log₂", "log₁₀", "Already log-transformed"),
+          help = "How fold change is computed and labelled. log₂ / log₁₀ take that log of the group means — use for linear or normalized intensities. 'Already log-transformed' subtracts the means directly; use ONLY if your data is already on a log₂ scale (otherwise fold changes will be enormous). The X-axis label matches."
         )
       ),
       style_schema = c(
@@ -3884,9 +3884,9 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         # X-axis label updates to match (log₂ / log₁₀ / direct difference).
         msterp_schema_field(
           "fc_transform", "choice", "Fold-change transform",
-          default = "log2", choices = c("none", "log2", "log10"),
-          choice_labels = c("Already log-transformed", "log₂", "log₁₀"),
-          help = "How to compute fold change. 'Already log-transformed' takes the direct mean difference; log₂ / log₁₀ apply that log to the means first. The X-axis is labelled to match."
+          default = "log2", choices = c("log2", "log10", "prelog"),
+          choice_labels = c("log₂", "log₁₀", "Already log-transformed"),
+          help = "How fold change is computed and labelled. log₂ / log₁₀ take that log of the group means — use for linear or normalized intensities. 'Already log-transformed' subtracts the means directly; use ONLY if your data is already on a log₂ scale (otherwise fold changes will be enormous). The X-axis label matches."
         )
       ),
       outputs = list(

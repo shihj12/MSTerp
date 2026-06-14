@@ -8690,8 +8690,8 @@ tb_render_fc_rankplot <- function(results, style, meta) {
 
   # X-axis: if user provided a non-empty title use it verbatim; otherwise
   # auto-build the fold-change label from the comparison group names, with the
-  # log base (₂ / ₁₀) matching the chosen transform. "none" = data already
-  # log-transformed, so the axis shows the plain group ratio (no base).
+  # log base (₂ / ₁₀) matching the chosen transform. "prelog" data is already
+  # log₂, so a direct difference is itself a log₂ fold change.
   flip_fc <- isTRUE(style$flip_fc %||% FALSE)
   x_axis_user <- as.character(style$x_axis_title %||% "")
   use_auto_x <- !nzchar(trimws(x_axis_user))
@@ -8700,19 +8700,11 @@ tb_render_fc_rankplot <- function(results, style, meta) {
     denom <- if (flip_fc) group_b else group_a
     x_axis_label <- if (identical(fc_transform, "log10")) {
       bquote(log[10] ~ "(" * .(num) / .(denom) * ")")
-    } else if (identical(fc_transform, "none")) {
-      bquote("Fold change (" * .(num) / .(denom) * ")")
     } else {
       bquote(log[2] ~ "(" * .(num) / .(denom) * ")")
     }
   } else if (use_auto_x) {
-    x_axis_label <- if (identical(fc_transform, "log10")) {
-      "log10 Fold Change"
-    } else if (identical(fc_transform, "none")) {
-      "Fold Change"
-    } else {
-      "log2 Fold Change"
-    }
+    x_axis_label <- if (identical(fc_transform, "log10")) "log10 Fold Change" else "log2 Fold Change"
   } else {
     x_axis_label <- x_axis_user
   }
@@ -8735,11 +8727,12 @@ tb_render_fc_rankplot <- function(results, style, meta) {
 
   # 0. Re-apply the fold-change transform at render time from the stored group
   # means so it stays editable in the viewer without re-running the engine.
-  # Mirrors the FC math in .fc_histogram_pairwise(). "none" = data already
-  # log-transformed (direct difference); log2/log10 apply that log first.
+  # Mirrors the FC math in .fc_histogram_pairwise(). "prelog" = data already
+  # log-transformed (direct difference); log2/log10 take that log of the means
+  # first (correct for linear / normalized intensities).
   if (all(c("mean_a", "mean_b") %in% names(df))) {
     ma <- df$mean_a; mb <- df$mean_b
-    df$log2fc <- if (identical(fc_transform, "none")) {
+    df$log2fc <- if (identical(fc_transform, "prelog")) {
       mb - ma
     } else if (identical(fc_transform, "log10")) {
       log10(mb + 1) - log10(ma + 1)
@@ -8834,12 +8827,16 @@ tb_render_fc_histogram <- function(results, style, meta) {
   # params (the value the engine used) when the viewer hasn't overridden it.
   run_params <- results$params %||% list()
   fc_transform <- style$fc_transform %||% run_params$fc_transform %||% "log2"
-  # Back-compat: results run before this change used a separate
-  # is_log_transformed flag; map it onto the "none" (direct-difference) option.
+  # Back-compat: the original "none" meant "log2 of the ratio" (a small, normal
+  # fold change), NOT a direct difference. Map it to log2 so old results are
+  # unchanged. The direct-difference path is now the explicit "prelog" option.
+  if (identical(fc_transform, "none")) fc_transform <- "log2"
+  # Back-compat: results run with the old is_log_transformed flag take the
+  # direct mean difference -> the "prelog" (already-log) option.
   if (is.null(style$fc_transform) && isTRUE(run_params$is_log_transformed)) {
-    fc_transform <- "none"
+    fc_transform <- "prelog"
   }
-  if (!fc_transform %in% c("none", "log2", "log10")) fc_transform <- "log2"
+  if (!fc_transform %in% c("log2", "log10", "prelog")) fc_transform <- "log2"
 
   if (length(comparisons) == 0) {
     error_msg <- results$data$error %||% "No comparisons available for FC histogram"

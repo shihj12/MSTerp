@@ -53,10 +53,11 @@
   n_a <- if (length(cols_a) == 1) as.integer(!is.na(mat_a[, 1])) else rowSums(!is.na(mat_a))
   n_b <- if (length(cols_b) == 1) as.integer(!is.na(mat_b[, 1])) else rowSums(!is.na(mat_b))
 
-  # Fold-change (B vs A, positive = higher in B). "none" = data already
-  # log-transformed (direct difference); log2/log10 apply that log to the means
-  # first. The renderer mirrors this and labels the X-axis with the matching base.
-  if (identical(fc_transform, "none")) {
+  # Fold-change (B vs A, positive = higher in B). "prelog" = data already
+  # log-transformed (direct difference); log2/log10 take that log of the means
+  # first (correct for linear / normalized intensities). The renderer mirrors
+  # this and labels the X-axis with the matching base.
+  if (identical(fc_transform, "prelog")) {
     log2fc <- mean_b - mean_a
   } else if (identical(fc_transform, "log10")) {
     log2fc <- log10(mean_b + 1) - log10(mean_a + 1)
@@ -177,10 +178,13 @@ stats_fc_histogram_run <- function(payload, params = NULL, context = NULL) {
   }
 
   fc_transform <- params$fc_transform %||% "log2"
-  # Back-compat: results configured before the is_log_transformed flag was
-  # folded into fc_transform; map it onto the "none" (direct-difference) option.
-  if (isTRUE(params$is_log_transformed)) fc_transform <- "none"
-  if (!fc_transform %in% c("none", "log2", "log10")) fc_transform <- "log2"
+  # Back-compat: the original "none" meant "log2 of the ratio", so treat it as
+  # log2 (a normal fold change), NOT a direct difference.
+  if (identical(fc_transform, "none")) fc_transform <- "log2"
+  # Back-compat: the old is_log_transformed flag maps to the "prelog"
+  # (already-log, direct-difference) option.
+  if (isTRUE(params$is_log_transformed)) fc_transform <- "prelog"
+  if (!fc_transform %in% c("log2", "log10", "prelog")) fc_transform <- "log2"
   control_only <- isTRUE(params$control_only)
 
   # Resolve ID columns (context-aware)
