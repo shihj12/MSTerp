@@ -3769,6 +3769,157 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
       render_spec = list(plots = c("fc_rankplot"), tables = character(0), tabs = NULL)
     ),
 
+    fc_histogram = list(
+      engine_id = "fc_histogram",
+      label = "FC Histogram",
+      category = "comparison",
+      supported_data_types = c("proteomics", "metabolomics"),
+      description = "Histogram of per-feature log2 fold-change for each pairwise group comparison, with optional x=0, median, and mean reference lines.",
+      supports_sequential = FALSE,
+      accepted_input_levels = c("protein", "metabolite"),
+      requirements = list(
+        min_groups = 2,
+        requires_terpbase = FALSE,
+        required_ids = c(),
+        analysis_levels = c("protein", "metabolite")
+      ),
+      params_schema = list(
+        msterp_schema_field(
+          "control_only", "bool", "Only compare against control",
+          default = FALSE,
+          help = "When a control group is defined, only generate comparisons against control."
+        ),
+        msterp_schema_field(
+          "fc_transform", "choice", "Fold-change transform",
+          default = "log2", choices = c("none", "log2", "log10"),
+          help = "Pseudo-count transform applied before subtraction. Ignored when data is already log-transformed."
+        ),
+        msterp_schema_field(
+          "is_log_transformed", "bool", "Data is already log-transformed",
+          default = FALSE, advanced = TRUE,
+          help = "Enable if your data is already log2-transformed. Skips log2(x+1) and uses direct subtraction for FC."
+        )
+      ),
+      style_schema = c(
+        list(
+          msterp_schema_field(
+            "x_axis_title", "string", "X-axis title",
+            default = "",
+            help = "X-axis label. Leave empty to auto-generate as log₂(B/A) using the comparison group names."
+          ),
+          msterp_schema_field(
+            "bins", "int", "Number of bins",
+            default = 30, min = 5, max = 300,
+            help = "Number of histogram bins across the fold-change range."
+          ),
+          msterp_schema_field(
+            "show_zero_line", "bool", "Show x=0 line",
+            default = TRUE,
+            help = "Vertical reference line at log2FC = 0."
+          ),
+          msterp_schema_field(
+            "zero_line_style", "choice", "x=0 line style",
+            default = "dotted", choices = c("solid", "dashed", "dotted"),
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "zero_line_color", "string", "x=0 line color",
+            default = "#333333", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_median_line", "bool", "Show median line",
+            default = TRUE,
+            help = "Vertical reference line at the median fold change."
+          ),
+          msterp_schema_field(
+            "median_line_style", "choice", "Median line style",
+            default = "dotted", choices = c("solid", "dashed", "dotted"),
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "median_line_color", "string", "Median line color",
+            default = "#D55E00", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_mean_line", "bool", "Show mean line",
+            default = FALSE,
+            help = "Vertical reference line at the mean fold change."
+          ),
+          msterp_schema_field(
+            "mean_line_style", "choice", "Mean line style",
+            default = "dashed", choices = c("solid", "dashed", "dotted"),
+            advanced = TRUE
+          ),
+          msterp_schema_field(
+            "mean_line_color", "string", "Mean line color",
+            default = "#0072B2", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "show_stat_labels", "bool", "Show median/mean/N labels on plot",
+            default = TRUE,
+            help = "Annotate the median, mean, and feature count as text on the plot."
+          ),
+          msterp_schema_field(
+            "y_range_mode", "choice", "Y range",
+            default = "auto", choices = c("auto", "manual"),
+            help = "Auto fits the Y-axis (count) to the data; manual uses Y min/max below."
+          ),
+          msterp_schema_field("y_min", "num", "Y min", default = 0, advanced = TRUE),
+          msterp_schema_field("y_max", "num", "Y max", default = 100, advanced = TRUE),
+          msterp_schema_field(
+            "x_range_mode", "choice", "X range",
+            default = "auto", choices = c("auto", "manual"),
+            advanced = TRUE,
+            help = "Auto uses a symmetric range around 0; manual uses X min/max below."
+          ),
+          msterp_schema_field("x_min", "num", "X min", default = -7, advanced = TRUE),
+          msterp_schema_field("x_max", "num", "X max", default = 7, advanced = TRUE),
+          msterp_schema_field(
+            "fill_color", "string", "Bar fill color",
+            default = "#7F7F7F", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "outline_color", "string", "Bar outline color",
+            default = "#FFFFFF", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "bar_alpha", "num", "Bar opacity",
+            default = 0.9, min = 0, max = 1, advanced = TRUE
+          )
+        ),
+        mk_style(width = 8, height = 6, axis_text_size = 20)
+      ),
+      viewer_schema = list(
+        msterp_schema_field(
+          "selected_comparison", "choice", "Comparison",
+          default = "", choices = c(""),
+          help = "Select which pairwise comparison to display."
+        ),
+        msterp_schema_field(
+          "flip_fc", "bool", "Flip fold change direction",
+          default = FALSE,
+          help = "Negate log2FC values (swap up/down). Median and mean update accordingly."
+        ),
+        msterp_schema_field(
+          "label_targets_map", "string", "Per-plot labels (JSON)",
+          default = "{}"
+        ),
+        msterp_schema_field(
+          "highlight_groups_map", "string", "Per-plot highlight groups (JSON)",
+          default = "{}"
+        )
+      ),
+      outputs = list(
+        figures = c("fc_histogram"),
+        tables = character(0),
+        interactive = FALSE,
+        plotly_allowed = FALSE,
+        default_plot_mode = "ggplot",
+        click_target = "target"
+      ),
+      render_spec = list(plots = c("fc_histogram"), tables = character(0), tabs = NULL)
+    ),
+
     # ----------------------------
     # Enrichment
     # ----------------------------

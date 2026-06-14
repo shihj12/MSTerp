@@ -2286,6 +2286,7 @@ nr_run_engine <- function(engine_id, payload, context = NULL) {
     "ma_plot"       = stats_ma_plot_run(payload, payload$params, context),
     "rankplot"      = stats_rankplot_run(payload, payload$params, context),
     "fc_rankplot"   = stats_fc_rankplot_run(payload, payload$params, context),
+    "fc_histogram"  = stats_fc_histogram_run(payload, payload$params, context),
     "goora"         = stats_goora_run(payload, payload$params, context),
     "1dgofcs"       = stats_1dgofcs_run(payload, payload$params, context),
     "2dgofcs"       = stats_2dgofcs_run(payload, payload$params, context),

@@ -8681,6 +8681,160 @@ tb_render_fc_rankplot <- function(results, style, meta) {
   list(plots = plots, tables = list(), sets = flat_sets)
 }
 
+# ---- FC Histogram -----------------------------------------------------------
+
+.tb_fc_histogram_single_plot <- function(df, style, meta, comparison_name,
+                                         group_a = NULL, group_b = NULL) {
+  tb_require_pkg("ggplot2")
+
+  # X-axis: if user provided a non-empty title use it verbatim; otherwise
+  # auto-build log2(B/A) with subscript 2 from the comparison group names.
+  flip_fc <- isTRUE(style$flip_fc %||% FALSE)
+  x_axis_user <- as.character(style$x_axis_title %||% "")
+  use_auto_x <- !nzchar(trimws(x_axis_user))
+  if (use_auto_x && !is.null(group_a) && !is.null(group_b) && nzchar(group_a) && nzchar(group_b)) {
+    num <- if (flip_fc) group_a else group_b
+    denom <- if (flip_fc) group_b else group_a
+    x_axis_label <- bquote(log[2] ~ "(" * .(num) / .(denom) * ")")
+  } else if (use_auto_x) {
+    x_axis_label <- "log2 Fold Change"
+  } else {
+    x_axis_label <- x_axis_user
+  }
+
+  bins <- max(2, as.integer(tb_num(style$bins, 30)))
+  fill_color <- style$fill_color %||% "#7F7F7F"
+  outline_color <- style$outline_color %||% "#FFFFFF"
+  bar_alpha <- tb_num(style$bar_alpha, 0.9)
+  axis_text_size <- tb_num(style$axis_text_size, 20)
+  axis_style <- style$axis_style %||% "clean"
+
+  show_zero_line   <- isTRUE(style$show_zero_line %||% TRUE)
+  show_median_line <- isTRUE(style$show_median_line %||% TRUE)
+  show_mean_line   <- isTRUE(style$show_mean_line %||% FALSE)
+  show_stat_labels <- isTRUE(style$show_stat_labels %||% TRUE)
+  zero_line_style   <- style$zero_line_style %||% "dotted"
+  median_line_style <- style$median_line_style %||% "dotted"
+  mean_line_style   <- style$mean_line_style %||% "dashed"
+  zero_line_color   <- style$zero_line_color %||% "#333333"
+  median_line_color <- style$median_line_color %||% "#D55E00"
+  mean_line_color   <- style$mean_line_color %||% "#0072B2"
+
+  # 1. flip_fc — negate log2fc
+  if (flip_fc && !is.null(df$log2fc)) {
+    df$log2fc <- -df$log2fc
+  }
+
+  # 2. min_replicates filter (BOTH groups)
+  min_reps <- tb_num(style$min_replicates, 1)
+  if (min_reps > 1 && all(c("n_a", "n_b") %in% names(df))) {
+    keep <- df$n_a >= min_reps & df$n_b >= min_reps
+    df <- df[keep, , drop = FALSE]
+  }
+
+  df <- df[is.finite(df$log2fc), , drop = FALSE]
+
+  # Stats (render-time so flip/min_reps stay live)
+  med <- if (nrow(df) > 0) stats::median(df$log2fc, na.rm = TRUE) else NA_real_
+  mu  <- if (nrow(df) > 0) mean(df$log2fc, na.rm = TRUE) else NA_real_
+  n   <- nrow(df)
+
+  # X range: auto = symmetric around 0; manual = user min/max
+  x_range_mode <- style$x_range_mode %||% "auto"
+  if (identical(x_range_mode, "manual")) {
+    xlim <- suppressWarnings(as.numeric(c(style$x_min %||% -7, style$x_max %||% 7)))
+  } else if (n > 0) {
+    x_abs <- max(abs(df$log2fc), na.rm = TRUE)
+    if (!is.finite(x_abs) || x_abs == 0) x_abs <- 1
+    xlim <- c(-x_abs * 1.05, x_abs * 1.05)
+  } else {
+    xlim <- c(-7, 7)
+  }
+  if (length(xlim) != 2 || any(!is.finite(xlim))) xlim <- c(-7, 7)
+  xlim <- sort(xlim)
+
+  # Y range: auto lets ggplot fit; manual uses user min/max
+  y_range_mode <- style$y_range_mode %||% "auto"
+  ylim <- NULL
+  if (identical(y_range_mode, "manual")) {
+    ylim <- suppressWarnings(as.numeric(c(style$y_min %||% 0, style$y_max %||% 100)))
+    if (length(ylim) != 2 || any(!is.finite(ylim))) ylim <- NULL else ylim <- sort(ylim)
+  }
+
+  p <- ggplot2::ggplot(df, ggplot2::aes(x = log2fc)) +
+    ggplot2::geom_histogram(bins = bins, fill = fill_color,
+                            color = outline_color, alpha = bar_alpha) +
+    ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.05))) +
+    ggplot2::coord_cartesian(xlim = xlim, ylim = ylim, clip = "on") +
+    ggplot2::labs(x = x_axis_label, y = "Count") +
+    tb_theme_base(axis_text_size, axis_style = axis_style)
+
+  # Reference lines
+  if (show_zero_line) {
+    p <- p + ggplot2::geom_vline(xintercept = 0, linetype = zero_line_style,
+                                 color = zero_line_color, linewidth = 0.5)
+  }
+  if (show_median_line && is.finite(med)) {
+    p <- p + ggplot2::geom_vline(xintercept = med, linetype = median_line_style,
+                                 color = median_line_color, linewidth = 0.6)
+  }
+  if (show_mean_line && is.finite(mu)) {
+    p <- p + ggplot2::geom_vline(xintercept = mu, linetype = mean_line_style,
+                                 color = mean_line_color, linewidth = 0.6)
+  }
+
+  # On-plot stat labels (top-left)
+  if (show_stat_labels && n > 0) {
+    label_txt <- sprintf("Median: %.2f\nMean: %.2f\nN = %d", med, mu, n)
+    p <- p + ggplot2::annotate(
+      "text", x = -Inf, y = Inf, label = label_txt,
+      hjust = -0.1, vjust = 1.2, size = axis_text_size / 4,
+      color = "grey20"
+    )
+  }
+
+  p
+}
+
+tb_render_fc_histogram <- function(results, style, meta) {
+  tb_require_pkg("ggplot2")
+
+  comparisons <- results$data$comparisons %||% list()
+
+  if (length(comparisons) == 0) {
+    error_msg <- results$data$error %||% "No comparisons available for FC histogram"
+    p <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = error_msg, size = 5, color = "gray50") +
+      ggplot2::theme_void()
+    return(list(plots = list(fc_histogram = p), tables = list(), sets = list()))
+  }
+
+  plots <- list()
+  for (comp_name in names(comparisons)) {
+    comp <- comparisons[[comp_name]]
+    df <- comp$points
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) next
+
+    plots[[comp_name]] <- .tb_fc_histogram_single_plot(
+      df, style, meta,
+      comparison_name = comp_name,
+      group_a = comp$group_a,
+      group_b = comp$group_b
+    )
+  }
+
+  if (length(plots) == 0) {
+    p <- ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0.5, y = 0.5,
+                        label = "No data in any comparison", size = 5, color = "gray50") +
+      ggplot2::theme_void()
+    return(list(plots = list(fc_histogram = p), tables = list(), sets = list()))
+  }
+
+  list(plots = plots, tables = list(), sets = list())
+}
+
 # ---- Heatmap ----------------------------------------------------------------
 
 # NOTE: We calculate extra space needed for custom gtable additions (group bars,
@@ -12836,6 +12990,7 @@ terpbook_render_node <- function(engine_id, results, effective_state, registry =
     "ma_plot"  = tb_render_ma_plot(results, style, meta),
     "rankplot" = tb_render_rankplot(results, style, meta),
     "fc_rankplot" = tb_render_fc_rankplot(results, style, meta),
+    "fc_histogram" = tb_render_fc_histogram(results, style, meta),
     "goora"    = tb_render_goora(results, style, meta),
     "1dgofcs"  = tb_render_1dgofcs(results, style, meta),
     "2dgofcs"  = tb_render_2dgofcs(results, style, meta),
