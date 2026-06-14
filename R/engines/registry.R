@@ -3792,12 +3792,8 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         msterp_schema_field(
           "fc_transform", "choice", "Fold-change transform",
           default = "log2", choices = c("none", "log2", "log10"),
-          help = "Pseudo-count transform applied before subtraction. Ignored when data is already log-transformed."
-        ),
-        msterp_schema_field(
-          "is_log_transformed", "bool", "Data is already log-transformed",
-          default = FALSE, advanced = TRUE,
-          help = "Enable if your data is already log2-transformed. Skips log2(x+1) and uses direct subtraction for FC."
+          choice_labels = c("Already log-transformed", "log₂", "log₁₀"),
+          help = "How to compute fold change. 'Already log-transformed' takes the direct mean difference; log₂ / log₁₀ apply that log to the means first. The X-axis is labelled to match."
         )
       ),
       style_schema = c(
@@ -3884,16 +3880,13 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           help = "Negate log2FC values (swap up/down). Median and mean update accordingly."
         ),
         # Log transform is re-applied at render time from the stored group means,
-        # so it can be changed in the viewer without re-running the engine.
+        # so it can be changed in the viewer without re-running the engine. The
+        # X-axis label updates to match (log₂ / log₁₀ / direct difference).
         msterp_schema_field(
           "fc_transform", "choice", "Fold-change transform",
           default = "log2", choices = c("none", "log2", "log10"),
-          help = "Pseudo-count transform applied before subtraction. Ignored when data is already log-transformed."
-        ),
-        msterp_schema_field(
-          "is_log_transformed", "bool", "Data is already log-transformed",
-          default = FALSE,
-          help = "Enable if your data is already log2-transformed. Uses direct subtraction for FC instead of log2(x+1)."
+          choice_labels = c("Already log-transformed", "log₂", "log₁₀"),
+          help = "How to compute fold change. 'Already log-transformed' takes the direct mean difference; log₂ / log₁₀ apply that log to the means first. The X-axis is labelled to match."
         )
       ),
       outputs = list(

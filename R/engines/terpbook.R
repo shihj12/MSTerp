@@ -8685,21 +8685,34 @@ tb_render_fc_rankplot <- function(results, style, meta) {
 
 .tb_fc_histogram_single_plot <- function(df, style, meta, comparison_name,
                                          group_a = NULL, group_b = NULL,
-                                         fc_transform = "log2",
-                                         is_log_transformed = FALSE) {
+                                         fc_transform = "log2") {
   tb_require_pkg("ggplot2")
 
   # X-axis: if user provided a non-empty title use it verbatim; otherwise
-  # auto-build log2(B/A) with subscript 2 from the comparison group names.
+  # auto-build the fold-change label from the comparison group names, with the
+  # log base (₂ / ₁₀) matching the chosen transform. "none" = data already
+  # log-transformed, so the axis shows the plain group ratio (no base).
   flip_fc <- isTRUE(style$flip_fc %||% FALSE)
   x_axis_user <- as.character(style$x_axis_title %||% "")
   use_auto_x <- !nzchar(trimws(x_axis_user))
   if (use_auto_x && !is.null(group_a) && !is.null(group_b) && nzchar(group_a) && nzchar(group_b)) {
     num <- if (flip_fc) group_a else group_b
     denom <- if (flip_fc) group_b else group_a
-    x_axis_label <- bquote(log[2] ~ "(" * .(num) / .(denom) * ")")
+    x_axis_label <- if (identical(fc_transform, "log10")) {
+      bquote(log[10] ~ "(" * .(num) / .(denom) * ")")
+    } else if (identical(fc_transform, "none")) {
+      bquote("Fold change (" * .(num) / .(denom) * ")")
+    } else {
+      bquote(log[2] ~ "(" * .(num) / .(denom) * ")")
+    }
   } else if (use_auto_x) {
-    x_axis_label <- "log2 Fold Change"
+    x_axis_label <- if (identical(fc_transform, "log10")) {
+      "log10 Fold Change"
+    } else if (identical(fc_transform, "none")) {
+      "Fold Change"
+    } else {
+      "log2 Fold Change"
+    }
   } else {
     x_axis_label <- x_axis_user
   }
@@ -8720,19 +8733,18 @@ tb_render_fc_rankplot <- function(results, style, meta) {
   median_line_color <- style$median_line_color %||% "#D55E00"
   mean_line_color   <- style$mean_line_color %||% "#0072B2"
 
-  # 0. Re-apply the log transform at render time from the stored group means so
-  # it stays editable in the viewer without re-running the engine. Mirrors the
-  # FC math in .fc_histogram_pairwise().
+  # 0. Re-apply the fold-change transform at render time from the stored group
+  # means so it stays editable in the viewer without re-running the engine.
+  # Mirrors the FC math in .fc_histogram_pairwise(). "none" = data already
+  # log-transformed (direct difference); log2/log10 apply that log first.
   if (all(c("mean_a", "mean_b") %in% names(df))) {
     ma <- df$mean_a; mb <- df$mean_b
-    df$log2fc <- if (isTRUE(is_log_transformed)) {
+    df$log2fc <- if (identical(fc_transform, "none")) {
       mb - ma
-    } else if (identical(fc_transform, "log2")) {
-      log2(mb + 1) - log2(ma + 1)
     } else if (identical(fc_transform, "log10")) {
-      log2(10) * (log10(mb + 1) - log10(ma + 1))
+      log10(mb + 1) - log10(ma + 1)
     } else {
-      log2((mb + 1) / (ma + 1))
+      log2(mb + 1) - log2(ma + 1)
     }
   }
 
@@ -8818,16 +8830,16 @@ tb_render_fc_histogram <- function(results, style, meta) {
 
   comparisons <- results$data$comparisons %||% list()
 
-  # Log transform is editable in the viewer; fall back to the run-time params
-  # (the value the engine used) when the viewer hasn't overridden it.
+  # Fold-change transform is editable in the viewer; fall back to the run-time
+  # params (the value the engine used) when the viewer hasn't overridden it.
   run_params <- results$params %||% list()
   fc_transform <- style$fc_transform %||% run_params$fc_transform %||% "log2"
-  if (!fc_transform %in% c("none", "log2", "log10")) fc_transform <- "log2"
-  is_log_transformed <- if (!is.null(style$is_log_transformed)) {
-    isTRUE(style$is_log_transformed)
-  } else {
-    isTRUE(run_params$is_log_transformed)
+  # Back-compat: results run before this change used a separate
+  # is_log_transformed flag; map it onto the "none" (direct-difference) option.
+  if (is.null(style$fc_transform) && isTRUE(run_params$is_log_transformed)) {
+    fc_transform <- "none"
   }
+  if (!fc_transform %in% c("none", "log2", "log10")) fc_transform <- "log2"
 
   if (length(comparisons) == 0) {
     error_msg <- results$data$error %||% "No comparisons available for FC histogram"
@@ -8849,8 +8861,7 @@ tb_render_fc_histogram <- function(results, style, meta) {
       comparison_name = comp_name,
       group_a = comp$group_a,
       group_b = comp$group_b,
-      fc_transform = fc_transform,
-      is_log_transformed = is_log_transformed
+      fc_transform = fc_transform
     )
   }
 

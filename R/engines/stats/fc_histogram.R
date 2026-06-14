@@ -28,7 +28,7 @@
 #' Compute log2 fold-change for a single pairwise group comparison
 .fc_histogram_pairwise <- function(mat, samples, grp_a, grp_b,
                                    primary_ids, display_ids,
-                                   fc_transform, is_log_transformed, add_log) {
+                                   fc_transform, add_log) {
   add_log("INFO", sprintf("--- FC Histogram: %s vs %s ---", grp_a, grp_b))
 
   cols_a <- samples$sample_col[samples$group_name == grp_a]
@@ -53,16 +53,15 @@
   n_a <- if (length(cols_a) == 1) as.integer(!is.na(mat_a[, 1])) else rowSums(!is.na(mat_a))
   n_b <- if (length(cols_b) == 1) as.integer(!is.na(mat_b[, 1])) else rowSums(!is.na(mat_b))
 
-  # Fold-change (B vs A, positive = higher in B)
-  if (isTRUE(is_log_transformed)) {
+  # Fold-change (B vs A, positive = higher in B). "none" = data already
+  # log-transformed (direct difference); log2/log10 apply that log to the means
+  # first. The renderer mirrors this and labels the X-axis with the matching base.
+  if (identical(fc_transform, "none")) {
     log2fc <- mean_b - mean_a
-  } else if (identical(fc_transform, "log2")) {
-    log2fc <- log2(mean_b + 1) - log2(mean_a + 1)
   } else if (identical(fc_transform, "log10")) {
-    log2fc <- log2(10) * (log10(mean_b + 1) - log10(mean_a + 1))
+    log2fc <- log10(mean_b + 1) - log10(mean_a + 1)
   } else {
-    # "none" — treat as direct ratio on natural scale (log2 of ratio)
-    log2fc <- log2((mean_b + 1) / (mean_a + 1))
+    log2fc <- log2(mean_b + 1) - log2(mean_a + 1)
   }
 
   results <- data.frame(
@@ -104,7 +103,7 @@
 #' Execute fc_histogram engine
 #'
 #' @param payload Payload from nr_build_step_payload
-#' @param params Engine-specific parameters (fc_transform, is_log_transformed, control_only)
+#' @param params Engine-specific parameters (fc_transform, control_only)
 #' @param context Execution context
 #' @return Contract-compliant results: list(engine_id, params, data)
 stats_fc_histogram_run <- function(payload, params = NULL, context = NULL) {
@@ -178,8 +177,10 @@ stats_fc_histogram_run <- function(payload, params = NULL, context = NULL) {
   }
 
   fc_transform <- params$fc_transform %||% "log2"
+  # Back-compat: results configured before the is_log_transformed flag was
+  # folded into fc_transform; map it onto the "none" (direct-difference) option.
+  if (isTRUE(params$is_log_transformed)) fc_transform <- "none"
   if (!fc_transform %in% c("none", "log2", "log10")) fc_transform <- "log2"
-  is_log_transformed <- isTRUE(params$is_log_transformed)
   control_only <- isTRUE(params$control_only)
 
   # Resolve ID columns (context-aware)
@@ -249,7 +250,6 @@ stats_fc_histogram_run <- function(payload, params = NULL, context = NULL) {
         grp_a = grp_a, grp_b = grp_b,
         primary_ids = primary_ids, display_ids = display_ids,
         fc_transform = fc_transform,
-        is_log_transformed = is_log_transformed,
         add_log = add_log
       )
 
