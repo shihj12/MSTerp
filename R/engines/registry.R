@@ -3890,23 +3890,12 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
         mk_style(width = 8, height = 6, axis_text_size = 20)
       ),
       viewer_schema = list(
-        msterp_schema_field(
-          "selected_comparison", "choice", "Comparison",
-          default = "", choices = c(""),
-          help = "Select which pairwise comparison to display."
-        ),
+        # Comparison selection is handled by the generic multi-graph picker
+        # (res_plot_pick), shown automatically when >1 plot is returned.
         msterp_schema_field(
           "flip_fc", "bool", "Flip fold change direction",
           default = FALSE,
           help = "Negate log2FC values (swap up/down). Median and mean update accordingly."
-        ),
-        msterp_schema_field(
-          "label_targets_map", "string", "Per-plot labels (JSON)",
-          default = "{}"
-        ),
-        msterp_schema_field(
-          "highlight_groups_map", "string", "Per-plot highlight groups (JSON)",
-          default = "{}"
         )
       ),
       outputs = list(
