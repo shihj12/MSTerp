@@ -158,7 +158,7 @@ get_style_section <- function(field_name) {
     # Layout and orientation
     "layout", "orientation",
     # Data transformation and mode selectors
-    "transform", "log_transform", "label_mode",
+    "transform", "log_transform", "fc_transform", "label_mode",
     # Color mode selectors (control downstream color field visibility)
     "color_mode", "bar_color_mode", "point_color_mode",
     # Filter selectors
