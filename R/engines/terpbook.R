@@ -8715,12 +8715,20 @@ tb_render_fc_rankplot <- function(results, style, meta) {
   axis_text_size <- tb_num(style$axis_text_size, 20)
   axis_style <- style$axis_style %||% "clean"
 
+  # Bar outline. Empty outline color = match the fill so bars touch seamlessly
+  # (the original look); set a color to draw a contrasting border on each bin.
+  outline_color_raw <- as.character(style$outline_color %||% "")
+  outline_color <- if (nzchar(trimws(outline_color_raw))) outline_color_raw else fill_color
+  outline_width <- max(0, tb_num(style$outline_width, 0.5))
+
   show_zero_line   <- isTRUE(style$show_zero_line %||% TRUE)
   show_median_line <- isTRUE(style$show_median_line %||% TRUE)
   show_mean_line   <- isTRUE(style$show_mean_line %||% FALSE)
   show_stat_labels <- isTRUE(style$show_stat_labels %||% TRUE)
-  # Reference lines are always dotted; only their thickness is configurable.
+  # Median / mean lines are always dotted; the x=0 line style is configurable.
   line_thickness    <- max(0.05, tb_num(style$line_thickness, 0.6))
+  zero_line_style   <- style$zero_line_style %||% "dotted"
+  if (!zero_line_style %in% c("dotted", "solid")) zero_line_style <- "dotted"
   zero_line_color   <- style$zero_line_color %||% "#333333"
   median_line_color <- style$median_line_color %||% "#D55E00"
   mean_line_color   <- style$mean_line_color %||% "#0072B2"
@@ -8782,18 +8790,21 @@ tb_render_fc_rankplot <- function(results, style, meta) {
     if (length(ylim) != 2 || any(!is.finite(ylim))) ylim <- NULL else ylim <- sort(ylim)
   }
 
-  # Outline matches the fill so bars touch with no white space between bins.
+  # Outline defaults to the fill so bars touch with no white space between bins;
+  # outline_color / outline_width let the user draw a contrasting bin border.
   p <- ggplot2::ggplot(df, ggplot2::aes(x = log2fc)) +
     ggplot2::geom_histogram(bins = bins, fill = fill_color,
-                            color = fill_color, alpha = bar_alpha) +
+                            color = outline_color, linewidth = outline_width,
+                            alpha = bar_alpha) +
     ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.05))) +
     ggplot2::coord_cartesian(xlim = xlim, ylim = ylim, clip = "on") +
     ggplot2::labs(x = x_axis_label, y = "Count") +
     tb_theme_base(axis_text_size, axis_style = axis_style)
 
-  # Reference lines (always dotted; thickness configurable)
+  # Reference lines. The x=0 line style is user-selectable (solid/dotted);
+  # median and mean lines stay dotted. Thickness is shared.
   if (show_zero_line) {
-    p <- p + ggplot2::geom_vline(xintercept = 0, linetype = "dotted",
+    p <- p + ggplot2::geom_vline(xintercept = 0, linetype = zero_line_style,
                                  color = zero_line_color, linewidth = line_thickness)
   }
   if (show_median_line && is.finite(med)) {
@@ -8805,14 +8816,25 @@ tb_render_fc_rankplot <- function(results, style, meta) {
                                  color = mean_line_color, linewidth = line_thickness)
   }
 
-  # On-plot stat labels (top-left)
+  # On-plot stat labels (top-left). Median / mean values are drawn in their own
+  # reference-line colors so the number matches the line; N stays neutral grey.
+  # Stacked as separate annotations (one color each) using line-height vjust
+  # offsets so the spacing is independent of text size.
   if (show_stat_labels && n > 0) {
-    label_txt <- sprintf("Median: %.2f\nMean: %.2f\nN = %d", med, mu, n)
-    p <- p + ggplot2::annotate(
-      "text", x = -Inf, y = Inf, label = label_txt,
-      hjust = -0.1, vjust = 1.2, size = axis_text_size / 4,
-      color = "grey20"
-    )
+    lbl_size <- axis_text_size / 4
+    p <- p +
+      ggplot2::annotate("text", x = -Inf, y = Inf,
+                        label = sprintf("Median: %.2f", med),
+                        hjust = -0.1, vjust = 1.2, size = lbl_size,
+                        color = median_line_color) +
+      ggplot2::annotate("text", x = -Inf, y = Inf,
+                        label = sprintf("Mean: %.2f", mu),
+                        hjust = -0.1, vjust = 2.5, size = lbl_size,
+                        color = mean_line_color) +
+      ggplot2::annotate("text", x = -Inf, y = Inf,
+                        label = sprintf("N = %d", n),
+                        hjust = -0.1, vjust = 3.8, size = lbl_size,
+                        color = "grey20")
   }
 
   p

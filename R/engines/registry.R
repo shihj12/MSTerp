@@ -3814,6 +3814,12 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             help = "Vertical reference line at log2FC = 0."
           ),
           msterp_schema_field(
+            "zero_line_style", "choice", "x=0 line style",
+            default = "dotted", choices = c("dotted", "solid"),
+            choice_labels = c("Dotted", "Solid"),
+            help = "Draw the x=0 reference line as a dotted or solid line. Median and mean lines stay dotted."
+          ),
+          msterp_schema_field(
             "zero_line_color", "string", "x=0 line color",
             default = "#333333", advanced = TRUE
           ),
@@ -3838,7 +3844,7 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field(
             "line_thickness", "num", "Reference line thickness",
             default = 0.6, min = 0.1, max = 3,
-            help = "Thickness of the x=0, median, and mean reference lines (all drawn dotted)."
+            help = "Thickness of the x=0, median, and mean reference lines."
           ),
           msterp_schema_field(
             "show_stat_labels", "bool", "Show median/mean/N labels on plot",
@@ -3863,6 +3869,16 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           msterp_schema_field(
             "fill_color", "string", "Bar fill color",
             default = "#7F7F7F", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "outline_color", "string", "Bar outline color",
+            default = "", advanced = TRUE,
+            help = "Outline (border) color for the histogram bars. Leave empty to match the fill so adjacent bins touch seamlessly."
+          ),
+          msterp_schema_field(
+            "outline_width", "num", "Bar outline width",
+            default = 0.5, min = 0, max = 3, advanced = TRUE,
+            help = "Thickness of the bar outline. Set to 0 to hide the outline entirely."
           ),
           msterp_schema_field(
             "bar_alpha", "num", "Bar opacity",
