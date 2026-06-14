@@ -3818,11 +3818,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             help = "Vertical reference line at log2FC = 0."
           ),
           msterp_schema_field(
-            "zero_line_style", "choice", "x=0 line style",
-            default = "dotted", choices = c("solid", "dashed", "dotted"),
-            advanced = TRUE
-          ),
-          msterp_schema_field(
             "zero_line_color", "string", "x=0 line color",
             default = "#333333", advanced = TRUE
           ),
@@ -3830,11 +3825,6 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             "show_median_line", "bool", "Show median line",
             default = TRUE,
             help = "Vertical reference line at the median fold change."
-          ),
-          msterp_schema_field(
-            "median_line_style", "choice", "Median line style",
-            default = "dotted", choices = c("solid", "dashed", "dotted"),
-            advanced = TRUE
           ),
           msterp_schema_field(
             "median_line_color", "string", "Median line color",
@@ -3846,13 +3836,13 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             help = "Vertical reference line at the mean fold change."
           ),
           msterp_schema_field(
-            "mean_line_style", "choice", "Mean line style",
-            default = "dashed", choices = c("solid", "dashed", "dotted"),
-            advanced = TRUE
-          ),
-          msterp_schema_field(
             "mean_line_color", "string", "Mean line color",
             default = "#0072B2", advanced = TRUE
+          ),
+          msterp_schema_field(
+            "line_thickness", "num", "Reference line thickness",
+            default = 0.6, min = 0.1, max = 3,
+            help = "Thickness of the x=0, median, and mean reference lines (all drawn dotted)."
           ),
           msterp_schema_field(
             "show_stat_labels", "bool", "Show median/mean/N labels on plot",
@@ -3879,15 +3869,11 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
             default = "#7F7F7F", advanced = TRUE
           ),
           msterp_schema_field(
-            "outline_color", "string", "Bar outline color",
-            default = "#FFFFFF", advanced = TRUE
-          ),
-          msterp_schema_field(
             "bar_alpha", "num", "Bar opacity",
             default = 0.9, min = 0, max = 1, advanced = TRUE
           )
         ),
-        mk_style(width = 8, height = 6, axis_text_size = 20)
+        mk_style(width = 7, height = 5, axis_text_size = 20)
       ),
       viewer_schema = list(
         # Comparison selection is handled by the generic multi-graph picker
@@ -3896,6 +3882,18 @@ msterp_engine_registry <- function(force_rebuild = FALSE) {
           "flip_fc", "bool", "Flip fold change direction",
           default = FALSE,
           help = "Negate log2FC values (swap up/down). Median and mean update accordingly."
+        ),
+        # Log transform is re-applied at render time from the stored group means,
+        # so it can be changed in the viewer without re-running the engine.
+        msterp_schema_field(
+          "fc_transform", "choice", "Fold-change transform",
+          default = "log2", choices = c("none", "log2", "log10"),
+          help = "Pseudo-count transform applied before subtraction. Ignored when data is already log-transformed."
+        ),
+        msterp_schema_field(
+          "is_log_transformed", "bool", "Data is already log-transformed",
+          default = FALSE,
+          help = "Enable if your data is already log2-transformed. Uses direct subtraction for FC instead of log2(x+1)."
         )
       ),
       outputs = list(

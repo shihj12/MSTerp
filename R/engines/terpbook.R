@@ -8684,7 +8684,9 @@ tb_render_fc_rankplot <- function(results, style, meta) {
 # ---- FC Histogram -----------------------------------------------------------
 
 .tb_fc_histogram_single_plot <- function(df, style, meta, comparison_name,
-                                         group_a = NULL, group_b = NULL) {
+                                         group_a = NULL, group_b = NULL,
+                                         fc_transform = "log2",
+                                         is_log_transformed = FALSE) {
   tb_require_pkg("ggplot2")
 
   # X-axis: if user provided a non-empty title use it verbatim; otherwise
@@ -8704,7 +8706,6 @@ tb_render_fc_rankplot <- function(results, style, meta) {
 
   bins <- max(2, as.integer(tb_num(style$bins, 30)))
   fill_color <- style$fill_color %||% "#7F7F7F"
-  outline_color <- style$outline_color %||% "#FFFFFF"
   bar_alpha <- tb_num(style$bar_alpha, 0.9)
   axis_text_size <- tb_num(style$axis_text_size, 20)
   axis_style <- style$axis_style %||% "clean"
@@ -8713,12 +8714,27 @@ tb_render_fc_rankplot <- function(results, style, meta) {
   show_median_line <- isTRUE(style$show_median_line %||% TRUE)
   show_mean_line   <- isTRUE(style$show_mean_line %||% FALSE)
   show_stat_labels <- isTRUE(style$show_stat_labels %||% TRUE)
-  zero_line_style   <- style$zero_line_style %||% "dotted"
-  median_line_style <- style$median_line_style %||% "dotted"
-  mean_line_style   <- style$mean_line_style %||% "dashed"
+  # Reference lines are always dotted; only their thickness is configurable.
+  line_thickness    <- max(0.05, tb_num(style$line_thickness, 0.6))
   zero_line_color   <- style$zero_line_color %||% "#333333"
   median_line_color <- style$median_line_color %||% "#D55E00"
   mean_line_color   <- style$mean_line_color %||% "#0072B2"
+
+  # 0. Re-apply the log transform at render time from the stored group means so
+  # it stays editable in the viewer without re-running the engine. Mirrors the
+  # FC math in .fc_histogram_pairwise().
+  if (all(c("mean_a", "mean_b") %in% names(df))) {
+    ma <- df$mean_a; mb <- df$mean_b
+    df$log2fc <- if (isTRUE(is_log_transformed)) {
+      mb - ma
+    } else if (identical(fc_transform, "log2")) {
+      log2(mb + 1) - log2(ma + 1)
+    } else if (identical(fc_transform, "log10")) {
+      log2(10) * (log10(mb + 1) - log10(ma + 1))
+    } else {
+      log2((mb + 1) / (ma + 1))
+    }
+  }
 
   # 1. flip_fc — negate log2fc
   if (flip_fc && !is.null(df$log2fc)) {
@@ -8761,26 +8777,27 @@ tb_render_fc_rankplot <- function(results, style, meta) {
     if (length(ylim) != 2 || any(!is.finite(ylim))) ylim <- NULL else ylim <- sort(ylim)
   }
 
+  # Outline matches the fill so bars touch with no white space between bins.
   p <- ggplot2::ggplot(df, ggplot2::aes(x = log2fc)) +
     ggplot2::geom_histogram(bins = bins, fill = fill_color,
-                            color = outline_color, alpha = bar_alpha) +
+                            color = fill_color, alpha = bar_alpha) +
     ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.05))) +
     ggplot2::coord_cartesian(xlim = xlim, ylim = ylim, clip = "on") +
     ggplot2::labs(x = x_axis_label, y = "Count") +
     tb_theme_base(axis_text_size, axis_style = axis_style)
 
-  # Reference lines
+  # Reference lines (always dotted; thickness configurable)
   if (show_zero_line) {
-    p <- p + ggplot2::geom_vline(xintercept = 0, linetype = zero_line_style,
-                                 color = zero_line_color, linewidth = 0.5)
+    p <- p + ggplot2::geom_vline(xintercept = 0, linetype = "dotted",
+                                 color = zero_line_color, linewidth = line_thickness)
   }
   if (show_median_line && is.finite(med)) {
-    p <- p + ggplot2::geom_vline(xintercept = med, linetype = median_line_style,
-                                 color = median_line_color, linewidth = 0.6)
+    p <- p + ggplot2::geom_vline(xintercept = med, linetype = "dotted",
+                                 color = median_line_color, linewidth = line_thickness)
   }
   if (show_mean_line && is.finite(mu)) {
-    p <- p + ggplot2::geom_vline(xintercept = mu, linetype = mean_line_style,
-                                 color = mean_line_color, linewidth = 0.6)
+    p <- p + ggplot2::geom_vline(xintercept = mu, linetype = "dotted",
+                                 color = mean_line_color, linewidth = line_thickness)
   }
 
   # On-plot stat labels (top-left)
@@ -8801,6 +8818,17 @@ tb_render_fc_histogram <- function(results, style, meta) {
 
   comparisons <- results$data$comparisons %||% list()
 
+  # Log transform is editable in the viewer; fall back to the run-time params
+  # (the value the engine used) when the viewer hasn't overridden it.
+  run_params <- results$params %||% list()
+  fc_transform <- style$fc_transform %||% run_params$fc_transform %||% "log2"
+  if (!fc_transform %in% c("none", "log2", "log10")) fc_transform <- "log2"
+  is_log_transformed <- if (!is.null(style$is_log_transformed)) {
+    isTRUE(style$is_log_transformed)
+  } else {
+    isTRUE(run_params$is_log_transformed)
+  }
+
   if (length(comparisons) == 0) {
     error_msg <- results$data$error %||% "No comparisons available for FC histogram"
     p <- ggplot2::ggplot() +
@@ -8820,7 +8848,9 @@ tb_render_fc_histogram <- function(results, style, meta) {
       df, style, meta,
       comparison_name = comp_name,
       group_a = comp$group_a,
-      group_b = comp$group_b
+      group_b = comp$group_b,
+      fc_transform = fc_transform,
+      is_log_transformed = is_log_transformed
     )
   }
 
