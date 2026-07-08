@@ -4825,6 +4825,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
     df$log2fc <- suppressWarnings(as.numeric(df$log2fc %||% df$log2FC))
 
+    # Match .tb_volcano_single_plot(): flip_fc negates log2fc, so the hit-test
+    # coordinates (hover, label placement) must flip too or they drift off the
+    # visible points.
+    if (isTRUE(style$flip_fc %||% FALSE)) {
+      df$log2fc <- -df$log2fc
+    }
+
     x_range_mode <- style$x_range_mode %||% "auto"
     y_range_mode <- style$y_range_mode %||% "auto"
 
@@ -4967,6 +4974,11 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (!"score_x" %in% names(df)) df$score_x <- 0
     if (!"score_y" %in% names(df)) df$score_y <- 0
     if (!"ontology" %in% names(df)) df$ontology <- NA_character_
+
+    # Match the 2D-GOFCS render: flip_x/flip_y negate the axis scores, so the
+    # hit-test coordinates (hover, label placement) must flip too.
+    if (isTRUE(style$flip_x %||% FALSE)) df$score_x <- -df$score_x
+    if (isTRUE(style$flip_y %||% FALSE)) df$score_y <- -df$score_y
 
     ontology_filter <- style$ontology_filter %||% "all"
     if (!identical(ontology_filter, "all") && "ontology" %in% names(df)) {
@@ -16700,6 +16712,12 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     content = function(file) {
       req(rv$nodes_df, rv$run_root)
 
+      # Persist any unsaved viewer edits (e.g. a flip toggle on the active node)
+      # so per-node render state read below reflects the current view.
+      if (res_has_pending_changes()) {
+        res_commit_pending_changes(trigger_source = "download")
+      }
+
       msterp_set_busy(session, TRUE, "Exporting marker sets...")
       on.exit(msterp_set_busy(session, FALSE), add = TRUE)
 
@@ -16748,14 +16766,26 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
           comparisons <- res$data$comparisons %||% list()
 
+          # Respect the viewer's per-node flip_fc: it negates log2fc and swaps
+          # up/down at render time without rewriting the stored results, so the
+          # exported marker set must apply the same transform to stay in sync.
+          v_style <- tryCatch(tb_load_render_state(v_dir)$style, error = function(e) list())
+          v_flip_fc <- isTRUE(v_style$flip_fc %||% FALSE)
+
           for (comp_name in names(comparisons)) {
             comp <- comparisons[[comp_name]]
             sets <- comp$sets %||% list()
 
+            points <- comp$points
+
+            if (v_flip_fc) {
+              flipped <- tb_export_flip_volcano(points, sets, TRUE)
+              points <- flipped$points
+              sets <- flipped$sets
+            }
+
             sig_up <- sets$sig_up %||% character(0)
             sig_down <- sets$sig_down %||% character(0)
-
-            points <- comp$points
             if (!is.null(points) && nrow(points) > 0) {
               # Include all proteins (sig up/down AND non-sig). Derive the
               # direction column from each point's significance status so the
@@ -16839,8 +16869,13 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           res <- tb_load_results(g_dir)
           if (is.null(res) || is.null(res$data)) next
 
+          # Respect the viewer's per-node direction flip (1D-GOFCS flip_fc,
+          # 2D-GOFCS flip_x/flip_y) so exported scores match the plot.
+          g_style <- tryCatch(tb_load_render_state(g_dir)$style, error = function(e) list())
+
           decorate_and_write <- function(terms_df, comp_name = NULL) {
             if (is.null(terms_df) || !is.data.frame(terms_df) || nrow(terms_df) == 0) return(invisible(NULL))
+            terms_df <- tb_export_flip_go_terms(terms_df, g_engine, g_style)
             terms_df$source_analysis <- g_label
             terms_df$parent_analysis <- parent_label
             if (!is.null(comp_name) && nzchar(comp_name)) {

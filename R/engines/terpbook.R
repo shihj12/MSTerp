@@ -19,6 +19,92 @@ tb_require_pkg <- function(pkg) {
   }
 }
 
+# =========================================================
+# Viewer flip transforms for data exports
+# ---------------------------------------------------------
+# The results viewer lets users flip fold-change / score direction per plot
+# (volcano `flip_fc`, 1D-GOFCS `flip_fc`, 2D-GOFCS `flip_x`/`flip_y`). These
+# toggles negate the plotted values and swap the up/down interpretation at
+# render time WITHOUT rewriting the persisted engine results. Any export that
+# reads the frozen results directly (e.g. the marker-set workbook) must apply
+# the same transform so the downloaded numbers match what the user sees.
+# These helpers centralise that transform so exports and plots stay in sync.
+# =========================================================
+
+#' Apply the volcano viewer flip to exported points/sets
+#'
+#' Mirrors the render-time behaviour in `.tb_volcano_single_plot`: negate
+#' log2fc and swap the up/down significance. The direction-derived sets and the
+#' per-point significance/t-statistic are swapped so the exported sheet reads
+#' consistently in the flipped orientation.
+#'
+#' @param points data.frame of volcano points (frozen results)
+#' @param sets list of sig_up/sig_down (and optionally unique_quantified_*)
+#' @param flip_fc logical; when FALSE the inputs are returned unchanged
+#' @return list(points, sets)
+tb_export_flip_volcano <- function(points, sets, flip_fc) {
+  if (!isTRUE(flip_fc)) return(list(points = points, sets = sets))
+
+  if (!is.null(points) && is.data.frame(points) && nrow(points) > 0) {
+    if ("log2fc" %in% names(points)) points$log2fc <- -points$log2fc
+    # t-statistic (limma) shares the fold-change sign; keep it consistent.
+    if ("t" %in% names(points)) points$t <- -points$t
+    if ("significance" %in% names(points)) {
+      sig <- as.character(points$significance)
+      swapped <- sig
+      swapped[sig == "up"] <- "down"
+      swapped[sig == "down"] <- "up"
+      points$significance <- swapped
+    }
+  }
+
+  if (!is.null(sets) && is.list(sets)) {
+    tmp <- sets$sig_up; sets$sig_up <- sets$sig_down; sets$sig_down <- tmp
+    # Uniquely-quantified sets are group-specific; swap A<->B to match.
+    if (!is.null(sets$unique_quantified_A) || !is.null(sets$unique_quantified_B)) {
+      tmp2 <- sets$unique_quantified_A
+      sets$unique_quantified_A <- sets$unique_quantified_B
+      sets$unique_quantified_B <- tmp2
+    }
+  }
+
+  list(points = points, sets = sets)
+}
+
+#' Apply the GO-FCS viewer flip to exported term tables
+#'
+#' Mirrors the render-time behaviour for 1D-GOFCS (`flip_fc` negates the signed
+#' enrichment score) and 2D-GOFCS (`flip_x`/`flip_y` negate the axis scores).
+#' GO-ORA has no signed direction, so it is returned unchanged.
+#'
+#' @param terms data.frame of GO term results (frozen)
+#' @param engine engine id ("1dgofcs", "2dgofcs", "goora", ...)
+#' @param style effective viewer style list for the node
+#' @return data.frame with directional columns negated as needed
+tb_export_flip_go_terms <- function(terms, engine, style) {
+  if (is.null(terms) || !is.data.frame(terms) || nrow(terms) == 0) return(terms)
+  style <- style %||% list()
+  engine <- tolower(as.character(engine %||% "")[1])
+
+  if (engine == "1dgofcs") {
+    if (isTRUE(style$flip_fc %||% FALSE)) {
+      for (col in c("score", "fold_enrichment")) {
+        if (col %in% names(terms)) terms[[col]] <- -terms[[col]]
+      }
+    }
+  } else if (engine == "2dgofcs") {
+    # distance = sqrt(score_x^2 + score_y^2) is sign-independent; leave as-is.
+    if (isTRUE(style$flip_x %||% FALSE) && "score_x" %in% names(terms)) {
+      terms$score_x <- -terms$score_x
+    }
+    if (isTRUE(style$flip_y %||% FALSE) && "score_y" %in% names(terms)) {
+      terms$score_y <- -terms$score_y
+    }
+  }
+
+  terms
+}
+
 #'' Format numbers with k suffix for display
 #''
 #'' Examples:
