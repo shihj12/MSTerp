@@ -9300,7 +9300,28 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     trimws(label)
   }
 
-  res_export_plot_label <- function(eng_id, plot_key, res, style, force_plot_label = FALSE) {
+  # Effective flip_fc of a node's parent volcano, honoring unsaved viewer edits.
+  # A volcano -> GO-ORA/MSEA child freezes the parent's comparison + direction at
+  # compile time; flipping the parent volcano in the viewer (flip_fc) is a
+  # render-only toggle the child never sees, so exports must resolve it here.
+  res_export_parent_volcano_flip <- function(node_id) {
+    ndf <- rv$nodes_df
+    node_id <- as.character(node_id %||% "")
+    if (is.null(ndf) || !nzchar(node_id)) return(FALSE)
+    j <- match(node_id, ndf$node_id)
+    if (is.na(j)) return(FALSE)
+    parent_id <- as.character(ndf$parent_id[[j]] %||% "")
+    if (!nzchar(parent_id) || identical(parent_id, "NA")) return(FALSE)
+    pj <- match(parent_id, ndf$node_id)
+    if (is.na(pj)) return(FALSE)
+    if (!identical(tolower(as.character(ndf$engine_id[[pj]] %||% "")), "volcano")) return(FALSE)
+    pstyle <- tryCatch(res_effective_render_state_mem(ndf, parent_id)$style %||% list(),
+                       error = function(e) list())
+    isTRUE(pstyle$flip_fc %||% FALSE)
+  }
+
+  res_export_plot_label <- function(eng_id, plot_key, res, style, force_plot_label = FALSE,
+                                    node_id = "") {
     eng_id <- tolower(as.character(eng_id %||% ""))
     plot_key <- as.character(plot_key %||% "")
     res <- res %||% list()
@@ -9311,16 +9332,89 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
     if (eng_id == "volcano") {
       if (identical(plot_key, "volcano_plot")) return(NULL)
+      # Reflect the viewer's flip_fc in the exported title: a flipped volcano
+      # swaps the comparison group order (log2(A/B) -> log2(B/A)) on the axis and
+      # summary cards, so the title must swap too or it contradicts the plot.
+      parts <- unlist(strsplit(plot_key, "_vs_", fixed = TRUE))
+      if (length(parts) == 2) {
+        if (isTRUE(style$flip_fc %||% FALSE)) parts <- rev(parts)
+        return(paste0(res_export_label(parts[1]), " vs ", res_export_label(parts[2])))
+      }
       return(res_export_label(plot_key))
     }
 
-    if (eng_id %in% c("goora", "1dgofcs", "2dgofcs")) {
-      if (grepl("^(bp|mf|cc)_plot$", plot_key, ignore.case = TRUE)) {
-        return(toupper(sub("_plot$", "", plot_key, ignore.case = TRUE)))
+    # Ontology / database segment shared by enrichment plots (BP/MF/CC, KEGG...).
+    ont_from_key <- function(key) {
+      if (grepl("^(bp|mf|cc)_plot$", key, ignore.case = TRUE) ||
+          grepl("^(kegg|reactome|hmdb|all)_plot$", key, ignore.case = TRUE)) {
+        return(toupper(sub("_plot$", "", key, ignore.case = TRUE)))
       }
+      ""
     }
 
-    if (eng_id %in% c("msea", "pathway_fcs")) {
+    if (eng_id %in% c("goora", "msea")) {
+      ont <- ont_from_key(plot_key)
+      # Paired-volcano provenance: when a GO-ORA / MSEA is derived from a
+      # volcano's up/down sets, the source comparison + direction are frozen
+      # into the child's params (run_utils.R). Surface e.g. "KO/WT Upregulated"
+      # so the exported title records where the enrichment came from instead of
+      # a bare "BP" with no context.
+      comp <- as.character(res$params$comparison %||% "")
+      dir <- tolower(as.character(res$params$direction %||% ""))
+
+      # If the parent volcano was flipped in the viewer, its displayed comparison
+      # order and up/down swap. The child stores only the un-flipped values, so
+      # mirror the swap here (both the group order AND the direction, exactly as
+      # the volcano's summary cards do) to keep the same protein set described
+      # consistently with the flipped plot.
+      if (res_export_parent_volcano_flip(node_id)) {
+        cp <- unlist(strsplit(comp, "_vs_", fixed = TRUE))
+        if (length(cp) == 2) comp <- paste0(cp[2], "_vs_", cp[1])
+        dir <- switch(dir, up = "down", down = "up", dir)
+      }
+
+      comp_disp <- ""
+      if (nzchar(comp)) {
+        cp <- unlist(strsplit(comp, "_vs_", fixed = TRUE))
+        comp_disp <- if (length(cp) == 2) {
+          paste0(res_export_label(cp[1]), "/", res_export_label(cp[2]))
+        } else {
+          res_export_label(comp)
+        }
+      }
+      dir_disp <- switch(dir,
+                         up = "Upregulated", down = "Downregulated",
+                         top = "Top", bottom = "Bottom", "")
+      prov <- trimws(paste(comp_disp, dir_disp))
+      out <- c(prov, ont)
+      out <- out[nzchar(out)]
+      if (length(out) > 0) return(paste(out, collapse = " - "))
+      # else fall through to generic handling below
+    }
+
+    if (eng_id %in% c("1dgofcs", "2dgofcs")) {
+      ont <- ont_from_key(plot_key)
+      comp_disp <- ""
+      if (eng_id == "1dgofcs") {
+        # The score label (e.g. "log2(KO/WT)" or "PC1") carries the flip on the
+        # x-axis; mirror it here so a flipped plot's exported title matches its
+        # axis rather than showing the un-flipped direction.
+        sl <- as.character(res$data$score_label %||% res$params$score_label %||% "")
+        if (!nzchar(sl) && grepl("_vs_", plot_key, fixed = TRUE)) {
+          cp <- unlist(strsplit(sub("_plot$", "", plot_key, ignore.case = TRUE),
+                                "_vs_", fixed = TRUE))
+          if (length(cp) == 2) sl <- paste0("log2(", cp[1], "/", cp[2], ")")
+        }
+        if (nzchar(sl) && isTRUE(style$flip_fc %||% FALSE)) sl <- tb_flip_comparison_label(sl)
+        comp_disp <- sl
+      }
+      out <- c(comp_disp, ont)
+      out <- out[nzchar(out)]
+      if (length(out) > 0) return(paste(out, collapse = " - "))
+      # else fall through to generic handling below
+    }
+
+    if (eng_id %in% c("pathway_fcs")) {
       if (grepl("^(kegg|reactome|hmdb|all)_plot$", plot_key, ignore.case = TRUE)) {
         return(toupper(sub("_plot$", "", plot_key, ignore.case = TRUE)))
       }
@@ -9373,7 +9467,8 @@ page_results_server <- function(input, output, session, app_state = NULL) {
     if (!nzchar(step_num)) step_num <- node_id
 
     eng_label <- res_export_engine_label(eng_id, registry)
-    plot_label <- res_export_plot_label(eng_id, plot_key, res, style, force_plot_label = force_plot_label)
+    plot_label <- res_export_plot_label(eng_id, plot_key, res, style, force_plot_label = force_plot_label,
+                                        node_id = node_id)
 
     parts <- c(step_num, eng_label, plot_label)
     parts <- parts[nzchar(parts)]
@@ -16778,10 +16873,16 @@ page_results_server <- function(input, output, session, app_state = NULL) {
 
             points <- comp$points
 
+            # When flipped, the up/down semantics swap, so the comparison label
+            # written to the sheet (and its name) must swap group order too or it
+            # contradicts the flipped `direction` column below.
+            comp_disp <- comp_name
             if (v_flip_fc) {
               flipped <- tb_export_flip_volcano(points, sets, TRUE)
               points <- flipped$points
               sets <- flipped$sets
+              cp <- unlist(strsplit(comp_name, "_vs_", fixed = TRUE))
+              if (length(cp) == 2) comp_disp <- paste0(cp[2], "_vs_", cp[1])
             }
 
             sig_up <- sets$sig_up %||% character(0)
@@ -16799,9 +16900,9 @@ page_results_server <- function(input, output, session, app_state = NULL) {
               if (nrow(marker_data) > 0) {
                 # Add source context columns
                 marker_data$source_analysis <- v_label
-                marker_data$comparison <- comp_name
+                marker_data$comparison <- comp_disp
 
-                sheet_name <- make_sheet_name(paste0(v_label, " ", comp_name))
+                sheet_name <- make_sheet_name(paste0(v_label, " ", comp_disp))
                 openxlsx::addWorksheet(wb, sheet_name)
                 openxlsx::writeData(wb, sheet_name, marker_data)
               }
