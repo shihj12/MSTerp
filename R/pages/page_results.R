@@ -16946,27 +16946,6 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           parent_id <- df$parent_id[i]
           parent_label <- get_parent_label(parent_id)
 
-          # For paired GO analyses under volcano, try to get comparison and config context
-          pairing_context <- ""
-          config_name <- ""
-          if (!is.null(parent_id) && !is.na(parent_id)) {
-            parent_row <- df[df$node_id == parent_id, , drop = FALSE]
-            if (nrow(parent_row) > 0 && tolower(parent_row$engine_id[1]) == "volcano") {
-              # The label often contains the direction (up/down)
-              if (grepl("up", g_label, ignore.case = TRUE)) {
-                pairing_context <- "upregulated"
-              } else if (grepl("down", g_label, ignore.case = TRUE)) {
-                pairing_context <- "downregulated"
-              }
-              # Extract config name from node_id pattern: cfg_N__comparison_direction
-              # or from the beginning of the label before the comparison
-              node_id_parts <- strsplit(basename(df$node_id[i]), "__")[[1]]
-              if (length(node_id_parts) >= 2) {
-                config_name <- node_id_parts[1]  # e.g., "cfg_1"
-              }
-            }
-          }
-
           res <- tb_load_results(g_dir)
           if (is.null(res) || is.null(res$data)) next
 
@@ -16974,24 +16953,84 @@ page_results_server <- function(input, output, session, app_state = NULL) {
           # 2D-GOFCS flip_x/flip_y) so exported scores match the plot.
           g_style <- tryCatch(tb_load_render_state(g_dir)$style, error = function(e) list())
 
+          flip_comparison_order <- function(comp) {
+            comp <- as.character(comp %||% "")
+            cp <- unlist(strsplit(comp, "_vs_", fixed = TRUE))
+            if (length(cp) == 2) paste0(cp[2], "_vs_", cp[1]) else comp
+          }
+
+          # Paired-volcano provenance (comparison + direction) is frozen into the
+          # child's params. When the parent volcano is flipped in the viewer its
+          # displayed comparison order and up/down swap, so mirror that here to
+          # keep the sheet consistent with the flipped plot (matches the PDF
+          # title and the volcano marker sheet).
+          parent_is_volcano <- FALSE
+          config_name <- ""
+          paired_comp <- ""
+          paired_dir <- ""
+          if (!is.null(parent_id) && !is.na(parent_id)) {
+            parent_row <- df[df$node_id == parent_id, , drop = FALSE]
+            if (nrow(parent_row) > 0 && tolower(parent_row$engine_id[1]) == "volcano") {
+              parent_is_volcano <- TRUE
+              parent_flip <- isTRUE(tryCatch(
+                res_effective_render_state_mem(rv$nodes_df, parent_id)$style$flip_fc,
+                error = function(e) FALSE))
+              paired_comp <- as.character(res$params$comparison %||% "")
+              paired_dir  <- tolower(as.character(res$params$direction %||% ""))
+              if (!nzchar(paired_dir)) {
+                # Fallback for older terpbooks: infer direction from the label.
+                if (grepl("up", g_label, ignore.case = TRUE)) paired_dir <- "up"
+                else if (grepl("down", g_label, ignore.case = TRUE)) paired_dir <- "down"
+              }
+              if (isTRUE(parent_flip)) {
+                paired_comp <- flip_comparison_order(paired_comp)
+                paired_dir <- switch(paired_dir, up = "down", down = "up", paired_dir)
+              }
+              # Extract config name from node_id pattern: cfg_N__comparison_direction
+              node_id_parts <- strsplit(basename(df$node_id[i]), "__")[[1]]
+              if (length(node_id_parts) >= 2) {
+                config_name <- node_id_parts[1]  # e.g., "cfg_1"
+              }
+            }
+          }
+          pairing_context <- switch(paired_dir,
+                                    up = "upregulated", down = "downregulated",
+                                    top = "top", bottom = "bottom", "")
+
           decorate_and_write <- function(terms_df, comp_name = NULL) {
             if (is.null(terms_df) || !is.data.frame(terms_df) || nrow(terms_df) == 0) return(invisible(NULL))
             terms_df <- tb_export_flip_go_terms(terms_df, g_engine, g_style)
             terms_df$source_analysis <- g_label
             terms_df$parent_analysis <- parent_label
-            if (!is.null(comp_name) && nzchar(comp_name)) {
-              terms_df$comparison <- comp_name
+
+            # Standalone multi-comparison FCS supplies its own comp_name; a
+            # volcano-paired child has none but carries the (flip-adjusted)
+            # comparison from params. 1D-GOFCS negates its score under its own
+            # flip_fc, so swap the standalone comparison order to match too.
+            eff_comp <- if (!is.null(comp_name) && nzchar(comp_name)) {
+              if (identical(g_engine, "1dgofcs") && isTRUE(g_style$flip_fc %||% FALSE)) {
+                flip_comparison_order(comp_name)
+              } else {
+                comp_name
+              }
+            } else {
+              paired_comp
             }
-            if (nzchar(pairing_context)) {
-              terms_df$direction_context <- pairing_context
-            }
-            if (nzchar(config_name)) {
-              terms_df$config_id <- config_name
-            }
+
+            if (nzchar(eff_comp)) terms_df$comparison <- eff_comp
+            if (nzchar(pairing_context)) terms_df$direction_context <- pairing_context
+            if (nzchar(config_name)) terms_df$config_id <- config_name
             terms_df$engine_type <- g_engine
 
-            base <- if (!is.null(comp_name) && nzchar(comp_name)) {
-              paste0(g_label, " ", comp_name)
+            base <- if (parent_is_volcano && (nzchar(eff_comp) || nzchar(pairing_context))) {
+              # Build the sheet name from flip-adjusted pieces so it does not
+              # contradict the corrected comparison / direction columns.
+              dir_tag <- switch(paired_dir, up = "Up", down = "Down",
+                                top = "Top", bottom = "Bottom", "")
+              parts <- c(parent_label, eff_comp, dir_tag)
+              paste(parts[nzchar(parts)], collapse = " ")
+            } else if (!is.null(comp_name) && nzchar(comp_name)) {
+              paste0(g_label, " ", eff_comp)
             } else {
               paste0(parent_label, " ", g_label)
             }
